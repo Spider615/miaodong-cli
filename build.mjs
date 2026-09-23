@@ -48,6 +48,10 @@ export async function buildBundle({ outfile = BUNDLE_PATH } = {}) {
     define: { __MD_BUILD__: JSON.stringify(tag) },
     logLevel: 'warning',
     legalComments: 'none',
+    // 去掉全部注释与源码路径标记：注释里有内部信息，而这个文件会随 skill 仓库分发（legalComments 只管许可证注释）
+    minifyWhitespace: true,
+    // 中文按原样输出而不是 \uXXXX，方便人工检查产物里到底带了什么
+    charset: 'utf8',
   });
   chmodSync(outfile, 0o755);
   return { outfile, tag };

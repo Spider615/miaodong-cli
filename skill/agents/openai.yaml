@@ -1,6 +1,5 @@
 # Codex 专用的界面信息（可选）。Claude Code 忽略这个文件；核心触发信息在 SKILL.md 的 name + description。
-display_name: 秒懂 md
-short_description: 用 md 命令读写秒懂智能体画布：取身份、找智能体和版本、拉取、改动脚本、自检、合并推送到草稿、回滚、查记录。
-default_prompt: |
-  先读 SKILL.md。秒懂操作一律用 md 命令，用法以 md <命令> --help 为准。
-  写操作先预演，把改动清单和计划码交给用户，用户同意后才带 --confirm <计划码> 执行。
+interface:
+  display_name: "秒懂 md"
+  short_description: "读写秒懂智能体画布：拉取、批量改、自检、推草稿、回滚"
+  default_prompt: "用 $miaodong 帮我看一下秒懂智能体「XXX」的这个问题："

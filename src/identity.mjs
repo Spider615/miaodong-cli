@@ -17,7 +17,7 @@ function identitiesPath() {
 
 export function normalizeOrigin(input) {
   const raw = String(input ?? '').trim();
-  if (!raw) throw usage('缺少秒懂控制台域名', '例如：md auth snippet xlink-insight.juzibot.com');
+  if (!raw) throw usage('缺少秒懂控制台域名', '例如：md auth snippet insight.juzibot.com');
   try {
     return new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).origin;
   } catch {
@@ -115,7 +115,7 @@ export function readClipboard() {
   try {
     return execFileSync('pbpaste', { encoding: 'utf-8' });
   } catch {
-    throw usage('读不到剪贴板（这台机器没有 pbpaste）', '改用 md auth import --stdin，再粘贴');
+    throw usage('读不到剪贴板（这台机器没有 pbpaste）', '请用户在自己的终端运行 md auth import --stdin，粘贴后回车、再按 Ctrl-D，然后回复「好了」；不要把内容贴进对话');
   }
 }
 

@@ -17,8 +17,9 @@ function snippet(domain) {
   const origin = normalizeOrigin(domain);
   const region = regionOf(origin);
   out(`【取身份】${region.label}（${origin}），约 30 秒：`);
+  if (region.key === new URL(origin).host) out('⚠️ 这不是已知的秒懂控制台域名，先确认它是秒懂的登录地址（以 -hi 结尾的是对话页，不是控制台）。');
   out(`1. 在浏览器打开 ${origin} 并登录，选好企业（任意页面都行）。`);
-  out('2. 打开浏览器控制台：Mac 按 Cmd+Option+J，Windows 按 F12，切到「Console / 控制台」。');
+  out('2. 用 Chrome 打开浏览器控制台：Mac 按 Cmd+Option+J，Windows 按 F12，切到「Console / 控制台」。');
   out('   第一次粘贴被拦时，按提示输入 allow pasting 回车。');
   out('3. 粘贴下面这一整行，回车：');
   out('');

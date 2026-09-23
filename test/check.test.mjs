@@ -27,6 +27,8 @@ test('删掉被引用的节点：新增悬空引用报错', () => {
   const after = sampleCanvas().filter((c) => c.id !== U(1) && c.id !== U(101));
   const r = runCheck(env(sampleCanvas()), env(after));
   assert.ok(r.errors.some((e) => /引用了不存在的节点 00000001/.test(e)), r.errors.join('\n'));
+  // 老懂校验器的提示里带着老懂 Agent 的工具名，md 里没有这个工具
+  assert.ok(!r.warnings.some((w) => /wire_input/.test(w)), r.warnings.join('\n'));
 });
 
 test('清空模型：新增风险 H1 进 warnings', () => {

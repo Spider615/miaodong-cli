@@ -2,7 +2,7 @@ import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { buildSnippet, decodeAuthBlob, jwtExpiry, normalizeOrigin, regionOf } from '../src/identity.mjs';
 import { runCli, tempHome } from './helpers/run-cli.mjs';
 import { ok, startFakeMiaodong } from './helpers/fake-miaodong.mjs';
@@ -148,4 +148,18 @@ test('从剪贴板导入：验证失败也清空剪贴板；剪贴板里不是�
   const r2 = await runCli(['auth', 'import'], { home: tempHome(), env: other.env });
   assert.equal(r2.code, 3);
   assert.equal(readFileSync(other.clip, 'utf-8'), '随便一段文字');
+});
+
+test('snippet：不认识的域名要提醒确认', async () => {
+  const unknown = await runCli(['auth', 'snippet', 'willow-hi.juzibot.com'], { home: tempHome() });
+  assert.match(unknown.stdout, /不是已知的秒懂控制台域名/);
+  const known = await runCli(['auth', 'snippet', 'insight.juzibot.com'], { home: tempHome() });
+  assert.doesNotMatch(known.stdout, /不是已知的秒懂控制台域名/);
+});
+
+test('没有 pbpaste 的机器：提示让用户在自己的终端用 --stdin，而不是把内容贴进对话', async () => {
+  const r = await runCli(['auth', 'import'], { home: tempHome(), env: { PATH: dirname(process.execPath) } });
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /在自己的终端运行 md auth import --stdin/);
+  assert.match(r.stderr, /不要把内容贴进对话/);
 });

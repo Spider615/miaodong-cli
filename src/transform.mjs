@@ -244,7 +244,7 @@ export async function runTransform(file, envelope) {
   if (Array.isArray(result)) ctx.canvas = result;
   const unchanged = (key) => stableStringify(ctx[key] ?? []) === stableStringify(envelope[key] ?? []);
   if (!unchanged('sessions') || !unchanged('events')) {
-    throw new MdError('unsupported', '第 1 步只能改画布，不能改会话变量或事件', { exitCode: EXIT.USAGE });
+    throw new MdError('unsupported', '目前只能改画布，不能改会话变量或事件', { exitCode: EXIT.USAGE });
   }
   return { envelope: ctx, log };
 }

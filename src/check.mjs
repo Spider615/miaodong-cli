@@ -93,7 +93,8 @@ export function runCheck(baseEnv, afterEnv) {
       else errors.push(afterReport.hardError);
     } else {
       const old = new Set(baseReport.warnings);
-      for (const warning of afterReport.warnings) if (!old.has(warning)) warnings.push(warning);
+      // 老懂校验器的提示里带着老懂 Agent 的工具名（wire_input），md 用户用不了，换成通用说法
+      for (const warning of afterReport.warnings) if (!old.has(warning)) warnings.push(warning.replace('或用 wire_input 改接到正确节点', '或把这个输入改接到正确的节点'));
     }
   }
 
