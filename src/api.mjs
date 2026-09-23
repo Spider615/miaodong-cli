@@ -72,3 +72,22 @@ export async function basicInfo(identity, orgId, botId) {
     return null;
   }
 }
+
+// 会话变量 / 事件列表在个别区版本不齐；取不到返回 null，由调用方说明，不中断拉取
+async function optionalArray(promise) {
+  try {
+    return asArray((await promise)?.data);
+  } catch (error) {
+    if (error instanceof MdError && error.code === 'auth_expired') throw error;
+    return null;
+  }
+}
+
+export function listSessions(identity, orgId, botId) {
+  return optionalArray(request(identity, '/api/session-memory/list', { query: { botId, orgId } }));
+}
+
+export function listEvents(identity, orgId, botId) {
+  // 固定带 eventListFilter=all：不带时是否包含隐藏事件没有确认
+  return optionalArray(request(identity, '/api/canvas/event/list', { query: { botId, orgId, eventListFilter: 'all' } }));
+}

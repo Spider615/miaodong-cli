@@ -2,6 +2,7 @@
 import { auth } from './auth.mjs';
 import { bots } from './bots.mjs';
 import { orgs } from './orgs.mjs';
+import { pull } from './pull.mjs';
 import { versions } from './versions.mjs';
 
-export const COMMANDS = { auth, orgs, bots, versions };
+export const COMMANDS = { auth, orgs, bots, versions, pull };
