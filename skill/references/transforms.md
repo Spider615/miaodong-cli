@@ -34,7 +34,7 @@ export default ({ canvas, h }) => {
 export default ({ h }) => {
   const nodes = h.expectCount(h.select((n) => n.data?.name === '回答生成'), 16, '回答生成节点');
   for (const n of nodes) {
-    h.insertAfter(n, 'data.nodePayload.systemPrompt', '## 回复要求', '\n- 用户说「发热」时先确认是运动出汗还是发烧，不要默认是生病。');
+    h.insertAfter(n, 'data.nodePayload.systemPrompt', '## 回复要求', '\n- 用户描述症状时先问清具体情况，不要直接下结论。');
   }
 };
 ```
@@ -55,8 +55,8 @@ export default ({ h }) => {
 
 ```js
 export default ({ h }) => {
-  const anchor = h.node('cb398f11');
-  const rewrite = h.node('002369db');
+  const anchor = h.node('aaaa1111');   // 锚点节点的 id 前缀
+  const rewrite = h.node('bbbb2222');  // 要挪过去的节点
   // 下游原来引用 anchor.text 的地方，改为引用重写节点的 message
   h.retargetRefs({ from: anchor.id, fromDataPath: 'text', to: rewrite.id, toDataPath: 'message', expect: 123 });
   h.removeEdges((e) => e.target.cell === rewrite.id, { expect: 1 });
@@ -67,6 +67,6 @@ export default ({ h }) => {
 ## 同一套改动用到别的版本或别的智能体
 
 ```bash
-md pull --bot 太极2.0重构 --version v1.0.401
+md pull --bot <另一个智能体> --version v1.0.401
 md apply ~/fixes/fare-fix.mjs     # 同一个脚本；锚点或数量不对会直接报错，不会悄悄漏改
 ```
