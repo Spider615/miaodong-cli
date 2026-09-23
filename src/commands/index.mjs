@@ -10,6 +10,7 @@ import { pull } from './pull.mjs';
 import { push } from './push.mjs';
 import { rebase } from './rebase.mjs';
 import { restore } from './restore.mjs';
+import { log, status } from './status.mjs';
 import { versions } from './versions.mjs';
 
-export const COMMANDS = { auth, orgs, bots, versions, pull, node, trace, refs, apply, diff, check, push, rebase, restore };
+export const COMMANDS = { auth, orgs, bots, versions, pull, node, trace, refs, apply, diff, check, push, rebase, restore, status, log };
