@@ -71,3 +71,14 @@ test('事件列表接口不支持时照样拉，给出说明', async () => {
   assert.match(r.stdout, /读不到事件列表/);
   server.routes['GET /api/canvas/event/list'] = () => ok(sampleEvents);
 });
+
+test('pull 总是刷新智能体目录：缓存之后新出现的同名智能体也会被发现', async () => {
+  const home = homeWithIdentity();
+  assert.equal((await runCli(['bots'], { home })).code, 0);
+  const original = server.routes['GET /api/bot/list'];
+  server.routes['GET /api/bot/list'] = ({ query }) => ok(query.orgId === 'org-1' ? [{ id: BOT, name: '太极2.0重构' }, { id: 'b785966b-0000-4000-8000-000000000000', name: '太极2.0重构' }] : []);
+  const r = await runCli(['pull', '--bot', '太极2.0重构'], { home });
+  server.routes['GET /api/bot/list'] = original;
+  assert.equal(r.code, 4);
+  assert.match(r.stderr, /匹配到 2 个智能体/);
+});

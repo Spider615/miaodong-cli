@@ -24,7 +24,7 @@ function snippet(domain) {
   out('');
   out(buildSnippet(origin));
   out('');
-  out('4. 看到「✅ 已复制身份」后，回到对话说「好了」。');
+  out('4. 看到「✅ 已复制身份」后，回到对话只回复「好了」——不要把复制的内容粘贴进对话，里面是你的登录凭证。');
   out('');
   out('说明：身份只在你的剪贴板和本机 ~/.miaodong/md 里，不会出现在对话中；导入后剪贴板会被清空。');
   return EXIT.OK;
@@ -45,10 +45,14 @@ async function importIdentity(args) {
     savedAt: new Date().toISOString(),
     expiresAt: jwtExpiry(blob.token),
   };
-  // 先用一次只读调用验证，验证不过就不落盘
-  await request(identity, '/api/bot/list', { query: { orgId: identity.currentOrgId } });
-  saveIdentity(identity);
-  if (!args.stdin) clearClipboard();
+  try {
+    // 先用一次只读调用验证，验证不过就不落盘
+    await request(identity, '/api/bot/list', { query: { orgId: identity.currentOrgId } });
+    saveIdentity(identity);
+  } finally {
+    // 剪贴板里确实是身份串（上面解码成功）时，不论验证成败都清掉：它就是登录凭证
+    if (!args.stdin) clearClipboard();
+  }
   const org = identity.orgs.find((o) => o.id === identity.currentOrgId);
   const expiry = identity.expiresAt ? ` · 有效期至 ${formatTime(identity.expiresAt)}` : '';
   out(`✅ 已保存：${identity.label} · ${org?.name || identity.currentOrgId} · ${identity.user.name || '（未知用户）'}${expiry}`);

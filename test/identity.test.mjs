@@ -1,7 +1,7 @@
 import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildSnippet, decodeAuthBlob, jwtExpiry, normalizeOrigin, regionOf } from '../src/identity.mjs';
 import { runCli, tempHome } from './helpers/run-cli.mjs';
@@ -118,4 +118,34 @@ test('md auth snippet / list / remove', async () => {
   assert.ok(!l.stdout.includes('SECRET'));
   assert.equal((await runCli(['auth', 'remove', 'k1'], { home })).code, 0);
   assert.match((await runCli(['auth', 'list'], { home })).stdout, /还没有任何区的身份/);
+});
+
+test('控制台代码和步骤都提醒：只回复「好了」，不要把身份串粘贴进对话', async () => {
+  const { result } = runSnippet('https://a.example.com', { storage: { user: JSON.stringify({ token: 't', currentOrg: { id: 'o', name: 'O' } }) } });
+  assert.match(result, /不要粘贴/);
+  const s = await runCli(['auth', 'snippet', 'a.example.com'], { home: tempHome() });
+  assert.match(s.stdout, /不要把复制的内容粘贴进对话/);
+});
+
+// 用 PATH 里的假 pbpaste / pbcopy 模拟剪贴板（读写一个临时文件），不在产品代码里留测试钩子
+function fakeClipboard(content) {
+  const dir = tempHome();
+  const clip = join(dir, 'clip.txt');
+  writeFileSync(clip, content);
+  writeFileSync(join(dir, 'pbpaste'), '#!/bin/sh\ncat "$MD_TEST_CLIP"\n', { mode: 0o755 });
+  writeFileSync(join(dir, 'pbcopy'), '#!/bin/sh\ncat > "$MD_TEST_CLIP"\n', { mode: 0o755 });
+  return { clip, env: { PATH: `${dir}:${process.env.PATH}`, MD_TEST_CLIP: clip } };
+}
+
+test('从剪贴板导入：验证失败也清空剪贴板；剪贴板里不是身份串时不动它', async () => {
+  server.routes['GET /api/bot/list'] = () => ({ status: 401, body: { statusCode: 401, message: 'Authentication failed' } });
+  const bad = fakeClipboard(encodeAuthBlob({ origin: server.origin, token: 'tok-SECRET', currentOrg: { id: 'o', name: 'O' }, orgs: [] }));
+  const r = await runCli(['auth', 'import'], { home: tempHome(), env: bad.env });
+  server.routes['GET /api/bot/list'] = () => ok([]);
+  assert.equal(r.code, 3);
+  assert.equal(readFileSync(bad.clip, 'utf-8'), '');
+  const other = fakeClipboard('随便一段文字');
+  const r2 = await runCli(['auth', 'import'], { home: tempHome(), env: other.env });
+  assert.equal(r2.code, 3);
+  assert.equal(readFileSync(other.clip, 'utf-8'), '随便一段文字');
 });

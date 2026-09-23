@@ -53,3 +53,23 @@ test('md check：有问题时退出码 1', async () => {
   assert.equal(r.code, 1);
   assert.match(r.stdout, /❌ .*类型从 array 变成了 object/);
 });
+
+test('新出现的自引用：报错', () => {
+  const after = patchNode(sampleCanvas(), U(2), (c) => { c.data.nodePayload.inputs[0].referenceNodeId = U(2); return c; });
+  const r = runCheck(env(sampleCanvas()), env(after));
+  assert.ok(r.errors.some((e) => /引用了自己/.test(e)), r.errors.join('\n'));
+});
+
+test('连线指向不存在的端口：报错', () => {
+  const after = patchNode(sampleCanvas(), U(3), (c) => { c.ports.items = c.ports.items.filter((p) => p.id !== 'p3-in'); return c; });
+  const r = runCheck(env(sampleCanvas()), env(after));
+  assert.ok(r.errors.some((e) => /的端口不存在/.test(e)), r.errors.join('\n'));
+});
+
+test('null 改成对象只是警告，不拦推送', () => {
+  const base = patchNode(sampleCanvas(), U(2), (c) => { c.data.nodePayload.extra = null; return c; });
+  const after = patchNode(base, U(2), (c) => { c.data.nodePayload.extra = { x: 1 }; return c; });
+  const r = runCheck(env(base), env(after));
+  assert.ok(!r.errors.some((e) => /类型从/.test(e)), r.errors.join('\n'));
+  assert.ok(r.warnings.some((w) => /类型从 null 变成了 object/.test(w)), r.warnings.join('\n'));
+});

@@ -16,8 +16,11 @@ export function fieldChanges(a, b, path = '', list = []) {
   const ka = kindOf(a);
   const kb = kindOf(b);
   if (ka !== kb) {
-    const structural = ['array', 'object'].includes(ka) || ['array', 'object'].includes(kb);
-    list.push({ path, kind: structural ? 'typechange' : 'value', before: a, after: b });
+    // 只有数组 ↔ 对象才是「改坏了」的信号（老懂 setByPath 的 bug 就是这样）；
+    // null / 标量与结构互换可能是有意的（给空字段填配置），只标出来提醒
+    const container = (k) => k === 'array' || k === 'object';
+    const flipped = (ka === 'array' && kb === 'object') || (ka === 'object' && kb === 'array');
+    list.push({ path, kind: flipped ? 'typechange' : container(ka) || container(kb) ? 'reshape' : 'value', before: a, after: b });
     return list;
   }
   if (ka === 'object') {
@@ -133,7 +136,7 @@ export function renderDiff(d, { names = new Map(), limit = 400 } = {}) {
       if (field.kind === 'text') {
         lines.push(`    ${field.path}（文本 ${field.before.length} → ${field.after.length} 字）：`);
         for (const line of lineDiff(field.before, field.after)) lines.push(`      ${line}`);
-      } else if (field.kind === 'typechange') {
+      } else if (field.kind === 'typechange' || field.kind === 'reshape') {
         lines.push(`    ⚠️ ${field.path}：类型从 ${kindOf(field.before)} 变成 ${kindOf(field.after)}`);
       } else {
         lines.push(`    ${field.path}：${brief(field.before)} → ${brief(field.after)}`);

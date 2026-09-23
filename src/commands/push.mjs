@@ -11,7 +11,7 @@ import { EXIT, MdError } from '../errors.mjs';
 import { ensureDir, writeJson } from '../home.mjs';
 import { getCanvas, saveCanvas } from '../api.mjs';
 import { compareNodes, contentKey, edgeMap, hashOf, nodeMap, stableStringify } from '../canvas.mjs';
-import { runCheck } from '../check.mjs';
+import { graphProblems, runCheck } from '../check.mjs';
 import { diffEnvelopes, nameMapOf, renderDiff } from '../diff.mjs';
 import { businessNodes } from '../graph.mjs';
 import { appendLedger } from '../ledger.mjs';
@@ -25,20 +25,36 @@ export function planCode({ botId, canvasId, live, save }) {
   return createHash('sha256').update(stableStringify({ botId, canvasId, live: hashOf(live), save: hashOf(save) })).digest('hex').slice(0, 8);
 }
 
-export function verifyReadback(expected, readback, canvasId, ourIds) {
+// 按 fieldChanges 产出的路径（a.b[0].c）取值；取不到就是 undefined
+function valueAt(obj, path) {
+  let current = obj;
+  for (const token of path.split(/\.|\[(\d+)\]/).filter((t) => t !== undefined && t !== '')) {
+    if (current === null || typeof current !== 'object') return undefined;
+    current = current[token];
+  }
+  return current;
+}
+
+// ours = diffEnvelopes(base, after)：只要求「你改过的那些字段」回读一致。
+// 服务端会归一化个别字段（实测换模型时删掉 data.modelDeprecated），整节点比对会把正常推送误报成失败。
+export function verifyReadback(expected, readback, canvasId, ours = null) {
   const problems = [];
   const notes = [];
   if (readback.canvasId !== canvasId) problems.push(`回读到的画布 id 变了（${shortId(readback.canvasId)}）`);
   const e = nodeMap(expected);
   const r = nodeMap(readback.rawCanvas);
+  const changedFields = new Map((ours?.changed ?? []).map((c) => [c.id, c.fields]));
+  const sameAt = (a, b, path) => stableStringify(valueAt(a, path) ?? null) === stableStringify(valueAt(b, path) ?? null);
   let missing = 0;
   let extra = 0;
   let oursDiffer = 0;
   let othersDiffer = 0;
   for (const [id, cell] of e) {
-    if (!r.has(id)) missing++;
-    else if (contentKey(cell) !== contentKey(r.get(id))) {
-      if (ourIds.has(id)) oursDiffer++;
+    const got = r.get(id);
+    if (!got) missing++;
+    else if (contentKey(cell) !== contentKey(got)) {
+      const fields = changedFields.get(id);
+      if (fields && fields.some((f) => !sameAt(cell, got, f.path))) oursDiffer++;
       else othersDiffer++;
     }
   }
@@ -53,14 +69,17 @@ export function verifyReadback(expected, readback, canvasId, ourIds) {
   if (oursDiffer) problems.push(`${oursDiffer} 个你改的节点内容和推送的不一样`);
   if (edgesDiffer) problems.push(`${edgesDiffer} 条连线不一致`);
   // 服务端会归一化个别字段（实测删过 data.modelDeprecated），未改动节点的差异只提示
-  if (othersDiffer) notes.push(`${othersDiffer} 个未改动节点有细微差异（服务端归一化字段）`);
+  if (othersDiffer) notes.push(`${othersDiffer} 个节点里你没改的字段被服务端调整了（正常：服务端会归一化个别字段）`);
   return { problems, notes };
 }
 
-function modeFlagOf(args) {
-  if (args['replace-draft']) return ' --replace-draft';
-  if (args['onto-draft']) return ' --onto-draft';
-  return '';
+// 预演打印的确认命令要带上预演时用的开关，否则照抄去确认会走另一条路径
+function flagsOf(args) {
+  const flags = [];
+  if (args['replace-draft']) flags.push('--replace-draft');
+  else if (args['onto-draft']) flags.push('--onto-draft');
+  if (args['allow-check-errors']) flags.push('--allow-check-errors');
+  return flags.map((flag) => ` ${flag}`).join('');
 }
 
 export const push = {
@@ -117,6 +136,12 @@ export const push = {
       theirs = merged.theirs;
     }
     if (businessNodes(toSave).length === 0) throw blocked('要推送的画布里没有任何节点，已阻止');
+    // 自检比的是「基线 → 改后」；合并结果还可能因别人的并发修改出现新的断头（我引用的节点被别人删了等）
+    const liveProblems = new Set(graphProblems({ canvas: live.rawCanvas, events: ws.base.events }));
+    const introduced = graphProblems({ canvas: toSave, events: ws.base.events }).filter((p) => !liveProblems.has(p));
+    if (introduced.length) {
+      throw blocked(`推送后草稿里会新出现 ${introduced.length} 处悬空引用或连线：\n${introduced.slice(0, 20).map((p) => `  - ${p}`).join('\n')}`, 'md rebase 在最新草稿上重跑改动脚本，再预演');
+    }
 
     const ours = diffEnvelopes(ws.base, ws.after);
     const code = planCode({ botId, canvasId: live.canvasId, live: live.rawCanvas, save: toSave });
@@ -127,12 +152,13 @@ export const push = {
     }
     out('你的改动：');
     for (const line of renderDiff(ours, { names: nameMapOf(ws.base.canvas, ws.after.canvas), limit: intArg(args, 'limit', 120) })) out(`  ${line}`);
+    for (const error of check.errors) out(`  ❌ ${error}（已用 --allow-check-errors 放行）`);
     for (const warning of check.warnings) out(`  ⚠️ ${warning}`);
 
     if (args.confirm === undefined || args.confirm === false) {
       out('');
       out(`这是预演，什么都没写。计划码：${code}`);
-      out(`用户同意后执行：md push --ws ${ws.dir}${modeFlagOf(args)} --confirm ${code}`);
+      out(`用户同意后执行：md push --ws ${ws.dir}${flagsOf(args)} --confirm ${code}`);
       return EXIT.OK;
     }
     if (args.confirm !== code) {
@@ -145,8 +171,7 @@ export const push = {
     writeJson(backup, { canvasId: live.canvasId, updatedAt: live.updatedAt, rawCanvas: live.rawCanvas });
     await saveCanvas(identity, orgId, live.canvasId, toSave);
     const readback = await getCanvas(identity, orgId, botId);
-    const ourIds = new Set([...ours.changed.map((c) => c.id), ...ours.added.map((c) => c.id)]);
-    const { problems, notes } = verifyReadback(toSave, readback, live.canvasId, ourIds);
+    const { problems, notes } = verifyReadback(toSave, readback, live.canvasId, ours);
 
     const historyDir = ensureDir(join(ws.dir, 'history', at));
     const pushed = join(historyDir, 'pushed.json');

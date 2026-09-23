@@ -57,3 +57,8 @@ test('md diff：在工作副本上输出清单；--json 可解析', async () => 
   const j = await runCli(['diff', '--json'], { home });
   assert.equal(JSON.parse(j.stdout).changed[0].id, U(2));
 });
+
+test('fieldChanges：null / 标量与对象、数组互换是 reshape，只有数组与对象互换才是 typechange', () => {
+  assert.deepEqual(fieldChanges({ a: null }, { a: { x: 1 } }).map((f) => [f.path, f.kind]), [['a', 'reshape']]);
+  assert.deepEqual(fieldChanges({ a: [1] }, { a: 'x' }).map((f) => [f.path, f.kind]), [['a', 'reshape']]);
+});

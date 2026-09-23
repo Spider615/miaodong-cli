@@ -45,14 +45,21 @@ export function newRisks(baseEnv, afterEnv) {
   return { added, resolved };
 }
 
-export function danglingProblems(env) {
-  const ids = new Set(env.canvas.filter((c) => c && typeof c === 'object' && !isEdgeCell(c)).map((c) => c.id));
+// 图上的「断头」：连线端点 / 端口不存在、引用指向不存在的节点、节点引用自己。
+// 调用方只关心「新出现的」：拿两份画布各算一遍，做集合差。
+export function graphProblems(env) {
+  const nodes = new Map(env.canvas.filter((c) => c && typeof c === 'object' && !isEdgeCell(c)).map((c) => [c.id, c]));
+  const hasPort = (node, port) => !Array.isArray(node.ports?.items) || node.ports.items.some((p) => p?.id === port);
   const problems = [];
   for (const edge of edgesOf(env.canvas)) {
-    if (!ids.has(edge.source?.cell) || !ids.has(edge.target?.cell)) problems.push(`连线 ${edgeKey(edge)} 的端点节点不存在`);
+    const source = nodes.get(edge.source?.cell);
+    const target = nodes.get(edge.target?.cell);
+    if (!source || !target) problems.push(`连线 ${edgeKey(edge)} 的端点节点不存在`);
+    else if (!hasPort(source, edge.source?.port) || !hasPort(target, edge.target?.port)) problems.push(`连线 ${edgeKey(edge)} 的端口不存在`);
   }
   for (const ref of buildIndex(env.canvas, env.events).refs) {
-    if (!ids.has(ref.to)) problems.push(`节点 [${shortId(ref.from)}] 的 ${ref.path} 引用了不存在的节点 ${shortId(ref.to)}`);
+    if (!nodes.has(ref.to)) problems.push(`节点 [${shortId(ref.from)}] 的 ${ref.path} 引用了不存在的节点 ${shortId(ref.to)}`);
+    else if (ref.from === ref.to) problems.push(`节点 [${shortId(ref.from)}] 的 ${ref.path} 引用了自己`);
   }
   return problems;
 }
@@ -66,12 +73,14 @@ export function runCheck(baseEnv, afterEnv) {
     for (const field of change.fields) {
       if (field.kind === 'typechange') {
         errors.push(`${change.name} [${shortId(change.id)}] 的 ${field.path} 类型从 ${kindOf(field.before)} 变成了 ${kindOf(field.after)}（多半是改坏了）`);
+      } else if (field.kind === 'reshape') {
+        warnings.push(`${change.name} [${shortId(change.id)}] 的 ${field.path} 类型从 ${kindOf(field.before)} 变成了 ${kindOf(field.after)}（确认是有意的）`);
       }
     }
   }
 
-  const baseDangling = new Set(danglingProblems(baseEnv));
-  for (const problem of danglingProblems(afterEnv)) if (!baseDangling.has(problem)) errors.push(problem);
+  const baseProblems = new Set(graphProblems(baseEnv));
+  for (const problem of graphProblems(afterEnv)) if (!baseProblems.has(problem)) errors.push(problem);
 
   const scope = collectChangedScopeNodeIds(baseEnv, afterEnv);
   if (!scope) {

@@ -85,3 +85,12 @@ test('runTransform：在副本上跑、不改入参；改会话变量被拒；�
   writeFileSync(boom, "export default () => { throw new Error('锚点没找到'); };\n");
   await assert.rejects(runTransform(boom, envelope), (e) => e.code === 'transform_failed' && /锚点没找到/.test(e.message));
 });
+
+test('retargetRefs：from/to 必须是不同的非空 id；目标节点自己的引用不改（不造自引用）', () => {
+  const { h, ctx } = helpersFor(sampleCanvas());
+  assert.throws(() => h.retargetRefs({ from: undefined, to: U(6) }), /需要 from/);
+  assert.throws(() => h.retargetRefs({ from: U(2), to: '' }), /需要 to/);
+  assert.throws(() => h.retargetRefs({ from: U(2), to: U(2) }), /不能相同/);
+  assert.equal(h.retargetRefs({ from: U(1), to: U(2) }), 0);
+  assert.equal(ctx.canvas.find((c) => c.id === U(2)).data.nodePayload.inputs[0].referenceNodeId, U(1));
+});

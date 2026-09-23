@@ -86,16 +86,17 @@
 
 - **看**：`md trace <节点> [--up|--down] [--depth N]`（走真实连线 + 事件边）；`md refs <节点>`（谁引用了它，全图递归扫描，给出字段路径）；`md node <节点>`（完整配置）。其余查询直接 jq 索引文件。
 - **改**：改动以 after.json 为准。`md apply <脚本.mjs>`：脚本默认导出 `(ctx) => void`，`ctx = {canvas, sessions, events, h}`；helper 自带守卫：`h.select(pred)`、`h.node(id|前缀|名字)`、`h.get/set(node, path)`（支持 `a[0].b` 与 `a.0.b` 两种数组写法，路径不存在报错，绝不把数组改成对象）、`h.replaceOnce`（必须恰好命中 1 次）、`h.replaceAll(..., {expect})`、`h.insertAfter / insertBefore`、`h.expectCount(list, n)`、`h.retargetRefs({from, to, fromDataPath, toDataPath, expect})`、`h.cloneNode(query, {name})`、`h.portOf(node, 'left'|'right', i)`、`h.addEdge(from, fromPort, to, toPort)`、`h.removeEdges(pred, {expect})`、`h.removeNode(query)`。多次 apply 叠加；`md apply --reset` 回到 base；`md apply --json <file>` 接受整份手改（不可重放）。`md rebase` 在最新草稿上按顺序重跑改动脚本。
-- **自检** `md check`：只报**相对基线新增**的问题——作用域校验（改动节点）、新增风险（workflow-risk）、数组变对象等类型突变、引用悬空、可达节点数前后对比。
-- **diff** `md diff [--md]`：节点 / 连线增删、改动节点的字段路径；字符串字段按行 diff；过滤坐标 / 尺寸 / zIndex 等纯渲染字段。
+- **自检** `md check`：只报**相对基线新增**的问题——作用域校验（改动节点）、新增风险（workflow-risk，可达性由其 D 组规则体现）、数组 ↔ 对象的类型突变（null / 标量与结构互换只警告）、连线端点 / 端口悬空、引用悬空、自引用。
+- **diff** `md diff [--json]`：节点 / 连线增删、改动节点的字段路径；字符串字段按行 diff；过滤坐标 / 尺寸 / zIndex 等纯渲染字段。
 - **推** `md push`（默认预演，`--confirm <计划码>` 才写）：
   - 重新 GET 草稿，做**元素级三方合并** `merge(base, 你的改后, 当前草稿)`：节点按 id、连线按「源节点#端口→目标节点#端口」对齐；只有你改的节点用你的内容（位置沿用草稿）、只有别人改的保留别人的、双方都改同一节点 → 冲突停下；合并后有悬空连线 → 冲突。
     - 不复用老懂的 `planContentPublish`：它只处理纯内容改动、按整个 `node.data` 判冲突、不搬结构改动（实测代码），一条合并路径覆盖内容与结构两种情况更简单。
     - 秒懂编辑页会自动保存，且加载时会就地改 rawCanvas（前端代码证实），所以「远端变过就停」会被噪声频繁打断；按节点合并只在碰到同一节点时才停。
+  - 合并结果还要过一遍断头检查：相对当前草稿新出现悬空引用 / 连线 / 端口 → 拦下（自检只比基线与改后，看不到别人的并发删除）。
   - 以版本为底且草稿与该版不同 → 必须显式 `--onto-draft`（走合并）或 `--replace-draft`（整体替换）。
   - 自检（`md check`）有新增硬问题时拒绝推送，除非 `--allow-check-errors`。
   - 预演打印目标、改动清单、计划码；计划码 = 哈希(智能体, 草稿 id, 当前草稿内容, 要写入的内容)，`--confirm` 必须与当前预演一致（预演后草稿又变了就要重新预演）。
-  - 写前备份，只调 `canvas/save`（不再 import 事件 / 会话变量）；写后回读核对：节点集合、连线集合、你改动的节点内容必须一致，其他节点的细微差异只提示（服务端会归一化个别字段）。
+  - 写前备份，只调 `canvas/save`（不再 import 事件 / 会话变量）；写后回读核对：节点集合、连线集合、你改过的那些字段必须一致，其余差异只提示（服务端会归一化个别字段，实测换模型时会删 `data.modelDeprecated`）。
   - 推送成功后工作副本以回读结果为新基线，改动脚本移入 `history/<时间>/`。
   - 记账本。`md restore` 用推送前备份回滚（同样预演 + 计划码）。
 - **账本** `md status [--bot X] [--remote]` / `md log`：哪个区哪个智能体、改了哪些节点、推没推；`--remote` 拉当前草稿，逐个核对上次推送改动的节点是否还在（发现被旧编辑页覆盖）。

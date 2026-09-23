@@ -1,5 +1,6 @@
 import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { filterEntries, pickOne, resolveBot } from '../src/target.mjs';
 import { runCli, tempHome } from './helpers/run-cli.mjs';
@@ -83,4 +84,14 @@ test('没有任何身份时退出码 3', async () => {
   const r = await runCli(['bots'], { home: tempHome() });
   assert.equal(r.code, 3);
   assert.match(r.stderr, /还没有任何区的身份/);
+});
+
+test('有企业读取失败时不写缓存：不完整的目录不能拿来判断歧义', async () => {
+  const home = homeWithIdentity();
+  process.env.MD_HOME = join(home, 'md');
+  const original = server.routes['GET /api/bot/list'];
+  server.routes['GET /api/bot/list'] = ({ query }) => (query.orgId === 'org-2' ? { status: 500, body: { message: 'boom' } } : ok(BOTS[query.orgId] ?? []));
+  await resolveBot({ bot: '质检革新版' });
+  server.routes['GET /api/bot/list'] = original;
+  assert.equal(existsSync(join(home, 'md', 'cache', 'bots.json')), false);
 });

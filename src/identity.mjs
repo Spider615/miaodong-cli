@@ -35,7 +35,7 @@ export function regionOf(origin) {
 // 嵌在别的系统里（wujie）时登录态键名是 user-ai-pc。
 export function buildSnippet(origin) {
   const want = JSON.stringify(origin);
-  return `(()=>{try{const want=${want};if(location.origin!==want)return'❌ 当前页面是 '+location.origin+'，请打开 '+want+' 的秒懂控制台再执行';const raw=localStorage.getItem('user')||localStorage.getItem('user-ai-pc');const u=raw?JSON.parse(raw):null;if(!u||!u.token)return'❌ 没读到登录态：先在这个页面登录秒懂';const pick=o=>o&&o.id?{id:String(o.id),name:String(o.name||'')}:null;const p={v:1,origin:location.origin,token:u.token,user:{id:String(u.id||''),name:String(u.name||'')},currentOrg:pick(u.currentOrg),orgs:(Array.isArray(u.orgs)?u.orgs:[]).map(pick).filter(Boolean)};copy('${AUTH_PREFIX}'+btoa(unescape(encodeURIComponent(JSON.stringify(p)))));return'✅ 已复制身份（企业：'+(p.currentOrg?p.currentOrg.name:'未选')+'，共 '+p.orgs.length+' 个企业）。回到 AI 对话说「好了」'}catch(e){return'❌ '+e.message}})()`;
+  return `(()=>{try{const want=${want};if(location.origin!==want)return'❌ 当前页面是 '+location.origin+'，请打开 '+want+' 的秒懂控制台再执行';const raw=localStorage.getItem('user')||localStorage.getItem('user-ai-pc');const u=raw?JSON.parse(raw):null;if(!u||!u.token)return'❌ 没读到登录态：先在这个页面登录秒懂';const pick=o=>o&&o.id?{id:String(o.id),name:String(o.name||'')}:null;const p={v:1,origin:location.origin,token:u.token,user:{id:String(u.id||''),name:String(u.name||'')},currentOrg:pick(u.currentOrg),orgs:(Array.isArray(u.orgs)?u.orgs:[]).map(pick).filter(Boolean)};copy('${AUTH_PREFIX}'+btoa(unescape(encodeURIComponent(JSON.stringify(p)))));return'✅ 已复制身份（企业：'+(p.currentOrg?p.currentOrg.name:'未选')+'，共 '+p.orgs.length+' 个企业）。回到 AI 对话只回复「好了」，不要粘贴（里面是登录凭证）'}catch(e){return'❌ '+e.message}})()`;
 }
 
 function invalid(message, hint = '让用户在控制台重新执行 md auth snippet 给的那行代码，看到「✅ 已复制身份」后再导入') {

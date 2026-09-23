@@ -24,6 +24,7 @@ export async function loadBotDirectory({ refresh = false } = {}) {
   const cache = readJson(cachePath(), null);
   if (!refresh && cache && cache.keys === keys && Date.now() - cache.fetchedAt < CACHE_TTL_MS) return cache.entries;
   const entries = [];
+  let skipped = 0;
   for (const identity of identities) {
     for (const org of identity.orgs) {
       let bots;
@@ -32,6 +33,7 @@ export async function loadBotDirectory({ refresh = false } = {}) {
       } catch (error) {
         if (error instanceof MdError && error.code === 'auth_expired') throw error;
         note(`（跳过 ${identity.label} / ${org.name}：${error.message}）`);
+        skipped++;
         continue;
       }
       for (const bot of bots) {
@@ -42,7 +44,9 @@ export async function loadBotDirectory({ refresh = false } = {}) {
       }
     }
   }
-  writeJson(cachePath(), { keys, fetchedAt: Date.now(), entries });
+  // 有企业没读到时目录不完整，缓存下来会让之后的同名歧义判断漏掉候选
+  if (skipped === 0) writeJson(cachePath(), { keys, fetchedAt: Date.now(), entries });
+  else note('（这次的智能体目录不完整，不写缓存）');
   return entries;
 }
 

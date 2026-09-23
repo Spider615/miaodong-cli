@@ -54,7 +54,7 @@ export const restore = {
     writeJson(safety, { canvasId: live.canvasId, updatedAt: live.updatedAt, rawCanvas: live.rawCanvas });
     await saveCanvas(identity, orgId, live.canvasId, backup.rawCanvas);
     const readback = await getCanvas(identity, orgId, botId);
-    const { problems } = verifyReadback(backup.rawCanvas, readback, live.canvasId, new Set());
+    const { problems } = verifyReadback(backup.rawCanvas, readback, live.canvasId);
     appendLedger({
       at: new Date().toISOString(), kind: 'restore',
       identityKey: target.identityKey, regionLabel: target.regionLabel, origin: identity.origin,

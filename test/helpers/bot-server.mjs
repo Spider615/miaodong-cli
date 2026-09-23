@@ -17,6 +17,7 @@ export async function startBotServer() {
     state.v400 = sampleCanvas();
     state.saves = 0;
     state.dropOnSave = false;
+    state.onSave = null;
   };
   reset();
   const server = await startFakeMiaodong({
@@ -29,7 +30,8 @@ export async function startBotServer() {
     'GET /api/canvas/event/list': () => ok(sampleEvents),
     'POST /api/canvas/save': ({ body }) => {
       state.saves++;
-      state.draft = state.dropOnSave ? body.rawCanvas.slice(1) : body.rawCanvas;
+      const saved = state.dropOnSave ? body.rawCanvas.slice(1) : body.rawCanvas;
+      state.draft = state.onSave ? state.onSave(saved) : saved;
       return { status: 201, body: { code: 0, data: null } };
     },
   });

@@ -21,7 +21,7 @@ export default ({ canvas, h }) => {
 | `h.replaceOnce(node, path, 查找, 替换)` | 文本里「查找」必须恰好出现 1 次 |
 | `h.insertAfter(node, path, 锚点, 新内容)` / `h.insertBefore` | 基于 replaceOnce |
 | `h.replaceAll(node, path, 查找, 替换, { expect })` | 全部替换，可要求次数 |
-| `h.retargetRefs({ from, to, fromDataPath?, toDataPath?, expect })` | 把所有引用 from 的地方改成引用 to |
+| `h.retargetRefs({ from, to, fromDataPath?, toDataPath?, expect })` | 把所有引用 from 的地方改成引用 to。from / to 必须是两个不同的节点 id；to 节点自己对 from 的引用不改（避免自引用） |
 | `h.cloneNode(query, { name })` | 复制节点（新 id、新端口 id） |
 | `h.portOf(node, 'left'或'right', i)` | 取端口 id |
 | `h.addEdge(from, fromPort, to, toPort)` | 加连线（样式照抄画布里已有的连线） |

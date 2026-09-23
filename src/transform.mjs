@@ -141,25 +141,35 @@ export function createHelpers(ctx, log) {
       return list;
     },
     retargetRefs({ from, to, fromDataPath, toDataPath, expect }) {
+      // from 缺省时 `referenceNodeId === undefined` 会命中所有对象，把全图写坏；必须显式给两个不同的 id
+      if (typeof from !== 'string' || !from) throw new TransformError('retargetRefs 需要 from（原来被引用的节点 id）');
+      if (typeof to !== 'string' || !to) throw new TransformError('retargetRefs 需要 to（改为引用的节点 id）');
+      if (from === to) throw new TransformError('retargetRefs 的 from 和 to 不能相同');
       let count = 0;
-      const walk = (value) => {
+      let skipped = 0;
+      const walk = (value, apply) => {
         if (Array.isArray(value)) {
-          value.forEach(walk);
+          value.forEach((item) => walk(item, apply));
           return;
         }
         if (!value || typeof value !== 'object') return;
         if (value.referenceNodeId === from && (fromDataPath === undefined || value.dataPath === fromDataPath)) {
-          value.referenceNodeId = to;
-          if (toDataPath !== undefined) value.dataPath = toDataPath;
-          count++;
+          if (apply) {
+            value.referenceNodeId = to;
+            if (toDataPath !== undefined) value.dataPath = toDataPath;
+            count++;
+          } else {
+            skipped++;
+          }
         }
-        for (const child of Object.values(value)) if (child && typeof child === 'object') walk(child);
+        for (const child of Object.values(value)) if (child && typeof child === 'object') walk(child, apply);
       };
-      for (const node of businessNodes(ctx.canvas)) walk(node.data);
+      // 目标节点自己对 from 的引用不改：否则它会引用自己（典型场景：把节点挪到 from 后面，它本来就该继续读 from）
+      for (const node of businessNodes(ctx.canvas)) walk(node.data, node.id !== to);
       if (expect !== undefined && count !== expect) {
-        throw new TransformError(`把引用从 ${String(from).slice(0, 8)} 改到 ${String(to).slice(0, 8)}：命中 ${count} 处，预期 ${expect} 处`);
+        throw new TransformError(`把引用从 ${from.slice(0, 8)} 改到 ${to.slice(0, 8)}：命中 ${count} 处，预期 ${expect} 处`);
       }
-      log.push(`改引用 ${String(from).slice(0, 8)} → ${String(to).slice(0, 8)} ×${count}`);
+      log.push(`改引用 ${from.slice(0, 8)} → ${to.slice(0, 8)} ×${count}${skipped ? `（跳过目标节点自身 ${skipped} 处）` : ''}`);
       return count;
     },
     cloneNode(query, { name, offset = { x: 40, y: 40 } } = {}) {

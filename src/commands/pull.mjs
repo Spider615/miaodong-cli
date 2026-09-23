@@ -11,7 +11,8 @@ export const pull = {
   summary: '把草稿或指定版本拉到新的工作副本（连同会话变量和事件）',
   usage: 'md pull --bot <智能体> [--org <企业>] [--region <区>] [--version <版本号或名称>]',
   async run(args) {
-    const target = await resolveBot(targetArgs(args));
+    // pull 是后续一切写操作的目标来源：总是刷新目录，避免缓存漏掉刚克隆出来的同名智能体
+    const target = await resolveBot({ ...targetArgs(args), refresh: true });
     const { identity, orgId, botId } = target;
     const draft = await getCanvas(identity, orgId, botId);
     let canvas = draft.rawCanvas;

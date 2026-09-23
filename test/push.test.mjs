@@ -130,3 +130,52 @@ test('回读不一致时报警（退出码 5）', async () => {
   assert.match(r.stdout, /回读核对有 \d+ 处不一致/);
   assert.match(r.stdout, /1 个节点没写进去/);
 });
+
+test('推送后会新出现悬空引用（别人删了我刚引用的节点）→ 拦下', async () => {
+  bot.reset();
+  const { home } = await bot.pulled();
+  await bot.apply(home, "export default ({ h }) => { h.set(h.node('00000003'), 'data.nodePayload.inputs[0].referenceNodeId', h.node('00000006').id); };\n");
+  bot.state.draft = bot.state.draft.filter((c) => c.id !== U(6) && c.id !== U(104));
+  const r = await runCli(['push'], { home });
+  assert.equal(r.code, 5);
+  assert.match(r.stderr, /会新出现 \d+ 处悬空/);
+  assert.equal(bot.state.saves, 0);
+});
+
+test('--allow-check-errors：预演照样列出被放行的问题，确认命令带上这个开关', async () => {
+  bot.reset();
+  const { home } = await bot.pulled();
+  await bot.apply(home, "export default ({ h }) => { h.set(h.node('00000002'), 'data.nodePayload.inputs', { 0: 'x' }); };\n");
+  const dry = await runCli(['push', '--allow-check-errors'], { home });
+  assert.equal(dry.code, 0, dry.stderr);
+  assert.match(dry.stdout, /❌ .*类型从 array 变成了 object/);
+  assert.match(dry.stdout, /--allow-check-errors --confirm/);
+});
+
+test('服务端归一化了我没改的字段：只提示，不报回读不一致', async () => {
+  bot.reset();
+  setDraftNode(U(2), (c) => { c.data.modelDeprecated = true; return c; });
+  const { home } = await bot.pulled();
+  await bot.apply(home, "export default ({ h }) => { h.set(h.node('00000002'), 'data.nodePayload.modelType', 'luna'); };\n");
+  const code = planCodeOf((await runCli(['push'], { home })).stdout);
+  bot.state.onSave = (canvas) => canvas.map((c) => {
+    if (!c.data || !('modelDeprecated' in c.data)) return c;
+    const { modelDeprecated, ...data } = c.data;
+    return { ...c, data };
+  });
+  const r = await runCli(['push', '--confirm', code], { home });
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /✅ 已推送到草稿/);
+});
+
+test('我改的字段没写进去：照样报回读不一致', async () => {
+  bot.reset();
+  const { home } = await bot.pulled();
+  await bot.apply(home, "export default ({ h }) => { h.set(h.node('00000002'), 'data.nodePayload.modelType', 'luna'); };\n");
+  const code = planCodeOf((await runCli(['push'], { home })).stdout);
+  const original = sampleCanvas().find((c) => c.id === U(2));
+  bot.state.onSave = (canvas) => canvas.map((c) => (c.id === U(2) ? original : c));
+  const r = await runCli(['push', '--confirm', code], { home });
+  assert.equal(r.code, 5);
+  assert.match(r.stdout, /1 个你改的节点内容和推送的不一样/);
+});
