@@ -1,0 +1,59 @@
+// 把 md 打成一个 Node 18 可直接运行的单文件。
+// 为什么打包：kit 以前靠 --experimental-strip-types 直接跑 TS，默认 Node 18 下直接报错，
+// 会话里 AI 给命令加 Node 22 前缀加了 324 次。打包后没有运行时 flag，也没有 TS。
+//
+// banner 做三件事：
+// 1. shebang 带 --no-warnings：Node 18 的 fetch 会打 ExperimentalWarning，混进 stderr 干扰 AI；
+// 2. 同时拦截 process.emitWarning 里的 ExperimentalWarning，覆盖 `node md.mjs` 直接跑的情况；
+// 3. Node 18 以文件方式跑 ESM 时没有全局 crypto，而共享代码里有裸 crypto.randomUUID()。
+
+import { build } from 'esbuild';
+import { chmodSync, mkdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const KIT = dirname(fileURLToPath(import.meta.url));
+export const BUNDLE_PATH = join(KIT, 'dist', 'md.mjs');
+
+const BANNER = [
+  '#!/usr/bin/env -S node --no-warnings',
+  "import { webcrypto as __mdWebcrypto } from 'node:crypto';",
+  'if (!globalThis.crypto) globalThis.crypto = __mdWebcrypto;',
+  'const __mdEmitWarning = process.emitWarning;',
+  "process.emitWarning = function (warning, ...rest) { const type = typeof rest[0] === 'string' ? rest[0] : rest[0]?.type; if (type === 'ExperimentalWarning') return; return __mdEmitWarning.call(process, warning, ...rest); };",
+].join('\n');
+
+function buildTag() {
+  let sha = 'nogit';
+  try {
+    sha = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: KIT, encoding: 'utf-8' }).trim();
+  } catch {
+    // 不在 git 里构建时照样能出产物
+  }
+  return `${sha}@${new Date().toISOString().slice(0, 10)}`;
+}
+
+export async function buildBundle({ outfile = BUNDLE_PATH } = {}) {
+  mkdirSync(dirname(outfile), { recursive: true });
+  const tag = buildTag();
+  await build({
+    entryPoints: [join(KIT, 'src', 'cli.mjs')],
+    bundle: true,
+    platform: 'node',
+    format: 'esm',
+    target: 'node18',
+    outfile,
+    banner: { js: BANNER },
+    define: { __MD_BUILD__: JSON.stringify(tag) },
+    logLevel: 'warning',
+    legalComments: 'none',
+  });
+  chmodSync(outfile, 0o755);
+  return { outfile, tag };
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const { outfile, tag } = await buildBundle();
+  console.log(`已构建 ${outfile}（${tag}）`);
+}
