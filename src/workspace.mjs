@@ -5,8 +5,8 @@
 //   draft.json  以版本为底时拉取那一刻的草稿；after.json 改后快照；
 //   index/      nodes / edges / refs 的 jsonl，反映当前状态（有 after 就用 after），给 jq 查。
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { copyFileSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, join, resolve } from 'node:path';
 import { EXIT, MdError, usage } from './errors.mjs';
 import { ensureDir, mdHome, readJson, writeJson } from './home.mjs';
 import { buildIndex } from './graph.mjs';
@@ -97,4 +97,32 @@ export function targetFromMeta(meta) {
     identityKey: meta.identityKey, regionLabel: meta.regionLabel, orgId: meta.orgId, orgName: meta.orgName,
     botId: meta.botId, botName: meta.botName, identity,
   };
+}
+
+export function saveMeta(dir, meta) {
+  writeJson(join(dir, 'meta.json'), meta);
+}
+
+export function saveAfter(dir, envelope) {
+  writeJson(join(dir, 'after.json'), envelope);
+  writeIndex(dir, envelope);
+}
+
+export function clearAfter(dir, base) {
+  rmSync(join(dir, 'after.json'), { force: true });
+  rmSync(join(dir, 'transforms'), { recursive: true, force: true });
+  writeIndex(dir, base);
+}
+
+export function listTransforms(dir) {
+  const transformsDir = join(dir, 'transforms');
+  if (!existsSync(transformsDir)) return [];
+  return readdirSync(transformsDir).filter((name) => name.endsWith('.mjs')).sort().map((name) => join(transformsDir, name));
+}
+
+export function recordTransform(dir, file) {
+  const transformsDir = ensureDir(join(dir, 'transforms'));
+  const dest = join(transformsDir, `${String(listTransforms(dir).length + 1).padStart(3, '0')}-${basename(file)}`);
+  copyFileSync(file, dest);
+  return dest;
 }
