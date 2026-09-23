@@ -3,6 +3,7 @@
 
 import { request } from './http.mjs';
 import { MdError } from './errors.mjs';
+import { deriveDomainEdges, deriveDomainNodes } from '../../apps/api/lib/miaodong/canvas-derive.ts';
 
 const str = (value) => (typeof value === 'string' ? value : '');
 
@@ -90,4 +91,14 @@ export function listSessions(identity, orgId, botId) {
 export function listEvents(identity, orgId, botId) {
   // 固定带 eventListFilter=all：不带时是否包含隐藏事件没有确认
   return optionalArray(request(identity, '/api/canvas/event/list', { query: { botId, orgId, eventListFilter: 'all' } }));
+}
+
+// canvas/save 是全量覆盖、写编辑器草稿；nodes / edges 由 rawCanvas 推出（与老懂、kit 同一套契约）
+export function saveCanvas(identity, orgId, canvasId, rawCanvas) {
+  return request(identity, '/api/canvas/save', {
+    method: 'POST',
+    query: { orgId },
+    body: { canvasId, rawCanvas, nodes: deriveDomainNodes(rawCanvas), edges: deriveDomainEdges(rawCanvas) },
+    timeoutMs: 120_000,
+  });
 }
