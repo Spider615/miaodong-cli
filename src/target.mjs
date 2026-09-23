@@ -103,3 +103,16 @@ export async function resolveBot({ bot, org, region, refresh = false }) {
     hint: '也可以加 --org <企业> 或 --region <区> 缩小范围',
   });
 }
+
+export function resolveVersion(versions, query) {
+  const q = norm(query).replace(/^v/, '');
+  const byVersion = versions.filter((v) => norm(v.version).replace(/^v/, '') === q);
+  const hits = byVersion.length ? byVersion : versions.filter((v) => norm(v.name) === norm(query));
+  if (hits.length === 1) return hits[0];
+  if (hits.length === 0) {
+    throw new MdError('version_not_found', `没有版本「${query}」`, { exitCode: EXIT.TARGET, hint: '用 md versions --bot <智能体> 看版本列表' });
+  }
+  throw new MdError('version_ambiguous', `「${query}」匹配到 ${hits.length} 个版本：${hits.map((v) => `${v.version}（${v.name}）`).join('、')}`, {
+    exitCode: EXIT.TARGET,
+  });
+}

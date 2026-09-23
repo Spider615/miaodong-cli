@@ -2,5 +2,6 @@
 import { auth } from './auth.mjs';
 import { bots } from './bots.mjs';
 import { orgs } from './orgs.mjs';
+import { versions } from './versions.mjs';
 
-export const COMMANDS = { auth, orgs, bots };
+export const COMMANDS = { auth, orgs, bots, versions };
