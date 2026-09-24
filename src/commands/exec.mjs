@@ -148,7 +148,7 @@ async function showExec(args, target, norm, dir) {
     const chain = chainOf(e.execId, pool.rows, chainExecFromDetail(norm));
     eventName = chain?.target?.triggeredBy?.eventName ?? '';
     chainLines = chain
-      ? renderChain(chain, rowsById, { windowLabel: `执行时间前后 ${Math.round(windowMs / 60_000)} 分钟`, truncated: pool.truncated })
+      ? renderChain(chain, rowsById, { windowLabel: `执行时间前后 ${Math.round(windowMs / 60_000)} 分钟`, truncatedBefore: pool.truncatedBefore, truncatedAfter: pool.truncatedAfter })
       : ['事件链：取不到'];
   }
   const trigger = e.event ? `事件「${eventName || shortId(e.event.eventId)}」` : e.triggerType || '-';
