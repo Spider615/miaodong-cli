@@ -47,6 +47,13 @@ test('md exec --event：请求里带事件触发类型，事件名在本地比�
   assert.match(r.stdout, /扫了 3 条，命中 2 条（已扫完）/);
 });
 
+test('md exec --event --limit：取满时说「已取满」，不再给原地打转的「接着扫」（审查 I-2）', async () => {
+  const r = await md(['exec', '--bot', '147bd600', '--event', '延时回复', '--limit', '1']);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /看了 \d+ 条，已取满 --limit 1/);
+  assert.doesNotMatch(r.stdout, /--scan \d+ 接着扫/);
+});
+
 test('md exec：版本、触发、动作、点踩、灰度、报错、关键词都进请求体', async () => {
   const r = await md(['exec', '--bot', '147bd600', '--version', 'v1.0.402', '--trigger', 'text', '--action', 'event', '--down', '--no-canary', '--failed', '--keyword', '退款']);
   assert.equal(r.code, 0, r.stderr);

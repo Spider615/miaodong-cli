@@ -10,7 +10,7 @@ import { loadIdentities, requireIdentities } from '../identity.mjs';
 import { loadBotDirectory, resolveBot, resolveVersion, targetArgs } from '../target.mjs';
 import { formatTime, note, out, shortId, targetLine } from '../output.mjs';
 import { parseDuration, timeWindow } from '../timewin.mjs';
-import { ACTION_ALIASES, TRIGGER_ALIASES, actionSummary, buildSearchBody, clip, formatCost, formatRow, getExecDetail, resolveAlias, searchExecutions, summarizeRow } from '../execs.mjs';
+import { ACTION_ALIASES, TRIGGER_ALIASES, actionSummary, buildSearchBody, clip, formatCost, formatRow, getExecDetail, resolveAlias, scanSummary, searchExecutions, summarizeRow } from '../execs.mjs';
 import { execDir, findCachedExec, loadCachedDetail, saveDetail, saveNodes, saveSearch } from '../exec-store.mjs';
 import { NODE_LINE_LIMIT, driftAgainst, findExecNode, locateText, nodeLine, normalizeDetail, promptText, renderNodeDetail, verdictLine } from '../exec-detail.mjs';
 import { DEFAULT_CHAIN_WINDOW_MS, chainExecFromDetail, chainOf, extractEmittedEvents, fetchSessionPool, renderChain } from '../exec-chain.mjs';
@@ -62,8 +62,7 @@ async function searchExecs(args) {
   out(targetLine(target));
   out(`时间 ${window.label}${cond ? ` · 条件：${cond}` : ''}`);
   if (filters.event) {
-    const more = res.exhausted ? '（已扫完）' : `（没扫完：加 --scan ${Math.min(scanPages * 2, 50)} 接着扫，或缩小时间窗）`;
-    out(`窗口内共 ${res.total ?? '?'} 条事件执行；扫了 ${res.scanned} 条，命中 ${res.matches.length} 条${more}`);
+    out(scanSummary(res, { limit, from: window.start }));
     if (!res.matches.length && res.namesSeen.size) {
       out(`扫到的事件名：${[...res.namesSeen].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([name, n]) => `${name}(${n})`).join('、')}`);
     }

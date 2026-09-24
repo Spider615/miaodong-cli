@@ -164,27 +164,49 @@ export async function searchExecutions(identity, orgId, body, { eventName = '', 
   let total = null;
   let scanned = 0;
   let pages = 0;
-  let exhausted = false;
-  for (let page = 1; page <= maxPages && matches.length < limit; page++) {
+  let oldestAt = null;
+  // stop：limit = 取满了 --limit；scan = 扫到 --scan 上限还没扫完；end = 窗口里的都看过了。
+  // scanned 只算真正看过的行：在某页中间取满时不能按整页算，否则「接着扫」的提示会让人原地打转（审查 I-2）
+  let stop = null;
+  for (let page = 1; page <= maxPages; page++) {
     const res = await listExecutions(identity, orgId, { ...body, current: page, pageSize });
     if (res.total !== null) total = res.total;
     pages = page;
-    scanned += res.rows.length;
     for (const row of res.rows) {
+      scanned++;
+      if (row?.createdAt) oldestAt = row.createdAt;
       if (local) {
         const name = str(row?.triggerContent?.content?.eventName);
         if (name) namesSeen.set(name, (namesSeen.get(name) ?? 0) + 1);
         if (name !== eventName) continue;
       }
       matches.push(row);
-      if (matches.length >= limit) break;
+      if (matches.length >= limit) {
+        stop = 'limit';
+        break;
+      }
     }
     onPage({ page, scanned, matched: matches.length, total });
+    if (stop) break;
     if (res.rows.length < pageSize) {
-      exhausted = true;
+      stop = 'end';
       break;
     }
   }
-  if (total !== null && scanned >= total) exhausted = true;
-  return { matches, total, scanned, pages, exhausted, namesSeen };
+  if (total !== null && scanned >= total) stop = 'end';
+  if (!stop) stop = local ? 'scan' : 'end';
+  return { matches, total, scanned, pages, stop, oldestAt, namesSeen };
+}
+
+// 按事件名本地扫时的一句总结。列表是新到旧，所以「接着扫」= 保持起点、把终点挪到已扫到的最旧那条之前，不重扫
+export function scanSummary(res, { limit, from }) {
+  const head = `窗口内共 ${res.total ?? '?'} 条事件执行；`;
+  if (res.stop === 'limit') return `${head}看了 ${res.scanned} 条，已取满 --limit ${limit}（要更多就加大 --limit）`;
+  if (res.stop === 'scan') {
+    const next = res.oldestAt
+      ? `；接着往前扫：把 --since 换成 --from "${new Date(from).toISOString()}" --to "${new Date(Date.parse(res.oldestAt) - 1).toISOString()}"（从停下的地方继续，不重扫）`
+      : '；要接着扫就缩小时间窗';
+    return `${head}扫了 ${res.scanned} 条（到 --scan 上限），命中 ${res.matches.length} 条${next}`;
+  }
+  return `${head}扫了 ${res.scanned} 条，命中 ${res.matches.length} 条（已扫完）`;
 }
