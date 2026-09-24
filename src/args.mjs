@@ -5,6 +5,14 @@ import { usage } from './errors.mjs';
 /** 被当成布尔 false 的字面值。写 `--confirm false` 的人显然不想确认。 */
 const FALSY_WORDS = new Set(['false', '0', 'no', 'off', 'n']);
 
+// 同一个参数给了多次就收成数组：--input 这类要给多个；只该给一次的（--bot / --limit …）由 strArg / intArg 报错。
+// 以前是悄悄取最后一个——`--bot 甲 --bot 乙` 会静默落到乙上
+function assign(out, key, value) {
+  if (!Object.prototype.hasOwnProperty.call(out, key)) out[key] = value;
+  else if (Array.isArray(out[key])) out[key].push(value);
+  else out[key] = [out[key], value];
+}
+
 /**
  * 解析命令行参数。支持：
  *   --key value     → { key: 'value' }
@@ -34,14 +42,14 @@ export function parseArgs(argv = process.argv.slice(2)) {
     if (eq >= 0) {
       const v = key.slice(eq + 1);
       key = key.slice(0, eq);
-      out[key] = FALSY_WORDS.has(v.toLowerCase()) ? false : v;
+      assign(out, key, FALSY_WORDS.has(v.toLowerCase()) ? false : v);
       continue;
     }
     const next = argv[i + 1];
     if (next === undefined || next.startsWith('--')) {
-      out[key] = true;
+      assign(out, key, true);
     } else {
-      out[key] = FALSY_WORDS.has(next.toLowerCase()) ? false : next;
+      assign(out, key, FALSY_WORDS.has(next.toLowerCase()) ? false : next);
       i++;
     }
   }
@@ -54,6 +62,7 @@ export function parseArgs(argv = process.argv.slice(2)) {
  */
 export function strArg(args, key) {
   const v = args[key];
+  if (Array.isArray(v)) throw usage(`--${key} 只能给一次`);
   if (v === undefined || v === false) return undefined;
   if (typeof v !== 'string' || !v.trim()) {
     throw usage(`--${key} 需要一个值，比如 --${key} <值>`);
@@ -66,10 +75,22 @@ export function strArg(args, key) {
  */
 export function intArg(args, key, fallback, max) {
   const v = args[key];
+  if (Array.isArray(v)) throw usage(`--${key} 只能给一次`);
   if (v === undefined || v === false) return fallback;
   if (typeof v === 'boolean' || !Number.isInteger(Number(v)) || Number(v) <= 0) {
     throw usage(`--${key} 需要一个正整数，收到 "${v === true ? '(空)' : v}"`);
   }
   const n = Number(v);
   return max ? Math.min(n, max) : n;
+}
+
+/** 可以给多次的参数（--input a=1 --input b=2）。没给返回空数组；给了但漏了值报用法错误。 */
+export function listArg(args, key) {
+  const v = args[key];
+  if (v === undefined || v === false) return [];
+  const list = Array.isArray(v) ? v : [v];
+  for (const item of list) {
+    if (typeof item !== 'string' || !item.trim()) throw usage(`--${key} 需要一个值，比如 --${key} <值>`);
+  }
+  return list.map((item) => item.trim());
 }
