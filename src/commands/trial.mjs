@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { intArg, listArg, strArg } from '../args.mjs';
 import { EXIT, MdError, usage } from '../errors.mjs';
-import { getCanvas } from '../api.mjs';
+import { asArray, getCanvas } from '../api.mjs';
 import { resolveBot, targetArgs } from '../target.mjs';
 import { latestWorkspaceFor, loadWorkspace, stamp, targetFromMeta } from '../workspace.mjs';
 import { resolveNode } from '../graph.mjs';
@@ -13,9 +13,9 @@ import { formatTime, note, out, shortId, targetLine } from '../output.mjs';
 import { clip, formatCost } from '../execs.mjs';
 import { locateExec } from '../exec-locate.mjs';
 import { normalizeDetail, promptText } from '../exec-detail.mjs';
-import { buildTrialInputs, classifyTrialNode, costSummary, draftVsLocal, inputDefs, parseInputPairs } from '../trial.mjs';
+import { UNKNOWN_RUN_COST, buildTrialInputs, classifyTrialNode, costOf, costSummary, draftVsLocal, inputDefs, nextRunCheck, parseInputPairs } from '../trial.mjs';
 import { runNodeOnce } from '../trial-run.mjs';
-import { dayKey, loadLimits, readSpends, recordSpend, spendDecision, spentOn, updateSpend } from '../spend.mjs';
+import { dayKey, loadLimits, readSpends, recordSpend, spendDecision, spentOn, updateSpend, withSpendLock } from '../spend.mjs';
 import { codeFor, givenCode } from '../confirm.mjs';
 import { buildBranchNameIndex } from '../../../apps/api/lib/miaodong/badcase-normalize.ts';
 
@@ -30,8 +30,17 @@ async function trialTarget(args) {
   return { target, ws: latestWorkspaceFor(target.botId) };
 }
 
-function lastPerRun(botId, nodeId) {
-  const hit = readSpends().filter((r) => r.kind === 'trial' && r.botId === botId && r.nodeId === nodeId && typeof r.actualPerRun === 'number').at(-1);
+const modelOf = (cell) => (typeof cell?.data?.nodePayload?.modelType === 'string' ? cell.data.nodePayload.modelType : null);
+
+// 执行时那一版画布里的这个节点
+function snapshotCell(detail, nodeId) {
+  const canvas = asArray(detail?.canvas?.rawCanvas).length ? detail.canvas.rawCanvas : asArray(detail?.canvasExec?.rawCanvas);
+  return canvas.find((c) => c?.id === nodeId) ?? null;
+}
+
+// 上次试跑这个节点的实际单价：只认同一个模型的（换了模型，旧价没有参考意义）
+function lastPerRun(botId, nodeId, model) {
+  const hit = readSpends().filter((r) => r.kind === 'trial' && r.botId === botId && r.nodeId === nodeId && (r.model ?? null) === model && typeof r.actualPerRun === 'number').at(-1);
   return hit ? hit.actualPerRun : null;
 }
 
@@ -86,10 +95,12 @@ export const trial = {
       throw new MdError('trial_plugin', `「${node.name}」会真的调用外部系统（${cls.plugins.join('、')}）`, { exitCode: EXIT.BLOCKED, hint: '确认要跑：加 --allow-plugin；md 会先给出预估和确认码，要用户确认' });
     }
 
-    // 输入与单次花费
+    // 输入与单价。预估只认同一个模型跑出来的花费（审查 C1 / R2）：执行之后换了模型，那次的花费就不能当预估。
+    // 上次试跑的实际单价排在执行记录前面：它更新，而且跑到一半停下给的确认码也按它算，重跑时才对得上
+    const model = modelOf(cell);
     let fromExec = null;
-    let perRun = null;
-    let basis = '';
+    let execCost = null;
+    let modelNote = '';
     const execId = strArg(args, 'from-exec');
     if (execId) {
       const located = await locateExec({}, execId);
@@ -98,18 +109,20 @@ export const trial = {
         throw new MdError('node_not_in_exec', `执行 ${shortId(execId)} 没有跑到「${node.name}」[${shortId(node.id)}]`, { exitCode: EXIT.TARGET, hint: 'md exec <执行id> 看那次跑了哪些节点' });
       }
       fromExec = executed.inputs && typeof executed.inputs === 'object' ? executed.inputs : {};
-      if (typeof executed.cost === 'number') {
-        perRun = executed.cost;
-        basis = `执行 ${shortId(execId)} 里这个节点花了 ${formatCost(executed.cost)}/次`;
-      }
+      const then = modelOf(snapshotCell(located.detail, node.id));
+      if (then !== model) modelNote = `（这个节点的模型从 ${then ?? '（无）'} 换成了 ${model ?? '（无）'}：那次执行的花费不能当预估）`;
+      else if (typeof executed.cost === 'number') execCost = executed.cost;
       if (located.target.botId !== target.botId) note(`（输入取自另一个智能体「${located.target.botName}」的执行）`);
     }
-    if (perRun === null) {
-      const last = lastPerRun(target.botId, node.id);
-      if (last !== null) {
-        perRun = last;
-        basis = `上次试跑这个节点花了 ${formatCost(last)}/次`;
-      }
+    let perRun = null;
+    let basis = '';
+    const last = lastPerRun(target.botId, node.id, model);
+    if (last !== null) {
+      perRun = last;
+      basis = `上次试跑这个节点（同一模型）花了 ${formatCost(last)}/次`;
+    } else if (execCost !== null) {
+      perRun = execCost;
+      basis = `执行 ${shortId(execId)} 里这个节点花了 ${formatCost(execCost)}/次`;
     }
     const file = strArg(args, 'inputs');
     const built = buildTrialInputs(inputDefs(cell), {
@@ -120,76 +133,97 @@ export const trial = {
     });
 
     // 预演信息先打出来：要确认时，这就是给用户看的预演
-    const limits = loadLimits();
-    const today = spentOn(readSpends());
     const estimate = perRun === null ? null : perRun * times;
     const fresh = draftVsLocal(node.id, draft.rawCanvas, ws);
+    const shown = loadLimits();
     out(targetLine({ ...target, versionLabel: '草稿' }));
     out(`试跑「${node.name}」[${shortId(node.id)}] ${node.type} × ${times} · 草稿最后保存 ${formatTime(draft.updatedAt)}`);
     if (fresh.status === 'unpushed') out(`⚠️ 本地改动还没推：这次跑的是草稿上的旧版本（工作副本 ${fresh.dir}）；要试新改的先 md push`);
     if (fresh.status === 'draft-changed') out('（草稿里这个节点在你拉取之后被改过；跑的是草稿现在的内容）');
+    if (modelNote) out(modelNote);
     out(`输入：${Object.keys(built.inputs).join('、') || '（无）'}${execId ? `（取自执行 ${shortId(execId)}）` : ''}`);
     if (built.dropped.length) out(`去掉平台参数：${built.dropped.join('、')}（让秒懂填最新值；要保留加 --keep-platform-params）`);
     if (built.missing.length) out(`⚠️ 缺输入：${built.missing.join('、')}（会按空值跑，结果可能失真）`);
     if (built.extra.length) out(`（多出来的键：${built.extra.join('、')}）`);
-    out(`花费：预计 ${estimate === null ? '估不出，先跑 1 次看实际' : `${formatCost(estimate)}${basis ? `（${basis}）` : ''}`} · 今天已花 ${formatCost(today)} / 上限 ${formatCost(limits.perDay)}`);
+    out(`花费：预计 ${estimate === null ? '估不出，先跑 1 次看实际' : `${formatCost(estimate)}${basis ? `（${basis}）` : ''}`} · 今天已花 ${formatCost(spentOn(readSpends()))} / 上限 ${formatCost(shown.perDay)}`);
 
-    // 确认：估不出花费、不调插件、今天没到上限时，先跑 1 次拿到真实花费再决定其余几次；用户已经确认过这一笔就照确认的跑
+    // 确认 + 记一笔。估不出花费、不调插件、今天没到上限时，先跑 1 次拿到真实花费再决定其余几次；用户确认过这一笔就照确认的跑。
+    // 「查今天已花 → 判断 → 记一笔」在锁里做，几条命令同时跑也不会一起越过每日上限（审查 I3）；
+    // 记的这一笔先带预留（估不出时按保守单价），别的命令算今天已花时就算上它
     const external = cls.kind === 'plugin' ? cls.plugins : [];
-    const probeFirst = estimate === null && !external.length && today < limits.perDay;
     const given = givenCode(args);
     const operation = (n, est) => ({ kind: 'trial', botId: target.botId, nodeId: node.id, times: n, inputs: built.inputs, estimate: roundCost(est), external, day: dayKey() });
-    const decision = spendDecision({ estimate, externalCalls: external }, { limits, today });
-    const confirm = codeFor(operation(times, estimate), readSpends());
-    const confirmed = decision.needApproval && given === confirm.code;
-    if (decision.needApproval && !confirmed && (given !== null || !probeFirst)) stopForConfirm({ ...confirm, given, reasons: decision.reasons });
-    const approved = confirmed ? 'confirm' : 'auto';
-    if (confirmed) out('（用户已确认这一笔）');
+    const plan = await withSpendLock(() => {
+      const rows = readSpends();
+      const today = spentOn(rows);
+      const limits = loadLimits();
+      const probeFirst = estimate === null && !external.length && today < limits.perDay;
+      const decision = spendDecision({ estimate, externalCalls: external }, { limits, today });
+      const confirm = codeFor(operation(times, estimate), rows);
+      const confirmed = decision.needApproval && given === confirm.code;
+      if (decision.needApproval && !confirmed && (given !== null || !probeFirst)) stopForConfirm({ ...confirm, given, reasons: decision.reasons });
+      const id = recordSpend({
+        kind: 'trial', regionLabel: target.regionLabel, botId: target.botId, botName: target.botName,
+        what: node.name, nodeId: node.id, model, count: times, estimate, reserve: estimate ?? UNKNOWN_RUN_COST * (confirmed ? times : 1),
+        basis: basis || (estimate === null ? '估不出' : ''), approved: confirmed ? 'confirm' : 'auto',
+        ...(confirmed ? { opKey: confirm.opKey, code: confirm.code } : {}),
+      });
+      return { id, confirmed, limits };
+    });
+    if (plan.confirmed) out('（用户已确认这一笔）');
 
     const dir = ensureDir(join(mdHome(), 'trials', safe(target.identityKey), safe(target.botId.slice(0, 8)), `${stamp()}-${safe(shortId(node.id))}`));
-    const spendId = recordSpend({
-      kind: 'trial', regionLabel: target.regionLabel, botId: target.botId, botName: target.botName,
-      what: node.name, nodeId: node.id, count: times, estimate, basis: basis || (estimate === null ? '估不出' : ''), approved,
-      ...(confirmed ? { opKey: confirm.opKey, code: confirm.code } : {}),
-    });
     const branches = buildBranchNameIndex(draft.rawCanvas);
     const outputs = new Set();
     const runs = [];
     try {
       for (let i = 1; i <= times; i++) {
-        if (i === 2 && probeFirst && !confirmed) {
-          // 第 1 次超时没跑完时 perRun 是 null：还是估不出，照样要确认
-          const probe = costSummary(runs);
-          const rest = probe.perRun === null ? null : probe.perRun * (times - 1);
-          const next = spendDecision({ estimate: rest }, { limits, today: today + probe.actual });
-          if (next.needApproval) {
-            out(`第 1 次实际 ${formatCost(probe.actual)}；其余 ${times - 1} 次${rest === null ? '还是估不出' : `按它推算预计 ${formatCost(rest)}`}`);
-            stopForConfirm({ ...codeFor(operation(times - 1, rest), readSpends()), given: null, reasons: next.reasons, remaining: times - 1 });
+        if (i > 1) {
+          // 下一次开跑前按实际花费重算整条命令，超了就停（审查 C1）
+          const remaining = times - i + 1;
+          const check = nextRunCheck({
+            runs, remaining, perRun, confirmed: plan.confirmed, confirmedEstimate: plan.confirmed ? estimate : null,
+            limits: plan.limits, othersToday: spentOn(readSpends().filter((r) => r.id !== plan.id)),
+          });
+          if (!check.ok) {
+            const sum = costSummary(runs);
+            out(`已跑 ${i - 1} 次，实际 ${formatCost(sum.actual)}${sum.unknownRuns ? `（另有 ${sum.unknownRuns} 次花费不知道）` : ''}；其余 ${remaining} 次${check.rest === null ? '估不出' : `按实际单价推算要 ${formatCost(check.rest)}`}`);
+            stopForConfirm({ ...codeFor(operation(remaining, check.rest), readSpends()), given: null, reasons: check.reasons, remaining });
           }
         }
-        const { execId: nodeExecId, run, timedOut } = await runNodeOnce({ identity: target.identity, orgId: target.orgId, canvasId: draft.canvasId, node, inputs: built.inputs });
-        const result = run.nodeResults[0] ?? {};
-        const cost = typeof run.cost.cny === 'number' ? run.cost.cny : null;
-        runs.push({ cost, timedOut });
+        let result;
+        try {
+          result = await runNodeOnce({ identity: target.identity, orgId: target.orgId, canvasId: draft.canvasId, node, inputs: built.inputs });
+        } catch (error) {
+          // 启动结果不明、查结果连续失败：钱可能已经花了，按「花费不知道」记一次（审查 I2）
+          if (error instanceof MdError && (error.code === 'trial_start_unknown' || error.code === 'trial_poll_failed')) runs.push({ cost: null });
+          throw error;
+        }
+        const { execId: nodeExecId, run, timedOut } = result;
+        const res = run.nodeResults[0] ?? {};
+        const cost = costOf(run, node.type, timedOut);
+        runs.push({ cost });
         writeFileSync(join(dir, `run-${i}.json`), JSON.stringify({ nodeExecId, inputs: built.inputs, run }, null, 2));
-        const prompt = promptText({ prompt: result.metadata?.prompt });
+        const prompt = promptText({ prompt: res.metadata?.prompt });
         if (prompt) writeFileSync(join(dir, `prompt-${i}.txt`), prompt);
         const icon = timedOut ? '⏳' : run.status === 'success' ? '✅' : '❌';
-        const branch = result.outputBranchId ? ` → 分支「${branches.get(result.outputBranchId) ?? shortId(result.outputBranchId)}」` : '';
-        out(`#${i} ${icon} ${timedOut ? `5 分钟没跑完（${nodeExecId}）` : run.status} ${(run.duration / 1000).toFixed(1)}s ${formatCost(cost)}${branch}`);
-        if (result.error) out(`   报错：${clip(typeof result.error === 'string' ? result.error : JSON.stringify(result.error), 300)}`);
-        const text = typeof result.output?.message === 'string' ? result.output.message : JSON.stringify(result.output ?? null);
+        const branch = res.outputBranchId ? ` → 分支「${branches.get(res.outputBranchId) ?? shortId(res.outputBranchId)}」` : '';
+        out(`#${i} ${icon} ${timedOut ? `5 分钟没跑完（${nodeExecId}）` : run.status} ${(run.duration / 1000).toFixed(1)}s ${cost === null ? '花费不知道' : formatCost(cost)}${branch}`);
+        if (res.error) out(`   报错：${clip(typeof res.error === 'string' ? res.error : JSON.stringify(res.error), 300)}`);
+        const text = typeof res.output?.message === 'string' ? res.output.message : JSON.stringify(res.output ?? null);
         out(`   输出：${clip(text, 1500)}`);
-        const reasoning = result.metadata?.reasoning;
+        const reasoning = res.metadata?.reasoning;
         if (typeof reasoning === 'string' && reasoning.trim()) out(`   推理：${clip(reasoning, 300)}`);
-        outputs.add(JSON.stringify(result.output ?? null));
+        outputs.add(JSON.stringify(res.output ?? null));
       }
     } finally {
-      const sum = costSummary(runs);
-      updateSpend(spendId, { actual: sum.actual, actualPerRun: sum.perRun, runs: runs.length, unknownRuns: sum.unknownRuns });
+      // 花费不知道的那几次按「预估和实际单价取大的」记，都没有就按保守价
+      const observed = costSummary(runs).perRun;
+      const sum = costSummary(runs, perRun === null && observed === null ? null : Math.max(perRun ?? 0, observed ?? 0));
+      updateSpend(plan.id, { actual: sum.actual, assumed: sum.assumed, actualPerRun: sum.perRun, runs: runs.length, unknownRuns: sum.unknownRuns });
     }
     const sum = costSummary(runs);
-    out(`${runs.length} 次里 ${outputs.size} 种不同输出 · 共 ${formatCost(sum.actual)}${sum.unknownRuns ? `（另有 ${sum.unknownRuns} 次没跑完，花费未知）` : ''} · 结果和 prompt 在 ${dir}`);
+    out(`${runs.length} 次里 ${outputs.size} 种不同输出 · 共 ${formatCost(sum.actual)}${sum.unknownRuns ? `（另有 ${sum.unknownRuns} 次花费不知道，账本里按保守价记）` : ''} · 结果和 prompt 在 ${dir}`);
     return EXIT.OK;
   },
 };

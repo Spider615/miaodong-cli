@@ -2,9 +2,10 @@
 // 账本只追加：开跑前记预估，跑完再追加一行实际花费（同一个 id），读的时候按 id 合并。
 // 「今天已花」按本地日期算，有实际用实际，没有用预估——跑到一半中断的也不会漏算。
 
-import { appendFileSync, existsSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
+import { MdError } from './errors.mjs';
 import { ensureDir, mdHome, readJson, writeJson } from './home.mjs';
 
 export const DEFAULT_LIMITS = Object.freeze({ perCommand: 2, perDay: 10 });
@@ -52,7 +53,12 @@ export function readSpends() {
   return [...byId.values()];
 }
 
-export const amountOf = (row) => (typeof row.actual === 'number' ? row.actual : typeof row.estimate === 'number' ? row.estimate : 0);
+// 一笔算多少钱：跑完的 = 实际 + 花费不知道那几次的保守估计（assumed）；还没跑完的按开跑前的预留（估不出时也有预留）
+export function amountOf(row) {
+  if (typeof row.actual === 'number') return row.actual + (typeof row.assumed === 'number' ? row.assumed : 0);
+  if (typeof row.reserve === 'number') return row.reserve;
+  return typeof row.estimate === 'number' ? row.estimate : 0;
+}
 
 export const dayKey = (value = Date.now()) => {
   const d = new Date(value);
@@ -76,4 +82,42 @@ export function spendDecision({ estimate, externalCalls = [] }, { limits, today 
     if (today + estimate > limits.perDay) reasons.push(`今天已花 ¥${today.toFixed(2)}，加上这次超过每日上限 ¥${limits.perDay}`);
   }
   return { needApproval: reasons.length > 0, reasons };
+}
+
+// 「查今天已花 → 判断 → 记一笔」要一个一个来（审查 I3）：几条命令同时读到同一个「今天已花」，会一起越过每日上限。
+// 锁是 $MD_HOME/spend.lock（O_EXCL 建文件）；里面不做网络请求，毫秒级。进程被杀留下的锁 30 秒后清掉
+const LOCK_STALE_MS = 30_000;
+const LOCK_WAIT_MS = 20_000;
+
+export async function withSpendLock(fn) {
+  ensureDir(mdHome());
+  const lock = join(mdHome(), 'spend.lock');
+  const started = Date.now();
+  for (;;) {
+    try {
+      writeFileSync(lock, String(process.pid), { flag: 'wx' });
+      break;
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      let stale = false;
+      try {
+        stale = Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS;
+      } catch {
+        continue;
+      }
+      if (stale) {
+        rmSync(lock, { force: true });
+        continue;
+      }
+      if (Date.now() - started > LOCK_WAIT_MS) {
+        throw new MdError('spend_locked', `另一条花钱的命令正在记账，等了 ${LOCK_WAIT_MS / 1000} 秒还没好`, { hint: `过一会儿再试；一直这样就删掉 ${lock}` });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    rmSync(lock, { force: true });
+  }
 }

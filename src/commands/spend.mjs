@@ -62,7 +62,8 @@ function showSpend(args) {
   if (recent.length) out('最近几笔：');
   for (const r of recent) {
     const estimate = typeof r.estimate === 'number' ? formatCost(r.estimate) : '估不出';
-    const actual = typeof r.actual === 'number' ? formatCost(r.actual) : '还没有';
+    const unknown = r.unknownRuns ? `（另有 ${r.unknownRuns} 次花费不知道，按 ${formatCost(r.assumed)} 记）` : '';
+    const actual = typeof r.actual === 'number' ? `${formatCost(r.actual)}${unknown}` : '还没有';
     out(`  ${formatTime(r.at)} ${KIND[r.kind] ?? r.kind} ${r.regionLabel ?? '-'} / ${r.botName ?? '-'}「${r.what ?? '-'}」×${r.count ?? 1} 预估 ${estimate} 实际 ${actual}（${APPROVED[r.approved] ?? r.approved ?? '-'}）`);
   }
   return EXIT.OK;

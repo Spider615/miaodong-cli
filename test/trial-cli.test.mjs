@@ -7,6 +7,7 @@ import { seedIdentity, seedWorkspace } from './helpers/seed.mjs';
 import { startTrialServer, trialDraft } from './helpers/trial-server.mjs';
 import { ASK, EXEC_BOT, X } from './helpers/exec-fixtures.mjs';
 import { U } from './helpers/fixtures.mjs';
+import { ok } from './helpers/fake-miaodong.mjs';
 
 let fake;
 before(async () => { fake = await startTrialServer(); });
@@ -85,7 +86,7 @@ test('插件节点：用户同意后带确认码才跑；账本记「用户确�
 });
 
 test('预估超单次门槛：不跑、不记账，给确认码；码不对不跑；带对的码才跑；同一个码不能再用', async () => {
-  reset();
+  reset({ cost: 0.0102 });
   const h = home();
   limits(h, { perCommand: 0.001, perDay: 10 });
   const args = ['trial', '回答生成', '--bot', '147bd600', '--from-exec', X(2)];
@@ -170,4 +171,75 @@ test('估不出花费、第 1 次又超时没跑完：还是估不出，其余�
   assert.ok(codeIn(r.stdout), r.stdout);
   const [row] = spends(h);
   assert.deepEqual([row.runs, row.unknownRuns, row.actualPerRun], [1, 1, null]);
+});
+
+test('预估偏低（同一模型，执行记录里 ¥0.01/次、现在 ¥1/次）：跑完第 1 次按实际推算超门槛就停，不会一口气花 ¥10（审查 C1）', async () => {
+  reset({ cost: 1 });
+  const h = home();
+  const r = await md(['trial', '回答生成', '--bot', '147bd600', '--from-exec', X(2), '--times', '10'], h);
+  assert.equal(r.code, 5, r.stderr);
+  assert.equal(fake.state.posts.length, 1);
+  assert.match(r.stderr, /超过单次门槛/);
+  assert.match(r.stderr, /--times 改成 9/);
+  const [row] = spends(h);
+  assert.deepEqual([row.actual, row.runs], [1, 1]);
+});
+
+test('估不出时先跑 1 次：拿「已花 + 其余」比门槛，¥0.9 × 3 在第 1 次后停（审查 C1）', async () => {
+  reset({ cost: 0.9 });
+  const r = await md(['trial', '回答生成', '--bot', '147bd600', '--input', 'text=你好', '--times', '3']);
+  assert.equal(r.code, 5, r.stderr);
+  assert.equal(fake.state.posts.length, 1);
+});
+
+test('执行之后这个节点换了模型：那次的花费不能当预估，按估不出处理并说明（审查 R2）', async () => {
+  reset();
+  const original = fake.server.routes['GET /api/canvas/get'];
+  const gemini = trialDraft().map((c) => (c.id === U(2) ? { ...c, data: { ...c.data, nodePayload: { ...c.data.nodePayload, modelType: 'gemini-3.5-flash' } } } : c));
+  fake.server.routes['GET /api/canvas/get'] = () => ok({ canvasId: 'main-1', rawCanvas: gemini, version: 'v1.0.403', updatedAt: '2026-09-24T01:00:00.000Z' });
+  try {
+    const h = home();
+    const r = await md(['trial', '回答生成', '--bot', '147bd600', '--from-exec', X(2)], h);
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout, /模型从 doubao-seed-2\.0-lite 换成了 gemini-3\.5-flash/);
+    assert.match(r.stdout, /估不出，先跑 1 次看实际/);
+    assert.equal(spends(h)[0].estimate, null);
+  } finally {
+    fake.server.routes['GET /api/canvas/get'] = original;
+  }
+});
+
+test('结果里没有花费字段（大模型）：不当 ¥0——不写进每次花费、按保守单价记账；--times 3 跑完第 1 次就停（审查 I1）', async () => {
+  reset({ cost: null });
+  const h = home();
+  const r = await md(['trial', '回答生成', '--bot', '147bd600', '--input', 'text=你好', '--times', '3'], h);
+  assert.equal(r.code, 5, r.stderr);
+  assert.equal(fake.state.posts.length, 1);
+  const [row] = spends(h);
+  assert.deepEqual([row.actualPerRun, row.unknownRuns, row.assumed], [null, 1, 0.7]);
+});
+
+test('POST 结果不明、查结果连续失败：那一次按保守单价入账，「今天已花」不会是 ¥0（审查 I2）', async () => {
+  for (const patch of [{ startStatus: 502 }, { pollStatus: 500 }]) {
+    reset(patch);
+    const h = home();
+    const r = await md(['trial', '回答生成', '--bot', '147bd600', '--input', 'text=你好'], h);
+    assert.equal(r.code, 1, r.stderr);
+    const [row] = spends(h);
+    assert.deepEqual([row.runs, row.unknownRuns, row.assumed], [1, 1, 0.7], JSON.stringify(patch));
+    const shown = (await md(['spend'], h)).stdout;
+    assert.match(shown, /今天已花 ¥0\.700/);
+    assert.match(shown, /实际 ¥0（另有 1 次花费不知道，按 ¥0\.700 记）/);
+  }
+});
+
+test('并行跑：「查今天已花 → 判断 → 记账」加了锁，同时进来的几条命令不会一起越过每日上限（审查 I3）', async () => {
+  reset();
+  const h = home();
+  await md(['trial', '回答生成', '--bot', '147bd600', '--input', 'text=你好'], h);
+  limits(h, { perCommand: 2, perDay: 0.04 });
+  reset();
+  const rs = await Promise.all(Array.from({ length: 6 }, () => md(['trial', '回答生成', '--bot', '147bd600', '--input', 'text=你好'], h)));
+  assert.equal(rs.filter((r) => r.code === 0).length, 2, rs.map((r) => r.code).join(','));
+  assert.equal(fake.state.posts.length, 2);
 });

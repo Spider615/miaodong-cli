@@ -5,6 +5,7 @@
 import { asArray } from './api.mjs';
 import { contentKey, nodeMap } from './canvas.mjs';
 import { usage } from './errors.mjs';
+import { formatCost } from './execs.mjs';
 
 export const TRIAL_ALLOWED = new Set([
   'llm-completion', 'javascript-code', 'rule-center', 'query-knowledge-base', 'query-knowledge-child', 'query-sql-db',
@@ -80,10 +81,48 @@ export function draftVsLocal(nodeId, draftCanvas, ws) {
   return { status: 'same', dir: ws.dir };
 }
 
-// 几次试跑的花费。跑完了没有花费字段的算 ¥0（代码、规则这类节点本来不花钱）；
-// 超时没跑完的那次花了多少不知道：不算进实际，也不摊进「每次多少钱」——当成 ¥0 会让推算偏低，该要批准的直接放行
-export function costSummary(runs) {
-  const settled = runs.filter((r) => !r.timedOut);
-  const actual = settled.reduce((sum, r) => sum + (r.cost ?? 0), 0);
-  return { actual, perRun: settled.length ? actual / settled.length : null, unknownRuns: runs.length - settled.length };
+// 这些节点本来不花钱：结果里没有花费字段就是 ¥0。别的类型没有花费字段 = 不知道花了多少，不能当 ¥0（审查 I1）
+export const FREE_TYPES = new Set(['javascript-code', 'rule-center', 'calculator']);
+// 花费不知道的一次按这个价记账、推算（Gemini 一次的上沿），宁可多算
+export const UNKNOWN_RUN_COST = 0.7;
+
+// 一次试跑花了多少：null = 不知道（超时没跑完，或者该花钱的节点没回花费字段）
+export function costOf(run, type, timedOut) {
+  if (timedOut) return null;
+  if (typeof run?.cost?.cny === 'number') return run.cost.cny;
+  return FREE_TYPES.has(type) ? 0 : null;
+}
+
+// 几次试跑的花费。runs[].cost 为 null 的是花费不知道的那几次：不算进实际，也不摊进「每次多少钱」——
+// 当成 ¥0 会让推算偏低、以后的预估也跟着偏低（审查 I1 / I2）；账本里另按 assumedPerRun（没有就按实际单价、再没有按保守价）记一笔 assumed
+export function costSummary(runs, assumedPerRun = null) {
+  const known = runs.filter((r) => typeof r.cost === 'number');
+  const actual = known.reduce((sum, r) => sum + r.cost, 0);
+  const perRun = known.length ? actual / known.length : null;
+  const unknownRuns = runs.length - known.length;
+  return { actual, perRun, unknownRuns, assumed: unknownRuns * (assumedPerRun ?? perRun ?? UNKNOWN_RUN_COST) };
+}
+
+// 下一次开跑前按实际花费重算整条命令（审查 C1）：开跑前的预估可能偏低（执行记录里是旧价、节点后来改过），
+// 只在开头判一次，一条命令就可能不经确认花掉好几倍门槛。这样最多多花一次的钱。
+// 每次单价按「预估」和「已跑的实际」取大的；花费不知道的那几次也按这个单价算进已花。
+// 返回的 rest 是其余几次的预估，给确认码用：和重跑时的算法一致（重跑时按这次的实际单价估）
+export function nextRunCheck({ runs, remaining, perRun, confirmed, confirmedEstimate, limits, othersToday }) {
+  const sum = costSummary(runs);
+  const unit = sum.perRun ?? perRun;
+  const rest = unit === null ? null : unit * remaining;
+  const forward = perRun === null && sum.perRun === null ? null : Math.max(perRun ?? 0, sum.perRun ?? 0);
+  if (forward === null) {
+    // 用户确认过「估不出」就照跑；否则停下来问
+    return confirmed && confirmedEstimate === null ? { ok: true } : { ok: false, reasons: ['估不出花费（已跑的还没有实际花费）'], rest };
+  }
+  const projected = sum.actual + sum.unknownRuns * forward + remaining * forward;
+  if (confirmed && confirmedEstimate !== null) {
+    if (projected <= confirmedEstimate + limits.perCommand) return { ok: true };
+    return { ok: false, reasons: [`按已跑的实际推算整条命令要 ${formatCost(projected)}，比确认时的预估 ${formatCost(confirmedEstimate)} 高出一个单次门槛以上`], rest };
+  }
+  const reasons = [];
+  if (projected > limits.perCommand) reasons.push(`按已跑的实际推算整条命令要 ${formatCost(projected)}，超过单次门槛 ${formatCost(limits.perCommand)}`);
+  if (othersToday + projected > limits.perDay) reasons.push(`今天别的花费 ${formatCost(othersToday)}，加上这条命令超过每日上限 ${formatCost(limits.perDay)}`);
+  return reasons.length ? { ok: false, reasons, rest } : { ok: true };
 }

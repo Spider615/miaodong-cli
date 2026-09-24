@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { node } from './helpers/fixtures.mjs';
-import { buildTrialInputs, classifyTrialNode, costSummary, draftVsLocal, inputDefs, parseInputPairs } from '../src/trial.mjs';
+import { UNKNOWN_RUN_COST, buildTrialInputs, classifyTrialNode, costOf, costSummary, draftVsLocal, inputDefs, nextRunCheck, parseInputPairs } from '../src/trial.mjs';
 
 const llm = node(2, { name: '回答生成', payload: { inputs: [{ name: 'text', referenceNodeId: 'x' }, { name: '质检规则', operationAttrId: 'op-1' }] } });
 
@@ -59,9 +59,46 @@ test('draftVsLocal：本地只改了别的节点、这个节点没动，而草�
   assert.equal(draftVsLocal(other.id, [remote, other], ws).status, 'unpushed');
 });
 
-test('costSummary：跑完的按实际（没有花费字段算 ¥0）；超时没跑完的花费未知，不当 ¥0 摊进每次花费', () => {
-  assert.deepEqual(costSummary([{ cost: 0.01, timedOut: false }, { cost: null, timedOut: false }]), { actual: 0.01, perRun: 0.005, unknownRuns: 0 });
-  assert.deepEqual(costSummary([{ cost: null, timedOut: true }]), { actual: 0, perRun: null, unknownRuns: 1 });
-  assert.deepEqual(costSummary([{ cost: 0.02, timedOut: false }, { cost: null, timedOut: true }]), { actual: 0.02, perRun: 0.02, unknownRuns: 1 });
-  assert.deepEqual(costSummary([]), { actual: 0, perRun: null, unknownRuns: 0 });
+test('costOf：有花费字段用它；超时没跑完不知道；没有花费字段时只有代码、规则、计算器这类本来免费的节点算 ¥0（审查 I1）', () => {
+  assert.equal(costOf({ cost: { cny: 0.02 } }, 'llm-completion', false), 0.02);
+  assert.equal(costOf({ cost: { cny: 0.02 } }, 'llm-completion', true), null);
+  assert.equal(costOf({ cost: { cny: null } }, 'llm-completion', false), null);
+  assert.equal(costOf({ cost: { cny: null } }, 'image-generation', false), null);
+  assert.equal(costOf({ cost: { cny: null } }, 'javascript-code', false), 0);
+  assert.equal(costOf({ cost: { cny: null } }, 'rule-center', false), 0);
+});
+
+test('costSummary：知道的按实际；不知道的不算进实际、不摊进每次花费，另按保守单价记（审查 I2）', () => {
+  assert.deepEqual(costSummary([{ cost: 0.01 }, { cost: 0 }]), { actual: 0.01, perRun: 0.005, unknownRuns: 0, assumed: 0 });
+  assert.deepEqual(costSummary([{ cost: null }]), { actual: 0, perRun: null, unknownRuns: 1, assumed: UNKNOWN_RUN_COST });
+  assert.deepEqual(costSummary([{ cost: 0.02 }, { cost: null }]), { actual: 0.02, perRun: 0.02, unknownRuns: 1, assumed: 0.02 });
+  assert.deepEqual(costSummary([{ cost: null }, { cost: null }], 0.3), { actual: 0, perRun: null, unknownRuns: 2, assumed: 0.6 });
+  assert.deepEqual(costSummary([]), { actual: 0, perRun: null, unknownRuns: 0, assumed: 0 });
+});
+
+test('nextRunCheck：每跑完一次按实际重算整条命令，超单次门槛 / 每日上限就在下一次之前停（审查 C1）', () => {
+  const limits = { perCommand: 2, perDay: 10 };
+  const base = { limits, othersToday: 0, confirmed: false, confirmedEstimate: null };
+  // 预估偏低：执行记录里 ¥0.0102/次，实际 ¥1/次，--times 10
+  const stale = nextRunCheck({ ...base, runs: [{ cost: 1 }], remaining: 9, perRun: 0.0102 });
+  assert.equal(stale.ok, false);
+  assert.match(stale.reasons.join(), /整条命令要 ¥10\.00，超过单次门槛 ¥2\.00/);
+  assert.equal(stale.rest, 9);
+  // 先跑 1 次：拿「已花 + 其余」比门槛，不是只拿其余
+  assert.equal(nextRunCheck({ ...base, runs: [{ cost: 0.9 }], remaining: 2, perRun: null }).ok, false);
+  assert.equal(nextRunCheck({ ...base, runs: [{ cost: 0.01 }], remaining: 1, perRun: 0.01 }).ok, true);
+  // 还是估不出：停；用户确认过「估不出」就照跑
+  const unknown = nextRunCheck({ ...base, runs: [{ cost: null }], remaining: 2, perRun: null });
+  assert.deepEqual([unknown.ok, unknown.rest], [false, null]);
+  assert.match(unknown.reasons.join(), /估不出花费/);
+  assert.equal(nextRunCheck({ ...base, confirmed: true, runs: [{ cost: null }], remaining: 2, perRun: null }).ok, true);
+  // 用户确认过 ¥5：实际推算超出一个单次门槛以上才停
+  assert.equal(nextRunCheck({ ...base, confirmed: true, confirmedEstimate: 5, runs: [{ cost: 0.6 }], remaining: 9, perRun: 0.5 }).ok, true);
+  const over = nextRunCheck({ ...base, confirmed: true, confirmedEstimate: 5, runs: [{ cost: 1 }], remaining: 9, perRun: 0.5 });
+  assert.equal(over.ok, false);
+  assert.match(over.reasons.join(), /比确认时的预估 ¥5\.00 高出一个单次门槛以上/);
+  // 每日上限：今天别的花费 + 这条命令
+  const daily = nextRunCheck({ ...base, othersToday: 9.5, runs: [{ cost: 0.3 }], remaining: 1, perRun: 0.3 });
+  assert.equal(daily.ok, false);
+  assert.match(daily.reasons.join(), /每日上限/);
 });
