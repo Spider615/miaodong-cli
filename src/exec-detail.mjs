@@ -52,30 +52,39 @@ export function normalizeDetail(detail) {
   const meta = buildNodeMetaIndex(snapshot);
   const branches = buildBranchNameIndex(snapshot);
   const cells = new Map(snapshot.filter((c) => c && typeof c.id === 'string').map((c) => [c.id, c]));
-  const results = asArray(detail?.nodeResults);
-  const byId = new Map(results.map((r) => [r?.nodeId, r]));
-  const nodes = orderExecuted(results.map((r) => r?.nodeId).filter(Boolean), snapshot).map((id, i) => {
-    const r = byId.get(id) ?? {};
+  // 同一个节点可能跑多次（循环）：按 id 分组、组内保持秒懂返回的顺序，每一次都列出来（审查 I-5：以前后一次会盖掉前一次，出错的那次被显示成 ✅）
+  const groups = new Map();
+  for (const r of asArray(detail?.nodeResults)) {
+    if (!r?.nodeId) continue;
+    if (!groups.has(r.nodeId)) groups.set(r.nodeId, []);
+    groups.get(r.nodeId).push(r);
+  }
+  const nodes = [];
+  for (const id of orderExecuted([...groups.keys()], snapshot)) {
+    const runs = groups.get(id);
     const m = meta.get(id);
-    const usageInfo = r.metadata?.tokenUsage;
-    return {
-      order: i + 1,
-      id,
-      name: m?.name || '(快照里没有这个节点)',
-      type: m?.type || '?',
-      category: m?.category || '',
-      status: String(r.status ?? ''),
-      ms: Number(r.processDuration) || 0,
-      branch: r.outputBranchId ? branches.get(r.outputBranchId) ?? shortId(r.outputBranchId) : null,
-      model: cells.get(id)?.data?.nodePayload?.modelType ?? null,
-      cost: typeof usageInfo?.costInCny === 'number' ? usageInfo.costInCny : null,
-      error: r.errorMessage ? String(r.errorMessage) : null,
-      inputs: r.inputs?.inputData ?? r.inputs ?? null,
-      output: r.output ?? null,
-      actions: asArray(r.actions),
-      metadata: r.metadata ?? null,
-    };
-  });
+    runs.forEach((r, k) => {
+      const usageInfo = r.metadata?.tokenUsage;
+      nodes.push({
+        order: nodes.length + 1,
+        id,
+        iteration: runs.length > 1 ? `${k + 1}/${runs.length}` : null,
+        name: m?.name || '(快照里没有这个节点)',
+        type: m?.type || '?',
+        category: m?.category || '',
+        status: String(r.status ?? ''),
+        ms: Number(r.processDuration) || 0,
+        branch: r.outputBranchId ? branches.get(r.outputBranchId) ?? shortId(r.outputBranchId) : null,
+        model: cells.get(id)?.data?.nodePayload?.modelType ?? null,
+        cost: typeof usageInfo?.costInCny === 'number' ? usageInfo.costInCny : null,
+        error: r.errorMessage ? String(r.errorMessage) : null,
+        inputs: r.inputs?.inputData ?? r.inputs ?? null,
+        output: r.output ?? null,
+        actions: asArray(r.actions),
+        metadata: r.metadata ?? null,
+      });
+    });
+  }
   const cost = typeof ce.totalCostInCny === 'number' ? ce.totalCostInCny : Number.parseFloat(ce.totalCostInCny);
   return {
     exec: {
@@ -102,7 +111,7 @@ export function normalizeDetail(detail) {
 const ICON = { success: '✅', error: '❌', running: '⏳', pending: '⏳' };
 
 export function nodeLine(n) {
-  const parts = [`${String(n.order).padStart(3)} ${ICON[n.status] ?? `⚪${n.status}`} ${n.name} [${[n.type, n.model].filter(Boolean).join(' · ')}]`];
+  const parts = [`${String(n.order).padStart(3)} ${ICON[n.status] ?? `⚪${n.status}`} ${n.name}${n.iteration ? `（第 ${n.iteration} 次）` : ''} [${[n.type, n.model].filter(Boolean).join(' · ')}]`];
   if (n.branch) parts.push(`→ 分支「${n.branch}」`);
   if (n.cost !== null) parts.push(formatCost(n.cost));
   if (n.ms) parts.push(`${(n.ms / 1000).toFixed(1)}s`);
@@ -133,7 +142,7 @@ export function promptText(metadata) {
 
 export function renderNodeDetail(n, { nodeFile, promptFile }) {
   const lines = [];
-  const head = [`节点 #${n.order} ${n.name} [${[n.type, n.model].filter(Boolean).join(' · ')}] ${n.status}`];
+  const head = [`节点 #${n.order} ${n.name}${n.iteration ? `（第 ${n.iteration} 次）` : ''} [${[n.type, n.model].filter(Boolean).join(' · ')}] ${n.status}`];
   if (n.ms) head.push(`${(n.ms / 1000).toFixed(1)}s`);
   if (n.cost !== null) head.push(formatCost(n.cost));
   if (n.branch) head.push(`→ 分支「${n.branch}」`);

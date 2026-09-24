@@ -32,6 +32,19 @@ test('normalizeDetail：名字、类型、分支名、模型、花费；快照�
   assert.match(nodeLine(norm.nodes[4]), /❌ \(快照里没有这个节点\) \[\?\] ：循环子节点报错/);
 });
 
+test('同一个节点跑了多次（循环）：每次都列出来、标第几次，出错的那次不会被后一次盖掉（审查 I-5）', () => {
+  const detail = delayDetail();
+  detail.nodeResults.push({ nodeId: U(2), status: 'error', errorMessage: '第二次超时', inputs: { inputData: { text: '再问' } }, output: null });
+  const norm = normalizeDetail(detail);
+  const runs = norm.nodes.filter((n) => n.id === U(2));
+  assert.equal(norm.nodes.length, 5);
+  assert.deepEqual(runs.map((n) => [n.status, n.iteration]), [['success', '1/2'], ['error', '2/2']]);
+  assert.match(nodeLine(runs[1]), /❌ 回答生成（第 2\/2 次）/);
+  assert.throws(() => findExecNode(norm, '回答生成'), (e) => e.code === 'node_ambiguous');
+  assert.equal(findExecNode(norm, `#${runs[1].order}`).status, 'error');
+  assert.match(renderNodeDetail(runs[1], { nodeFile: '/n', promptFile: '/p' })[0], /节点 #\d+ 回答生成（第 2\/2 次）/);
+});
+
 test('findExecNode：按名字、#序号、id 前缀找；这次没跑到的节点说清楚', () => {
   const norm = normalizeDetail(delayDetail());
   assert.equal(findExecNode(norm, '回答生成').id, U(2));
