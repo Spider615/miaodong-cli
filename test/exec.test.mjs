@@ -106,3 +106,30 @@ test('测试执行：说明没有事件链，不去查列表', async () => {
   assert.match(r.stdout, /不在执行列表里，没有事件链/);
   assert.equal(count('/api/canvas/history/list'), lists);
 });
+
+test('md exec <id> --node：输入、prompt 全文文件、工具调用', async () => {
+  const r = await md(['exec', X(2), '--node', '回答生成']);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /节点 #2 回答生成 \[llm-completion · doubao-seed-2\.0-lite\]/);
+  assert.match(r.stdout, /质检规则: 旧规则/);
+  const promptFile = r.stdout.match(/→ (\S+\.prompt\.txt)/)[1];
+  assert.match(readFileSync(promptFile, 'utf-8'), /## system\n你是客服。固定话术：欢迎来到兴趣岛/);
+  assert.match(r.stdout, /工具：query_kb「退款政策」 → 返回 2 条/);
+});
+
+test('md exec <id> --find：逐节点标出现位置并给结论', async () => {
+  const hard = await md(['exec', X(2), '--find', '欢迎来到兴趣岛']);
+  assert.match(hard.stdout, /结论：写死在 #2「回答生成」/);
+  const gen = await md(['exec', X(2), '--find', REPLY]);
+  assert.match(gen.stdout, /结论：最早由 #2「回答生成」/);
+  assert.match(gen.stdout, /#3 规则中心 \[00000003\] 配置· 输入✓ prompt· 输出·/);
+});
+
+test('md exec <id> --vs-draft：跑过的节点在草稿里改了哪些、删了哪些', async () => {
+  const r = await md(['exec', X(2), '--vs-draft']);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /执行时 v1\.0\.402 → 现在的草稿/);
+  assert.match(r.stdout, /1 个改过、1 个在草稿里已删除/);
+  assert.match(r.stdout, /~ #2 回答生成 \[00000002\]：data\.nodePayload\.systemPrompt/);
+  assert.match(r.stdout, /- #3 规则中心 \[00000003\]/);
+});

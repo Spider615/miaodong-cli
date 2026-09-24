@@ -1,7 +1,7 @@
 // md exec：查执行记录。不给执行 id 是「搜」，给了是「看一条」。
 // 看一条时自动串事件链：一条用户消息常被拆成几条执行，回复在后面那条里（会话里两天各重新发现过一次）。
 
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { intArg, strArg } from '../args.mjs';
 import { EXIT, MdError, usage } from '../errors.mjs';
@@ -12,7 +12,7 @@ import { formatTime, note, out, shortId, targetLine } from '../output.mjs';
 import { parseDuration, timeWindow } from '../timewin.mjs';
 import { ACTION_ALIASES, TRIGGER_ALIASES, actionTexts, buildSearchBody, clip, formatCost, formatRow, getExecDetail, resolveAlias, searchExecutions, summarizeRow } from '../execs.mjs';
 import { execDir, findCachedExec, loadCachedDetail, saveDetail, saveNodes, saveSearch } from '../exec-store.mjs';
-import { NODE_LINE_LIMIT, nodeLine, normalizeDetail } from '../exec-detail.mjs';
+import { NODE_LINE_LIMIT, driftAgainst, findExecNode, locateText, nodeLine, normalizeDetail, promptText, renderNodeDetail, verdictLine } from '../exec-detail.mjs';
 import { DEFAULT_CHAIN_WINDOW_MS, chainExecFromDetail, chainOf, extractEmittedEvents, fetchSessionPool, renderChain } from '../exec-chain.mjs';
 
 const SHOW_LIMIT = 50;
@@ -166,15 +166,42 @@ async function showExec(args, target, norm, dir) {
   return EXIT.OK;
 }
 
-// Task 8 替换这三个
-async function showNode() {
-  throw usage('--node 还没实现');
+function showNode(args, target, norm, dir) {
+  const n = findExecNode(norm, strArg(args, 'node'));
+  const base = join(dir, `node-${String(n.order).padStart(3, '0')}-${shortId(n.id)}`);
+  writeFileSync(`${base}.json`, JSON.stringify(n, null, 2));
+  const prompt = promptText(n.metadata);
+  if (prompt) writeFileSync(`${base}.prompt.txt`, prompt);
+  out(targetLine(target));
+  out(`执行 ${norm.exec.execId}`);
+  for (const line of renderNodeDetail(n, { nodeFile: `${base}.json`, promptFile: prompt ? `${base}.prompt.txt` : '（无）' })) out(line);
+  return EXIT.OK;
 }
-async function showFind() {
-  throw usage('--find 还没实现');
+
+function showFind(args, target, norm) {
+  const needle = strArg(args, 'find');
+  const { rows, verdict } = locateText(norm, needle);
+  out(targetLine(target));
+  out(`执行 ${norm.exec.execId} · 找「${clip(needle, 40)}」：${rows.length} 个节点碰到`);
+  const mark = (hit) => (hit ? '✓' : '·');
+  for (const r of rows) out(`  #${r.node.order} ${r.node.name} [${shortId(r.node.id)}] 配置${mark(r.inConfig)} 输入${mark(r.inInput)} prompt${mark(r.inPrompt)} 输出${mark(r.inOutput)}`);
+  out(verdictLine(verdict));
+  return EXIT.OK;
 }
-async function showDrift() {
-  throw usage('--vs-draft 还没实现');
+
+async function showDrift(target, norm) {
+  const draft = await getCanvas(target.identity, target.orgId, target.botId);
+  const { changed, removed } = driftAgainst(norm, draft.rawCanvas);
+  out(targetLine(target));
+  out(`执行时 ${norm.version || '版本未知'} → 现在的草稿（最后保存 ${formatTime(draft.updatedAt)}）`);
+  out(`这次执行跑过的 ${norm.nodes.length} 个节点里：${changed.length} 个改过、${removed.length} 个在草稿里已删除`);
+  for (const c of changed.slice(0, 50)) {
+    out(`  ~ #${c.node.order} ${c.node.name} [${shortId(c.node.id)}]：${c.paths.slice(0, 5).join('、')}${c.paths.length > 5 ? ` 等 ${c.paths.length} 处` : ''}`);
+  }
+  if (changed.length > 50) out(`  …另有 ${changed.length - 50} 个改过的节点`);
+  for (const n of removed) out(`  - #${n.order} ${n.name} [${shortId(n.id)}]`);
+  if (!changed.length && !removed.length) out('  这次跑过的节点在草稿里都没改过。');
+  return EXIT.OK;
 }
 
 async function viewExec(args) {
