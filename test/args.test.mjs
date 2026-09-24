@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { intArg, listArg, parseArgs, strArg } from '../src/args.mjs';
+import { boolArg, intArg, listArg, parseArgs, strArg } from '../src/args.mjs';
 
 test('同一个参数给多次：收成数组，listArg 取全部', () => {
   const args = parseArgs(['--input', 'a=1', '--input', 'b=2', '--input=c=3']);
@@ -18,4 +18,13 @@ test('只该给一次的参数给了多次：报用法错误，不悄悄取最�
 
 test('listArg：漏了值报用法错误', () => {
   assert.throws(() => listArg(parseArgs(['--input', '--times', '2']), 'input'), (e) => e.exitCode === 2);
+});
+
+test('boolArg：开关给了两次报用法错误，不按真值算（--replace-draft false 给两次曾被当成开，审查 I4）；带了奇怪的值也报错', () => {
+  assert.equal(boolArg(parseArgs([]), 'json'), false);
+  assert.equal(boolArg(parseArgs(['--json']), 'json'), true);
+  assert.equal(boolArg(parseArgs(['--json', 'false']), 'json'), false);
+  assert.equal(boolArg(parseArgs(['--json=yes']), 'json'), true);
+  assert.throws(() => boolArg(parseArgs(['--replace-draft', 'false', '--replace-draft', 'false']), 'replace-draft'), (e) => e.exitCode === 2 && /只能给一次/.test(e.message));
+  assert.throws(() => boolArg(parseArgs(['--json', 'abc']), 'json'), (e) => e.exitCode === 2 && /开关/.test(e.message));
 });

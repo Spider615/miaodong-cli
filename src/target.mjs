@@ -3,7 +3,7 @@
 // 同一档命中多个就列候选停下，绝不自己挑：克隆出来的同名测试机器人很常见，挑错就是推错智能体。
 
 import { join } from 'node:path';
-import { strArg } from './args.mjs';
+import { boolArg, strArg } from './args.mjs';
 import { EXIT, MdError, usage } from './errors.mjs';
 import { mdHome, readJson, writeJson } from './home.mjs';
 import { loadIdentities, requireIdentities } from './identity.mjs';
@@ -84,7 +84,7 @@ export function describeEntry(entry) {
 }
 
 export function targetArgs(args) {
-  return { bot: strArg(args, 'bot'), org: strArg(args, 'org'), region: strArg(args, 'region'), refresh: args.refresh === true };
+  return { bot: strArg(args, 'bot'), org: strArg(args, 'org'), region: strArg(args, 'region'), refresh: boolArg(args, 'refresh') };
 }
 
 export async function resolveBot({ bot, org, region, refresh = false }) {

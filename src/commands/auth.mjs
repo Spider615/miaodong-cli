@@ -1,3 +1,4 @@
+import { boolArg } from '../args.mjs';
 import { EXIT, usage } from '../errors.mjs';
 import { request } from '../http.mjs';
 import {
@@ -32,7 +33,8 @@ function snippet(domain) {
 }
 
 async function importIdentity(args) {
-  const text = args.stdin ? await readStdin() : readClipboard();
+  const fromStdin = boolArg(args, 'stdin');
+  const text = fromStdin ? await readStdin() : readClipboard();
   const blob = decodeAuthBlob(text);
   const region = regionOf(blob.origin);
   const identity = {
@@ -52,7 +54,7 @@ async function importIdentity(args) {
     saveIdentity(identity);
   } finally {
     // 剪贴板里确实是身份串（上面解码成功）时，不论验证成败都清掉：它就是登录凭证
-    if (!args.stdin) clearClipboard();
+    if (!fromStdin) clearClipboard();
   }
   const org = identity.orgs.find((o) => o.id === identity.currentOrgId);
   const expiry = identity.expiresAt ? ` · 有效期至 ${formatTime(identity.expiresAt)}` : '';

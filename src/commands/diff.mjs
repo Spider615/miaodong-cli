@@ -1,4 +1,4 @@
-import { intArg } from '../args.mjs';
+import { boolArg, intArg } from '../args.mjs';
 import { EXIT } from '../errors.mjs';
 import { diffEnvelopes, diffToJson, nameMapOf, renderDiff } from '../diff.mjs';
 import { loadWorkspace, wsLine } from '../workspace.mjs';
@@ -10,7 +10,7 @@ export const diff = {
   async run(args) {
     const ws = loadWorkspace(args);
     const d = diffEnvelopes(ws.base, ws.current);
-    if (args.json) {
+    if (boolArg(args, 'json')) {
       out(JSON.stringify(diffToJson(d), null, 2));
       return EXIT.OK;
     }

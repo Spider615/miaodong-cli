@@ -6,7 +6,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { intArg } from '../args.mjs';
+import { boolArg, intArg } from '../args.mjs';
 import { EXIT, MdError } from '../errors.mjs';
 import { ensureDir, writeJson } from '../home.mjs';
 import { getCanvas, saveCanvas } from '../api.mjs';
@@ -74,11 +74,11 @@ export function verifyReadback(expected, readback, canvasId, ours = null) {
 }
 
 // 预演打印的确认命令要带上预演时用的开关，否则照抄去确认会走另一条路径
-function flagsOf(args) {
+function flagsOf({ replaceDraft, ontoDraft, allowCheckErrors }) {
   const flags = [];
-  if (args['replace-draft']) flags.push('--replace-draft');
-  else if (args['onto-draft']) flags.push('--onto-draft');
-  if (args['allow-check-errors']) flags.push('--allow-check-errors');
+  if (replaceDraft) flags.push('--replace-draft');
+  else if (ontoDraft) flags.push('--onto-draft');
+  if (allowCheckErrors) flags.push('--allow-check-errors');
   return flags.map((flag) => ` ${flag}`).join('');
 }
 
@@ -91,6 +91,8 @@ export const push = {
     '自检有新增问题会被拦；确认可以忽略时加 --allow-check-errors',
   ].join('\n'),
   async run(args) {
+    // 开关一开头就读：给错（比如给了两次）要在联网之前报出来
+    const opts = { replaceDraft: boolArg(args, 'replace-draft'), ontoDraft: boolArg(args, 'onto-draft'), allowCheckErrors: boolArg(args, 'allow-check-errors') };
     const ws = loadWorkspace(args);
     const target = targetFromMeta(ws.meta);
     const { identity, orgId, botId } = target;
@@ -101,20 +103,20 @@ export const push = {
     }
 
     const check = runCheck(ws.base, ws.after);
-    if (check.errors.length && !args['allow-check-errors']) {
+    if (check.errors.length && !opts.allowCheckErrors) {
       throw blocked(`自检有 ${check.errors.length} 个问题，先修：\n${check.errors.map((e) => `  ❌ ${e}`).join('\n')}`, 'md check 看详情；确认可以忽略时加 --allow-check-errors');
     }
 
     let mode = 'merge';
     if (ws.meta.source.kind === 'version') {
       const drift = compareNodes(ws.base.canvas, live.rawCanvas);
-      if (!drift.same && !args['onto-draft'] && !args['replace-draft']) {
+      if (!drift.same && !opts.ontoDraft && !opts.replaceDraft) {
         throw blocked(
           `你是基于 ${ws.meta.source.version} 改的，但当前草稿和它不同（草稿多 ${drift.onlyB} 个节点、少 ${drift.onlyA} 个、${drift.changed} 个内容不同、连线差 ${drift.edgesDiffer} 条）`,
           '请用户二选一：--onto-draft（把改动合进当前草稿，保留草稿里别的修改）或 --replace-draft（草稿变成「该版本 + 你的改动」，草稿里别的修改会丢）',
         );
       }
-      if (args['replace-draft']) mode = 'replace';
+      if (opts.replaceDraft) mode = 'replace';
     }
 
     let toSave;
@@ -158,7 +160,7 @@ export const push = {
     if (args.confirm === undefined || args.confirm === false) {
       out('');
       out(`这是预演，什么都没写。计划码：${code}`);
-      out(`用户同意后执行：md push --ws ${ws.dir}${flagsOf(args)} --confirm ${code}`);
+      out(`用户同意后执行：md push --ws ${ws.dir}${flagsOf(opts)} --confirm ${code}`);
       return EXIT.OK;
     }
     if (args.confirm !== code) {

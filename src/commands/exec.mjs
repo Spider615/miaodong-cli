@@ -3,7 +3,7 @@
 
 import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { intArg, strArg } from '../args.mjs';
+import { boolArg, intArg, strArg } from '../args.mjs';
 import { EXIT, usage } from '../errors.mjs';
 import { getCanvas, listVersions } from '../api.mjs';
 import { resolveBot, resolveVersion, targetArgs } from '../target.mjs';
@@ -174,7 +174,7 @@ async function viewExec(args) {
   const shown = { ...target, versionLabel: `${norm.version || '版本未知'}${norm.exec.isCanary ? '（灰度）' : ''}` };
   if (args.node !== undefined) return showNode(args, shown, norm, dir);
   if (args.find !== undefined) return showFind(args, shown, norm);
-  if (args['vs-draft']) return showDrift(shown, norm);
+  if (boolArg(args, 'vs-draft')) return showDrift(shown, norm);
   return showExec(args, shown, norm, dir);
 }
 

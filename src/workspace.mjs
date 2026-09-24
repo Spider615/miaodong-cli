@@ -7,6 +7,7 @@
 
 import { copyFileSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
+import { strArg } from './args.mjs';
 import { EXIT, MdError, usage } from './errors.mjs';
 import { ensureDir, mdHome, readJson, writeJson } from './home.mjs';
 import { buildIndex } from './graph.mjs';
@@ -52,8 +53,9 @@ export function writeWorkspace(dir, { meta, base, draft = null }) {
 }
 
 export function resolveWorkspaceDir(args) {
-  if (typeof args.ws === 'string') {
-    const dir = resolve(args.ws);
+  const given = strArg(args, 'ws');
+  if (given) {
+    const dir = resolve(given);
     if (!existsSync(join(dir, 'meta.json'))) throw usage(`不是工作副本：${dir}`);
     return dir;
   }

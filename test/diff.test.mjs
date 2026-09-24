@@ -62,3 +62,20 @@ test('fieldChanges：null / 标量与对象、数组互换是 reshape，只有�
   assert.deepEqual(fieldChanges({ a: null }, { a: { x: 1 } }).map((f) => [f.path, f.kind]), [['a', 'reshape']]);
   assert.deepEqual(fieldChanges({ a: [1] }, { a: 'x' }).map((f) => [f.path, f.kind]), [['a', 'reshape']]);
 });
+
+test('--ws 给了两次：报用法错误，不悄悄落到最近拉的那个工作副本（审查 I4）', async () => {
+  const home = tempHome();
+  const a = await seedWorkspace(home, { canvas: sampleCanvas(), events: sampleEvents });
+  const b = await seedWorkspace(home, { canvas: sampleCanvas(), events: sampleEvents });
+  const r = await runCli(['diff', '--ws', a, '--ws', b], { home });
+  assert.equal(r.code, 2, r.stdout);
+  assert.match(r.stderr, /--ws 只能给一次/);
+});
+
+test('推送的开关给了两次：一开头就报用法错误（--replace-draft 会整份替换草稿，不能被当成开）', async () => {
+  const home = tempHome();
+  const ws = await seedWorkspace(home, { canvas: sampleCanvas(), events: sampleEvents });
+  const r = await runCli(['push', '--ws', ws, '--replace-draft', 'false', '--replace-draft', 'false'], { home });
+  assert.equal(r.code, 2, r.stderr);
+  assert.match(r.stderr, /--replace-draft 只能给一次/);
+});

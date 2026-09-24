@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { intArg, strArg } from '../args.mjs';
+import { boolArg, intArg, strArg } from '../args.mjs';
 import { EXIT } from '../errors.mjs';
 import { readJson } from '../home.mjs';
 import { getCanvas } from '../api.mjs';
@@ -57,7 +57,7 @@ export const status = {
       out(`  ${w.dir}`);
       out(`  拉取 ${formatTime(w.meta.pulledAt)} · ${pending} · 最后推送 ${w.meta.lastPush ? formatTime(w.meta.lastPush.at) : '无'}`);
     }
-    if (args.remote) await remoteCheck(query);
+    if (boolArg(args, 'remote')) await remoteCheck(query);
     return EXIT.OK;
   },
 };

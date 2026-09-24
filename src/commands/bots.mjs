@@ -1,4 +1,4 @@
-import { strArg } from '../args.mjs';
+import { boolArg, strArg } from '../args.mjs';
 import { EXIT } from '../errors.mjs';
 import { describeEntry, filterEntries, loadBotDirectory } from '../target.mjs';
 import { out } from '../output.mjs';
@@ -8,7 +8,7 @@ export const bots = {
   usage: 'md bots [关键词] [--org <企业>] [--region <区>] [--refresh]',
   async run(args) {
     const keyword = String(args._[0] ?? '').trim().toLowerCase();
-    const entries = filterEntries(await loadBotDirectory({ refresh: args.refresh === true }), {
+    const entries = filterEntries(await loadBotDirectory({ refresh: boolArg(args, 'refresh') }), {
       org: strArg(args, 'org'),
       region: strArg(args, 'region'),
     });

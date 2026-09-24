@@ -2,7 +2,7 @@
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { intArg, listArg, strArg } from '../args.mjs';
+import { boolArg, intArg, listArg, strArg } from '../args.mjs';
 import { EXIT, MdError, usage } from '../errors.mjs';
 import { asArray, getCanvas } from '../api.mjs';
 import { resolveBot, targetArgs } from '../target.mjs';
@@ -83,6 +83,9 @@ export const trial = {
     const query = args._[0];
     if (!query) throw usage('缺节点：md trial <节点 id / id 前缀 / 名字> --bot <智能体>');
     const times = intArg(args, 'times', 1, 10);
+    if (strArg(args, 'ws') && strArg(args, 'bot')) throw usage('--ws 和 --bot 只能给一个', '--ws 指定工作副本（智能体取它记的那个），--bot 指定智能体');
+    const allowPlugin = boolArg(args, 'allow-plugin');
+    const keepPlatform = boolArg(args, 'keep-platform-params');
     const { target, ws } = await trialTarget(args);
     const draft = await getCanvas(target.identity, target.orgId, target.botId);
     const cell = resolveNode(draft.rawCanvas, query);
@@ -91,7 +94,7 @@ export const trial = {
     if (cls.kind === 'denied') {
       throw new MdError('trial_denied', `「${node.name}」是 ${cls.type || '未知类型'}，这类节点不做单节点试跑（只跑大模型、代码、规则、知识库查询这类计算节点；秒懂页面也不给别的节点试跑按钮）`, { exitCode: EXIT.BLOCKED });
     }
-    if (cls.kind === 'plugin' && args['allow-plugin'] !== true) {
+    if (cls.kind === 'plugin' && !allowPlugin) {
       throw new MdError('trial_plugin', `「${node.name}」会真的调用外部系统（${cls.plugins.join('、')}）`, { exitCode: EXIT.BLOCKED, hint: '确认要跑：加 --allow-plugin；md 会先给出预估和确认码，要用户确认' });
     }
 
@@ -129,7 +132,7 @@ export const trial = {
       fromExec,
       fromFile: file ? readInputsFile(file) : null,
       overrides: parseInputPairs(listArg(args, 'input')),
-      keepPlatform: args['keep-platform-params'] === true,
+      keepPlatform,
     });
 
     // 预演信息先打出来：要确认时，这就是给用户看的预演

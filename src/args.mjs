@@ -70,6 +70,21 @@ export function strArg(args, key) {
   return v.trim();
 }
 
+const TRUTHY_WORDS = new Set(['true', 'yes', 'y', 'on', '1']);
+
+/**
+ * 取开关参数。给了两次报用法错误，不按真值算：`--replace-draft false` 给两次会被收成 [false, false]，
+ * 数组是真值——以前就这样被当成「开」，而 --replace-draft 会整份替换草稿（审查 I4）。
+ * 带了认不出的值也报错：多半是它后面的词被当成了它的值。
+ */
+export function boolArg(args, key) {
+  const v = args[key];
+  if (Array.isArray(v)) throw usage(`--${key} 只能给一次`);
+  if (v === undefined || v === false) return false;
+  if (v === true || (typeof v === 'string' && TRUTHY_WORDS.has(v.toLowerCase()))) return true;
+  throw usage(`--${key} 是开关，不带值（收到「${v}」）`, '它后面的词被当成了它的值？把开关挪到最后，或写成 --' + key + '=true');
+}
+
 /**
  * 取正整数参数。挡住 `--limit --all`（Number(true)===1 会让用户以为在看全部，实际只拿到 1 条）。
  */

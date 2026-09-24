@@ -243,3 +243,9 @@ test('并行跑：「查今天已花 → 判断 → 记账」加了锁，同时�
   assert.equal(rs.filter((r) => r.code === 0).length, 2, rs.map((r) => r.code).join(','));
   assert.equal(fake.state.posts.length, 2);
 });
+
+test('--ws 和 --bot 同时给：报用法错误（二选一），不悄悄忽略 --bot', async () => {
+  const r = await md(['trial', '回答生成', '--bot', '147bd600', '--ws', '/tmp/x', '--input', 'text=1']);
+  assert.equal(r.code, 2, r.stderr);
+  assert.match(r.stderr, /--ws 和 --bot 只能给一个/);
+});
