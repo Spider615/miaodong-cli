@@ -11,7 +11,7 @@ export function trialDraft() {
       ? { ...c, data: { ...c.data, nodePayload: { ...c.data.nodePayload, inputs: [...c.data.nodePayload.inputs, { name: '质检规则', operationAttrId: 'op-1', valueType: 'reference', type: { type: 'string' } }] } } }
       : c)),
     node(7, { name: '兴趣岛用户详情', type: 'plugin-calculation' }),
-    node(8, { name: '带插件的大模型', payload: { modelType: 'gemini-3.5-flash', inputs: [{ name: 'text' }], tools: [{ toolType: 'plugin', name: '写多维表' }] } }),
+    node(8, { name: '带插件的大模型', payload: { modelType: 'gemini-3.5-flash', inputs: [{ name: 'text' }], tools: [{ type: 'plugin', name: '写多维表' }] } }),
   ];
 }
 

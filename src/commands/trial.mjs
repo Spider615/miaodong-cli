@@ -8,8 +8,8 @@ import { asArray, getCanvas } from '../api.mjs';
 import { resolveBot, targetArgs } from '../target.mjs';
 import { latestWorkspaceFor, loadWorkspace, stamp, targetFromMeta } from '../workspace.mjs';
 import { resolveNode } from '../graph.mjs';
-import { ensureDir, mdHome } from '../home.mjs';
-import { formatTime, note, out, shortId, targetLine } from '../output.mjs';
+import { ensureNewDir, mdHome } from '../home.mjs';
+import { DATA_NOTE, formatTime, note, out, shortId, targetLine } from '../output.mjs';
 import { clip, formatCost } from '../execs.mjs';
 import { locateExec } from '../exec-locate.mjs';
 import { normalizeDetail, promptText } from '../exec-detail.mjs';
@@ -42,6 +42,28 @@ function snapshotCell(detail, nodeId) {
 function lastPerRun(botId, nodeId, model) {
   const hit = readSpends().filter((r) => r.kind === 'trial' && r.botId === botId && r.nodeId === nodeId && (r.model ?? null) === model && typeof r.actualPerRun === 'number').at(-1);
   return hit ? hit.actualPerRun : null;
+}
+
+// 在草稿里找节点。用了 --from-exec 而草稿里找不到时，去执行那一版的画布里找：找到了就说清楚是「草稿里删了」，
+// 只报「没有节点」会让 AI 去猜，甚至按名字挑中另一个同名节点花钱白跑（审查 M3，09-25 真机核对时踩到）
+function resolveTrialNode(canvas, query, located, execId) {
+  try {
+    return resolveNode(canvas, query);
+  } catch (error) {
+    if (!located || !(error instanceof MdError) || error.code !== 'node_not_found') throw error;
+    const snapshot = asArray(located.detail?.canvas?.rawCanvas).length ? located.detail.canvas.rawCanvas : asArray(located.detail?.canvasExec?.rawCanvas);
+    let then = null;
+    try {
+      then = resolveNode(snapshot, query);
+    } catch {
+      throw error;
+    }
+    const version = normalizeDetail(located.detail).version || '执行时的版本';
+    throw new MdError('node_not_in_draft', `「${String(then.data?.name ?? then.id)}」[${shortId(then.id)}] 在执行 ${shortId(execId)} 跑的那一版（${version}）里有，但现在的草稿里已经删了；试跑只跑草稿`, {
+      exitCode: EXIT.TARGET,
+      hint: `md exec ${execId} --vs-draft 看草稿里改了什么；要复现就在草稿里找替代它的节点`,
+    });
+  }
 }
 
 function readInputsFile(file) {
@@ -88,7 +110,9 @@ export const trial = {
     const keepPlatform = boolArg(args, 'keep-platform-params');
     const { target, ws } = await trialTarget(args);
     const draft = await getCanvas(target.identity, target.orgId, target.botId);
-    const cell = resolveNode(draft.rawCanvas, query);
+    const execId = strArg(args, 'from-exec');
+    const located = execId ? await locateExec({}, execId) : null;
+    const cell = resolveTrialNode(draft.rawCanvas, query, located, execId);
     const node = { id: cell.id, name: String(cell.data?.name ?? cell.id), type: String(cell.data?.type ?? cell.shape ?? ''), category: String(cell.data?.category ?? '') };
     const cls = classifyTrialNode(cell);
     if (cls.kind === 'denied') {
@@ -104,9 +128,7 @@ export const trial = {
     let fromExec = null;
     let execCost = null;
     let modelNote = '';
-    const execId = strArg(args, 'from-exec');
-    if (execId) {
-      const located = await locateExec({}, execId);
+    if (located) {
       const executed = normalizeDetail(located.detail).nodes.find((n) => n.id === node.id);
       if (!executed) {
         throw new MdError('node_not_in_exec', `执行 ${shortId(execId)} 没有跑到「${node.name}」[${shortId(node.id)}]`, { exitCode: EXIT.TARGET, hint: 'md exec <执行id> 看那次跑了哪些节点' });
@@ -140,6 +162,7 @@ export const trial = {
     const fresh = draftVsLocal(node.id, draft.rawCanvas, ws);
     const shown = loadLimits();
     out(targetLine({ ...target, versionLabel: '草稿' }));
+    if (located) out(DATA_NOTE);
     out(`试跑「${node.name}」[${shortId(node.id)}] ${node.type} × ${times} · 草稿最后保存 ${formatTime(draft.updatedAt)}`);
     if (fresh.status === 'unpushed') out(`⚠️ 本地改动还没推：这次跑的是草稿上的旧版本（工作副本 ${fresh.dir}）；要试新改的先 md push`);
     if (fresh.status === 'draft-changed') out('（草稿里这个节点在你拉取之后被改过；跑的是草稿现在的内容）');
@@ -175,7 +198,8 @@ export const trial = {
     });
     if (plan.confirmed) out('（用户已确认这一笔）');
 
-    const dir = ensureDir(join(mdHome(), 'trials', safe(target.identityKey), safe(target.botId.slice(0, 8)), `${stamp()}-${safe(shortId(node.id))}`));
+    const dir = ensureNewDir(join(mdHome(), 'trials', safe(target.identityKey), safe(target.botId.slice(0, 8)), `${stamp()}-${safe(shortId(node.id))}`));
+    out(`结果和 prompt 存在 ${dir}（每跑完一次写一份；命令被中途打断也在这里）`);
     const branches = buildBranchNameIndex(draft.rawCanvas);
     const outputs = new Set();
     const runs = [];

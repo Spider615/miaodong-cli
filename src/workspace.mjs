@@ -144,8 +144,10 @@ export function listWorkspaces() {
     .sort((a, b) => String(b.meta.pulledAt).localeCompare(String(a.meta.pulledAt)));
 }
 
-// 试跑前要知道「本地改了还没推」：看这个智能体最近拉的那个工作副本
+// 试跑前要知道「本地改了还没推」：看这个智能体的工作副本，有没推改动的优先（最近的那个），都没有就看最近拉的。
+// 只看最近拉的会漏：在 A 里改了没推，又拉了个新的 B，提醒就没了（审查 M8）
 export function latestWorkspaceFor(botId) {
-  const hit = listWorkspaces().find((w) => w.meta.botId === botId);
+  const mine = listWorkspaces().filter((w) => w.meta.botId === botId);
+  const hit = mine.find((w) => w.hasAfter) ?? mine[0];
   return hit ? loadWorkspace({ ws: hit.dir }) : null;
 }

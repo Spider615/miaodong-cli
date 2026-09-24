@@ -12,13 +12,19 @@ export const TRIAL_ALLOWED = new Set([
   'calculator', 'quality-check', 'speech-to-text', 'web-search', 'chat-search', 'image-generation',
 ]);
 
+// 大模型挂的工具只放行已知安全的（知识库查询）；认不出的一律当外部调用（插件、HTTP 之类），宁可多问一次（审查 M6）。
+// 工具类型的真实字段是 type：{ type: 'query_kb', configParams: { knowledgeBaseId } }（09-25 核对 147bd600 草稿，110 个工具全是这样）；
+// 计划里写的 toolType 在真实画布里不存在——按它找，挂了插件工具的大模型会被当成普通节点、不经确认就跑。toolType 也一起认
+const SAFE_TOOL_TYPES = new Set(['query_kb']);
+const toolTypeOf = (tool) => String(tool?.type ?? tool?.toolType ?? '');
+
 export function classifyTrialNode(cell) {
   const data = cell?.data ?? {};
   const type = String(data.type ?? cell?.shape ?? '');
   if (type === 'plugin-calculation') return { kind: 'plugin', type, plugins: [String(data.name ?? type)] };
-  const pluginTools = asArray(data.nodePayload?.tools).filter((t) => t?.toolType === 'plugin');
-  if (type === 'llm-completion' && pluginTools.length) {
-    return { kind: 'plugin', type, plugins: pluginTools.map((t) => String(t?.name ?? t?.toolName ?? t?.pluginName ?? '插件工具')) };
+  const external = asArray(data.nodePayload?.tools).filter((t) => !SAFE_TOOL_TYPES.has(toolTypeOf(t)));
+  if (type === 'llm-completion' && external.length) {
+    return { kind: 'plugin', type, plugins: external.map((t) => String(t?.name ?? t?.toolName ?? t?.pluginName ?? t?.configParams?.name ?? (toolTypeOf(t) || '外部工具'))) };
   }
   if (TRIAL_ALLOWED.has(type)) return { kind: 'allowed', type, plugins: [] };
   return { kind: 'denied', type, plugins: [] };

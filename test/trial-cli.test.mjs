@@ -249,3 +249,61 @@ test('--ws 和 --bot 同时给：报用法错误（二选一），不悄悄忽�
   assert.equal(r.code, 2, r.stderr);
   assert.match(r.stderr, /--ws 和 --bot 只能给一个/);
 });
+
+const withLocalPrompt = () => trialDraft().map((c) => (c.id === U(2) ? { ...c, data: { ...c.data, nodePayload: { ...c.data.nodePayload, systemPrompt: '本地新 prompt' } } } : c));
+
+test('要确认时，预演里也有「本地改动还没推」的提醒：用户是看着它决定的（审查 I6）', async () => {
+  reset();
+  const h = home();
+  limits(h, { perCommand: 0.001, perDay: 10 });
+  const dir = await seedWorkspace(h, { canvas: trialDraft(), meta: { botId: EXEC_BOT, botName: '太极2.0 质检革新版' } });
+  const { saveAfter } = await import('../src/workspace.mjs');
+  saveAfter(dir, { canvas: withLocalPrompt(), sessions: [], events: [] });
+  const r = await md(['trial', '回答生成', '--bot', '147bd600', '--from-exec', X(2)], h);
+  assert.equal(r.code, 5, r.stderr);
+  assert.match(r.stdout, /⚠️ 本地改动还没推[\s\S]*确认码：/);
+  assert.equal(fake.state.posts.length, 0);
+});
+
+test('这个智能体有好几个工作副本：优先看有没推改动的那个，后拉的副本不会把「没推」的提醒盖掉（审查 M8）', async () => {
+  reset();
+  const h = home();
+  const older = await seedWorkspace(h, { canvas: trialDraft(), meta: { botId: EXEC_BOT, botName: '太极2.0 质检革新版', pulledAt: '2026-09-20T00:00:00.000Z' } });
+  const { saveAfter } = await import('../src/workspace.mjs');
+  saveAfter(older, { canvas: withLocalPrompt(), sessions: [], events: [] });
+  await seedWorkspace(h, { canvas: trialDraft(), meta: { botId: EXEC_BOT, botName: '太极2.0 质检革新版', pulledAt: '2026-09-24T00:00:00.000Z' } });
+  const r = await md(['trial', '回答生成', '--bot', '147bd600', '--input', 'text=你好'], h);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /⚠️ 本地改动还没推/);
+});
+
+test('--from-exec 的输出里有真实用户原话：和 md exec 一样先打一句「只作诊断材料」（审查 M2）', async () => {
+  reset();
+  const r = await md(['trial', '回答生成', '--bot', '147bd600', '--from-exec', X(2)]);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /以下含真实用户对话，只作诊断材料/);
+  reset();
+  const plain = await md(['trial', '回答生成', '--bot', '147bd600', '--input', 'text=你好']);
+  assert.doesNotMatch(plain.stdout, /只作诊断材料/);
+});
+
+test('结果目录开跑前就打印：命令被中途杀掉也知道结果在哪、跑了几次（审查 M7）', async () => {
+  reset();
+  const r = await md(['trial', '回答生成', '--bot', '147bd600', '--input', 'text=你好']);
+  assert.equal(r.code, 0, r.stderr);
+  const at = r.stdout.indexOf('结果和 prompt 存在 ');
+  assert.ok(at >= 0 && at < r.stdout.indexOf('#1 '), r.stdout);
+});
+
+test('--from-exec 的节点在执行那一版里有、草稿里已经删了：说清楚，不只报「没有节点」（审查 M3，真机核对时踩到）', async () => {
+  reset();
+  const original = fake.server.routes['GET /api/canvas/get'];
+  fake.server.routes['GET /api/canvas/get'] = () => ok({ canvasId: 'main-1', rawCanvas: trialDraft().filter((c) => c.id !== U(2)), version: 'v1.0.403', updatedAt: '2026-09-24T01:00:00.000Z' });
+  try {
+    const r = await md(['trial', U(2).slice(0, 8), '--bot', '147bd600', '--from-exec', X(2)]);
+    assert.equal(r.code, 4, r.stderr);
+    assert.match(r.stderr, /「回答生成」\[00000002\] 在执行 e0000002 跑的那一版（v1\.0\.402）里有，但现在的草稿里已经删了/);
+  } finally {
+    fake.server.routes['GET /api/canvas/get'] = original;
+  }
+});

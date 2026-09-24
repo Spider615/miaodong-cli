@@ -15,6 +15,21 @@ export function ensureDir(dir) {
   return dir;
 }
 
+// 新建一个没人用过的目录：已经有了就加 -2、-3。最后一级 mkdir 不带 recursive，已存在会报错——借它抢占，
+// 并行的两个进程不会拿到同一个目录（审查 M7：同一秒对同一节点的两次试跑曾互相覆盖 run-1.json）
+export function ensureNewDir(base) {
+  mkdirSync(dirname(base), { recursive: true, mode: 0o700 });
+  for (let i = 1; ; i++) {
+    const dir = i === 1 ? base : `${base}-${i}`;
+    try {
+      mkdirSync(dir, { mode: 0o700 });
+      return dir;
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+    }
+  }
+}
+
 export function readJson(file, fallback, { secret = false } = {}) {
   if (!existsSync(file)) return fallback;
   try {

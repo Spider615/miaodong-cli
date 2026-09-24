@@ -9,7 +9,7 @@ test('classifyTrialNode：计算类能跑；插件类要 --allow-plugin；动作
   assert.equal(classifyTrialNode(llm).kind, 'allowed');
   assert.equal(classifyTrialNode(node(3, { type: 'rule-center' })).kind, 'allowed');
   assert.deepEqual(classifyTrialNode(node(7, { name: '兴趣岛用户详情', type: 'plugin-calculation' })), { kind: 'plugin', type: 'plugin-calculation', plugins: ['兴趣岛用户详情'] });
-  const withTool = node(8, { payload: { tools: [{ toolType: 'query_kb' }, { toolType: 'plugin', name: '写多维表' }] } });
+  const withTool = node(8, { payload: { tools: [{ type: 'query_kb', configParams: { knowledgeBaseId: 'kb-1' } }, { type: 'plugin', name: '写多维表' }] } });
   assert.deepEqual(classifyTrialNode(withTool).plugins, ['写多维表']);
   for (const type of ['send-text-message', 'handover', 'canvas-event-action', 'update-data', 'tag-user', 'plugin-action', 'receive-text-message', 'loop', 'write-content-router', 'whatever-new']) {
     assert.equal(classifyTrialNode(node(9, { type })).kind, 'denied', type);
@@ -101,4 +101,11 @@ test('nextRunCheck：每跑完一次按实际重算整条命令，超单次门�
   const daily = nextRunCheck({ ...base, othersToday: 9.5, runs: [{ cost: 0.3 }], remaining: 1, perRun: 0.3 });
   assert.equal(daily.ok, false);
   assert.match(daily.reasons.join(), /每日上限/);
+});
+
+test('classifyTrialNode：工具按真实字段 type 认，只放行知识库查询；认不出的工具类型一律按外部调用处理（审查 M6，计划里写的 toolType 在真实画布里不存在）', () => {
+  assert.equal(classifyTrialNode(node(8, { payload: { tools: [{ type: 'query_kb', configParams: { knowledgeBaseId: 'kb-1' } }] } })).kind, 'allowed');
+  assert.deepEqual(classifyTrialNode(node(8, { payload: { tools: [{ type: 'http_request', name: '调接口' }] } })).plugins, ['调接口']);
+  assert.deepEqual(classifyTrialNode(node(8, { payload: { tools: [{ type: 'mcp' }] } })).plugins, ['mcp']);
+  assert.deepEqual(classifyTrialNode(node(8, { payload: { tools: [{ toolType: 'plugin', name: '旧写法' }] } })).plugins, ['旧写法']);
 });
