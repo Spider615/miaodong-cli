@@ -79,3 +79,11 @@ export function draftVsLocal(nodeId, draftCanvas, ws) {
   if (base && draftNode && base !== draftNode) return { status: 'draft-changed', dir: ws.dir };
   return { status: 'same', dir: ws.dir };
 }
+
+// 几次试跑的花费。跑完了没有花费字段的算 ¥0（代码、规则这类节点本来不花钱）；
+// 超时没跑完的那次花了多少不知道：不算进实际，也不摊进「每次多少钱」——当成 ¥0 会让推算偏低，该要批准的直接放行
+export function costSummary(runs) {
+  const settled = runs.filter((r) => !r.timedOut);
+  const actual = settled.reduce((sum, r) => sum + (r.cost ?? 0), 0);
+  return { actual, perRun: settled.length ? actual / settled.length : null, unknownRuns: runs.length - settled.length };
+}

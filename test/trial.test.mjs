@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { node } from './helpers/fixtures.mjs';
-import { buildTrialInputs, classifyTrialNode, draftVsLocal, inputDefs, parseInputPairs } from '../src/trial.mjs';
+import { buildTrialInputs, classifyTrialNode, costSummary, draftVsLocal, inputDefs, parseInputPairs } from '../src/trial.mjs';
 
 const llm = node(2, { name: '回答生成', payload: { inputs: [{ name: 'text', referenceNodeId: 'x' }, { name: '质检规则', operationAttrId: 'op-1' }] } });
 
@@ -57,4 +57,11 @@ test('draftVsLocal：本地只改了别的节点、这个节点没动，而草�
   const ws = { dir: '/w', base: { canvas: [llm, other] }, after: { canvas: [llm, otherEdited] } };
   assert.equal(draftVsLocal(llm.id, [remote, other], ws).status, 'draft-changed');
   assert.equal(draftVsLocal(other.id, [remote, other], ws).status, 'unpushed');
+});
+
+test('costSummary：跑完的按实际（没有花费字段算 ¥0）；超时没跑完的花费未知，不当 ¥0 摊进每次花费', () => {
+  assert.deepEqual(costSummary([{ cost: 0.01, timedOut: false }, { cost: null, timedOut: false }]), { actual: 0.01, perRun: 0.005, unknownRuns: 0 });
+  assert.deepEqual(costSummary([{ cost: null, timedOut: true }]), { actual: 0, perRun: null, unknownRuns: 1 });
+  assert.deepEqual(costSummary([{ cost: 0.02, timedOut: false }, { cost: null, timedOut: true }]), { actual: 0.02, perRun: 0.02, unknownRuns: 1 });
+  assert.deepEqual(costSummary([]), { actual: 0, perRun: null, unknownRuns: 0 });
 });

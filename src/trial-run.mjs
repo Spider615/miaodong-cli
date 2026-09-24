@@ -9,6 +9,8 @@ export const RUN_TIMEOUT_MS = 5 * 60_000;
 const MAX_POLL_ERRORS = 3;
 const sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const defaultPollMs = () => (Number(process.env.MD_POLL_MS) > 0 ? Number(process.env.MD_POLL_MS) : 2000);
+// 只能调短（测试用）：调短只会更早带着 timedOut 返回，不会多跑、多花钱
+const defaultTimeoutMs = () => (Number(process.env.MD_TRIAL_TIMEOUT_MS) > 0 ? Math.min(Number(process.env.MD_TRIAL_TIMEOUT_MS), RUN_TIMEOUT_MS) : RUN_TIMEOUT_MS);
 
 function requesterFor(identity) {
   return (path, { method = 'GET', body, query } = {}) => request(identity, path, { method, body, query, timeoutMs: 60_000 });
@@ -25,7 +27,7 @@ function startFailure(error) {
   });
 }
 
-export async function runNodeOnce({ identity, orgId, canvasId, node, inputs }, { sleep = sleepMs, now = Date.now, pollMs = defaultPollMs(), timeoutMs = RUN_TIMEOUT_MS } = {}) {
+export async function runNodeOnce({ identity, orgId, canvasId, node, inputs }, { sleep = sleepMs, now = Date.now, pollMs = defaultPollMs(), timeoutMs = defaultTimeoutMs() } = {}) {
   const requester = requesterFor(identity);
   let execId;
   try {
