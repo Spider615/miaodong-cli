@@ -110,7 +110,7 @@
 - 花钱 / 外发的范围等于用户说的范围；
 - 每次写后固定回执：区 / 智能体 / id、仅本地 or 已推草稿未发布、改了哪些节点、UI 里怎么看；
 - 身份只走 `md auth`，不读 identities.json、不 pbpaste、不在回复里出现 token；不许从老懂数据库或别处找密码；
-- 领域常识：回复在「延时回复」事件那条执行里；测试中心沙箱不真发；跨 bot 导入用例通过率无意义；regression-test ≥50 条且不能指定测试集；试跑跑的是草稿；推完刷新编辑页，旧标签页保存会覆盖推送。
+- 领域常识：回复在「延时回复」事件那条执行里；测试中心沙箱不真发；跨 bot 导入用例通过率无意义；regression-test ≥50 条且不能指定测试集；试跑跑的是草稿；推完刷新编辑页，旧标签页保存会覆盖推送。（09-24 复核：「测试中心沙箱不真发」不准确，测试中心也不只跑草稿，更正见第 2 步 spec §2.4。）
 - 不做 publish / enable / 灰度。
 
 ## 9. 验收（从会话转录可量，均有基线）
@@ -127,8 +127,8 @@
 ## 10. 分步
 
 1. **第 1 步（本计划）**：打包安装 + skill；身份 / 目标换算 / 版本；pull + 索引 + trace/refs/node；apply / diff / check；push；status / log。
-2. 第 2 步：`md exec`（badcase 执行链、`--find`）、`md trial node`（带副作用预检与花费闸门）、测试中心全链路、花费账本与阈值确认（超阈值必须用户本人在终端确认）。
-3. 第 3 步：执行记录检索与采样、本地跑代码节点、并入 test-case-import、老懂侧修 workflow-patch 数组路径 bug（该 bug 同样影响老懂 apply_workflow_patch）。
+2. 第 2 步：`md exec`（badcase 执行链、`--find`）、`md trial node`（带副作用预检与花费闸门）、测试中心全链路、花费账本与阈值确认（超阈值必须用户本人在终端确认）。设计见 `2026-09-24-miaodong-cli-step2-design.md`：用户 09-24 决定把 test-case-import 的能力也并进第 2 步；「在终端确认」改为系统弹窗。
+3. 第 3 步：执行记录按时间均匀采样、本地跑代码节点、老懂侧修 workflow-patch 数组路径 bug（该 bug 同样影响老懂 apply_workflow_patch）。执行记录检索与并入 test-case-import 已提前到第 2 步。
 
 ## 11. 已知事实与不确定
 
