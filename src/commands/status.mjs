@@ -1,4 +1,3 @@
-import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { intArg, strArg } from '../args.mjs';
 import { EXIT } from '../errors.mjs';
@@ -6,25 +5,10 @@ import { readJson } from '../home.mjs';
 import { getCanvas } from '../api.mjs';
 import { compareNodes, contentKey, nodeMap } from '../canvas.mjs';
 import { readLedger } from '../ledger.mjs';
-import { targetFromMeta, workRoot, wsLine } from '../workspace.mjs';
+import { listWorkspaces, targetFromMeta, wsLine } from '../workspace.mjs';
 import { formatTime, out, shortId } from '../output.mjs';
 
 const matchesBot = (item, query) => !query || item.botName.toLowerCase().includes(query.toLowerCase()) || item.botId.startsWith(query);
-
-function listWorkspaces() {
-  const root = workRoot();
-  if (!existsSync(root)) return [];
-  const dirs = [];
-  const subdirs = (dir) => readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => join(dir, entry.name));
-  for (const region of subdirs(root)) {
-    for (const bot of subdirs(region)) {
-      for (const ws of subdirs(bot)) if (existsSync(join(ws, 'meta.json'))) dirs.push(ws);
-    }
-  }
-  return dirs
-    .map((dir) => ({ dir, meta: readJson(join(dir, 'meta.json')), hasAfter: existsSync(join(dir, 'after.json')) }))
-    .sort((a, b) => String(b.meta.pulledAt).localeCompare(String(a.meta.pulledAt)));
-}
 
 async function remoteCheck(query) {
   const latest = new Map();

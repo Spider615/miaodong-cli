@@ -126,3 +126,24 @@ export function recordTransform(dir, file) {
   copyFileSync(file, dest);
   return dest;
 }
+
+export function listWorkspaces() {
+  const root = workRoot();
+  if (!existsSync(root)) return [];
+  const subdirs = (dir) => readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => join(dir, entry.name));
+  const dirs = [];
+  for (const region of subdirs(root)) {
+    for (const bot of subdirs(region)) {
+      for (const ws of subdirs(bot)) if (existsSync(join(ws, 'meta.json'))) dirs.push(ws);
+    }
+  }
+  return dirs
+    .map((dir) => ({ dir, meta: readJson(join(dir, 'meta.json')), hasAfter: existsSync(join(dir, 'after.json')) }))
+    .sort((a, b) => String(b.meta.pulledAt).localeCompare(String(a.meta.pulledAt)));
+}
+
+// 试跑前要知道「本地改了还没推」：看这个智能体最近拉的那个工作副本
+export function latestWorkspaceFor(botId) {
+  const hit = listWorkspaces().find((w) => w.meta.botId === botId);
+  return hit ? loadWorkspace({ ws: hit.dir }) : null;
+}
