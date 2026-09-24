@@ -52,3 +52,15 @@ test('不跟随重定向（防止把 token 带到别的域名）', async () => {
   server.routes['GET /api/r'] = () => ({ status: 302, headers: { Location: 'http://127.0.0.1:1/steal' }, body: '' });
   await assert.rejects(request(identity, '/api/r'), (e) => e.code === 'network');
 });
+
+test('积分不足：单独报出来，带上秒懂给的提示', async () => {
+  server.routes['POST /api/canvas/node/exec'] = () => ({ status: 400, body: { statusCode: 400, errorCode: 'AI_INTEGRAL_POINTS_EXHAUSTED', userMessage: '积分不足，请充值后重试' } });
+  await assert.rejects(request(identity, '/api/canvas/node/exec', { method: 'POST', body: {} }), (e) =>
+    e.code === 'points_exhausted' && /积分不足，请充值后重试/.test(e.message));
+});
+
+test('报错带上 errorMessage 与 errorCode（exec 类接口只给这两个）', async () => {
+  server.routes['POST /api/w'] = () => ({ status: 201, body: { code: 3, errorMessage: '画布中引用的 AI SOP 已被删除', errorCode: 'SOP_DELETED' } });
+  await assert.rejects(request(identity, '/api/w', { method: 'POST', body: {} }), (e) =>
+    e.code === 'business' && /AI SOP 已被删除/.test(e.message) && /\[SOP_DELETED\]/.test(e.message));
+});

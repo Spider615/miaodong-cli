@@ -16,11 +16,19 @@ function buildUrl(origin, path, query) {
   return url;
 }
 
+// 秒懂的报错字段不统一：页面优先展示 userMessage，exec 类接口只给 errorMessage + errorCode，校验失败时 message 是数组
 function messageOf(payload) {
-  const m = payload?.message;
-  if (Array.isArray(m)) return m.join('；');
-  return typeof m === 'string' ? m : '';
+  const parts = [];
+  for (const key of ['userMessage', 'message', 'errorMessage']) {
+    const m = payload?.[key];
+    const text = Array.isArray(m) ? m.join('；') : typeof m === 'string' ? m : '';
+    if (text && !parts.includes(text)) parts.push(text);
+  }
+  if (typeof payload?.errorCode === 'string' && payload.errorCode) parts.push(`[${payload.errorCode}]`);
+  return parts.join(' ');
 }
+
+const POINTS_EXHAUSTED = 'AI_INTEGRAL_POINTS_EXHAUSTED';
 
 function isOrgExpired(payload) {
   return payload?.code === -7 || payload?.reason === 'EXPIRED' || payload?.errorCode === 'ORG_EXPIRED';
@@ -52,6 +60,12 @@ export async function request(identity, path, { method = 'GET', query, body, tim
     payload = null;
   }
 
+  const businessFailed = payload && typeof payload === 'object' && !Array.isArray(payload) && 'code' in payload && Number(payload.code) !== 0;
+  if ((!res.ok || businessFailed) && payload?.errorCode === POINTS_EXHAUSTED) {
+    throw new MdError('points_exhausted', `${identity.label} 的秒懂积分不足：${payload.userMessage || '请充值后重试'}`, {
+      hint: '让用户去秒懂充值；md 不会自动重试',
+    });
+  }
   if (res.status === 401 || (res.status === 403 && !isOrgExpired(payload))) {
     throw new MdError('auth_expired', `${identity.label} 的身份已失效（HTTP ${res.status}）`, {
       exitCode: EXIT.AUTH,
