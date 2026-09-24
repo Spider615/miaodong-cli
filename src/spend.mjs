@@ -54,7 +54,7 @@ export function readSpends() {
 
 export const amountOf = (row) => (typeof row.actual === 'number' ? row.actual : typeof row.estimate === 'number' ? row.estimate : 0);
 
-const dayKey = (value) => {
+export const dayKey = (value = Date.now()) => {
   const d = new Date(value);
   return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
 };
@@ -64,7 +64,7 @@ export function spentOn(rows, when = Date.now()) {
   return rows.filter((r) => dayKey(r.at) === key).reduce((sum, r) => sum + amountOf(r), 0);
 }
 
-// 要不要用户本人批准。estimate 为 null = 估不出花费
+// 要不要用户确认。estimate 为 null = 估不出花费
 export function spendDecision({ estimate, externalCalls = [] }, { limits, today }) {
   const reasons = [];
   if (externalCalls.length) reasons.push(`会真的调用外部系统：${externalCalls.join('、')}`);

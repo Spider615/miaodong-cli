@@ -27,6 +27,7 @@ const spends = (h) => {
   return [...byId.values()];
 };
 const limits = (h, spend) => { mkdirSync(join(h, 'md'), { recursive: true }); writeFileSync(join(h, 'md', 'config.json'), JSON.stringify({ spend })); };
+const codeIn = (stdout) => stdout.match(/确认码：([0-9a-f]{8})/)?.[1];
 
 test('--from-exec：用那次执行里这个节点的输入，去掉平台参数；记账本；结果和 prompt 落盘', async () => {
   reset();
@@ -55,7 +56,7 @@ test('--keep-platform-params 保留；--input 覆盖；--times 2 跑两次并汇
   assert.match(r.stdout, /2 次里 1 种不同输出/);
 });
 
-test('动作类节点不跑；插件节点没有 --allow-plugin 不跑；有了也要本人批准（测试里批准必失败）', async () => {
+test('动作类节点不跑；插件节点没有 --allow-plugin 不跑；有了也要先给确认码、不跑', async () => {
   reset();
   const action = await md(['trial', '触发发送', '--bot', '147bd600']);
   assert.equal(action.code, 5);
@@ -65,32 +66,77 @@ test('动作类节点不跑；插件节点没有 --allow-plugin 不跑；有了�
   assert.match(plugin.stderr, /--allow-plugin/);
   const tool = await md(['trial', '带插件的大模型', '--bot', '147bd600', '--input', 'text=1', '--allow-plugin']);
   assert.equal(tool.code, 5);
-  assert.match(tool.stderr, /没有得到用户本人批准.*会真的调用外部系统：写多维表/);
+  assert.match(tool.stderr, /需要用户确认.*会真的调用外部系统：写多维表/);
+  assert.ok(codeIn(tool.stdout), tool.stdout);
   assert.equal(fake.state.posts.length, 0);
 });
 
-test('预估超单次门槛：要本人批准，没批准就什么都不跑、不记账', async () => {
+test('插件节点：用户同意后带确认码才跑；账本记「用户确认」和那个码', async () => {
+  reset();
+  const h = home();
+  const args = ['trial', '带插件的大模型', '--bot', '147bd600', '--input', 'text=1', '--allow-plugin'];
+  const code = codeIn((await md(args, h)).stdout);
+  assert.ok(code);
+  const r = await md([...args, '--confirm', code], h);
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(fake.state.posts.length, 1);
+  const [row] = spends(h);
+  assert.deepEqual([row.approved, row.code], ['confirm', code]);
+});
+
+test('预估超单次门槛：不跑、不记账，给确认码；码不对不跑；带对的码才跑；同一个码不能再用', async () => {
   reset();
   const h = home();
   limits(h, { perCommand: 0.001, perDay: 10 });
-  const r = await md(['trial', '回答生成', '--bot', '147bd600', '--from-exec', X(2)], h);
+  const args = ['trial', '回答生成', '--bot', '147bd600', '--from-exec', X(2)];
+  const r = await md(args, h);
   assert.equal(r.code, 5);
   assert.match(r.stderr, /超过单次门槛/);
+  assert.match(r.stdout, /预计 ¥0\.010/);
+  const code = codeIn(r.stdout);
+  assert.ok(code, r.stdout);
   assert.equal(fake.state.posts.length, 0);
   assert.deepEqual(spends(h), []);
+  const wrong = await md([...args, '--confirm', '00000000'], h);
+  assert.equal(wrong.code, 5);
+  assert.match(wrong.stderr, /确认码对不上/);
+  assert.equal(fake.state.posts.length, 0);
+  const ok = await md([...args, '--confirm', code], h);
+  assert.equal(ok.code, 0, ok.stderr);
+  assert.equal(fake.state.posts.length, 1);
+  const again = await md([...args, '--confirm', code], h);
+  assert.equal(again.code, 5);
+  assert.match(again.stderr, /已经用过/);
+  assert.equal(fake.state.posts.length, 1);
 });
 
-test('估不出花费：先跑 1 次，用实际推算其余；推算超门槛就停下要批准，已跑的记账', async () => {
+test('不需要确认时，多给的 --confirm 不影响：照常跑，记「自动」', async () => {
+  reset();
+  const h = home();
+  const r = await md(['trial', '回答生成', '--bot', '147bd600', '--from-exec', X(2), '--confirm', 'deadbeef'], h);
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(spends(h)[0].approved, 'auto');
+});
+
+test('估不出花费：先跑 1 次，用实际推算其余；推算超门槛就停下、给其余几次的确认码，已跑的记账；带码跑剩下的', async () => {
   reset();
   const h = home();
   limits(h, { perCommand: 0.02, perDay: 10 });
-  const r = await md(['trial', '回答生成', '--bot', '147bd600', '--input', 'text=你好', '--times', '3'], h);
+  const args = ['trial', '回答生成', '--bot', '147bd600', '--input', 'text=你好'];
+  const r = await md([...args, '--times', '3'], h);
   assert.equal(r.code, 5);
   assert.equal(fake.state.posts.length, 1);
   assert.match(r.stdout, /估不出，先跑 1 次看实际/);
   assert.match(r.stderr, /超过单次门槛/);
+  assert.match(r.stderr, /--times 改成 2/);
   const [row] = spends(h);
   assert.deepEqual([row.estimate, row.actual, row.runs], [null, 0.0123, 1]);
+  const code = codeIn(r.stdout);
+  assert.ok(code, r.stdout);
+  const rest = await md([...args, '--times', '2', '--confirm', code], h);
+  assert.equal(rest.code, 0, rest.stderr);
+  assert.equal(fake.state.posts.length, 3);
+  assert.equal(spends(h)[1].approved, 'confirm');
 });
 
 test('本地改了还没推：醒目提示跑的是草稿上的旧版本', async () => {
@@ -113,7 +159,7 @@ test('POST 5xx：报不确定、不重发，退出码 1', async () => {
   assert.equal(fake.state.posts.length, 1);
 });
 
-test('估不出花费、第 1 次又超时没跑完：还是估不出，其余几次要本人批准，不能当 ¥0 放行', async () => {
+test('估不出花费、第 1 次又超时没跑完：还是估不出，其余几次要用户确认，不能当 ¥0 放行', async () => {
   reset({ runningPolls: 100000 });
   const h = home();
   const r = await runCli(['trial', '回答生成', '--bot', '147bd600', '--input', 'text=你好', '--times', '3'], { home: h, env: { MD_TRIAL_TIMEOUT_MS: '50' } });
@@ -121,6 +167,7 @@ test('估不出花费、第 1 次又超时没跑完：还是估不出，其余�
   assert.equal(fake.state.posts.length, 1);
   assert.match(r.stdout, /#1 ⏳ 5 分钟没跑完|#1 ⏳ .*没跑完/);
   assert.match(r.stderr, /估不出花费/);
+  assert.ok(codeIn(r.stdout), r.stdout);
   const [row] = spends(h);
   assert.deepEqual([row.runs, row.unknownRuns, row.actualPerRun], [1, 1, null]);
 });

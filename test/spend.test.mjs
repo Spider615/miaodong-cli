@@ -34,7 +34,7 @@ test('今天已花：有实际用实际，没有用预估；不算昨天的', ()
   assert.equal(spentOn(rows, now), 0.8);
 });
 
-test('要不要本人批准：超单次、超每日、估不出、今天已到上限、会调外部系统', () => {
+test('要不要用户确认：超单次、超每日、估不出、今天已到上限、会调外部系统', () => {
   const limits = { perCommand: 2, perDay: 10 };
   assert.deepEqual(spendDecision({ estimate: 1 }, { limits, today: 0 }), { needApproval: false, reasons: [] });
   assert.match(spendDecision({ estimate: 3 }, { limits, today: 0 }).reasons.join(), /超过单次门槛 ¥2/);

@@ -1,14 +1,14 @@
-// md spend：看花费（今天、最近几天、每一笔），改门槛。改门槛本身也要用户本人批准——否则 AI 被拦下后可以自己把门槛调高。
+// md spend：看花费（今天、最近几天、每一笔），改门槛。调高门槛也要用户确认——否则 AI 被拦下后可以自己把门槛调高；调低只会更严，直接生效。
 
 import { intArg, strArg } from '../args.mjs';
 import { EXIT, MdError, usage } from '../errors.mjs';
 import { formatTime, out } from '../output.mjs';
 import { formatCost } from '../execs.mjs';
-import { loadLimits, readSpends, saveLimits, spentOn } from '../spend.mjs';
-import { requestApproval } from '../approve.mjs';
+import { dayKey, loadLimits, readSpends, saveLimits, spentOn } from '../spend.mjs';
+import { confirmCode, givenCode } from '../confirm.mjs';
 
 const KIND = { trial: '试跑', test: '测试' };
-const APPROVED = { auto: '自动', dialog: '弹窗同意', tty: '终端同意' };
+const APPROVED = { auto: '自动', confirm: '用户确认' };
 
 function moneyArg(args, key) {
   const v = strArg(args, key);
@@ -18,22 +18,29 @@ function moneyArg(args, key) {
   return n;
 }
 
-export async function changeLimits(args, { approve = requestApproval } = {}) {
+function changeLimits(args) {
   const perCommand = moneyArg(args, 'per-command');
   const perDay = moneyArg(args, 'per-day');
   if (perCommand === undefined && perDay === undefined) throw usage('要给 --per-command 和 / 或 --per-day（单位：元）');
+  const given = givenCode(args);
   const before = loadLimits();
   const next = { perCommand: perCommand ?? before.perCommand, perDay: perDay ?? before.perDay };
-  const approval = await approve({
-    title: 'md：改花费门槛',
-    lines: [
-      `单次门槛：${formatCost(before.perCommand)} → ${formatCost(next.perCommand)}`,
-      `每日上限：${formatCost(before.perDay)} → ${formatCost(next.perDay)}`,
-      '',
-      '由 AI 发起；只有你本人能点「同意」。',
-    ],
-  });
-  if (!approval.ok) throw new MdError('not_approved', `门槛没改：${approval.reason}`, { exitCode: EXIT.BLOCKED });
+  out(`单次门槛：${formatCost(before.perCommand)} → ${formatCost(next.perCommand)}`);
+  out(`每日上限：${formatCost(before.perDay)} → ${formatCost(next.perDay)}`);
+  if (next.perCommand === before.perCommand && next.perDay === before.perDay) {
+    out('门槛没变');
+    return EXIT.OK;
+  }
+  if (next.perCommand > before.perCommand || next.perDay > before.perDay) {
+    const code = confirmCode({ kind: 'limit', before, next, day: dayKey() });
+    if (given !== code) {
+      out(`确认码：${code}`);
+      throw new MdError(given === null ? 'confirm_needed' : 'confirm_mismatch', given === null ? '调高门槛要用户确认，门槛没改' : `确认码对不上（给的是 ${given || '空'}，当前是 ${code}），门槛没改`, {
+        exitCode: EXIT.BLOCKED,
+        hint: `把新旧门槛单独告诉用户（不要夹在别的问题里）；用户明确同意后，同一条命令加 --confirm ${code}`,
+      });
+    }
+  }
   saveLimits(next);
   out(`花费门槛已改：单次 ${formatCost(next.perCommand)}，每日 ${formatCost(next.perDay)}`);
   return EXIT.OK;
@@ -62,10 +69,10 @@ function showSpend(args) {
 }
 
 export const spend = {
-  summary: '花费：今天花了多少、最近几天、每一笔；spend limit 改门槛（要用户本人在弹窗里同意）',
+  summary: '花费：今天花了多少、最近几天、每一笔；spend limit 改门槛（调高要用户确认）',
   usage: [
     'md spend [--days 7] [--limit 10]',
-    'md spend limit --per-command <元> --per-day <元>     改门槛：要用户本人在弹窗里点同意',
+    'md spend limit --per-command <元> --per-day <元> [--confirm <码>]   改门槛：调高要用户确认（先给确认码），调低直接生效',
   ].join('\n'),
   async run(args) {
     if (args._[0] === 'limit') return changeLimits(args);
