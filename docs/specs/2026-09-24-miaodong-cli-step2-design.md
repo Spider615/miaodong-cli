@@ -109,28 +109,45 @@
 
 **起跑**
 - 用 `POST test-task/create`，body 是 `{testSetId, canvasId, name, testRound[, concurrency, botId]}`，返回 `data.testTaskId`【实测，共 12 次】。
+  - 必填四项由空 body 的 400 校验列出：`testSetId`、`canvasId`、`name` 是字符串，`testRound` 是数字【实测 09-25】。
+  - 任务记录里轮数显示成 `repeatTimes`，不是 `testRound`【实测 09-25】。
 - `canvasId` 决定跑草稿还是某个版本。任务会选中测试集里的全部用例【实测】。
 - `regression-test` 不用：服务端要求回归集至少 50 条，而且会忽略 testSetId【实测】。
 
 **任务状态**
 - 同一个 bot 上的任务会排队，后建的处于 `pending`【实测】。
-- 只有暂停（`test-task/pause`），没有取消【实测】。
+- 只有暂停（`test-task/pause`，body `{testTaskId}`），没有取消【实测；body 09-25 由 400 校验确认】。
+- `test-task/list` 和 `test-task/detail` 的字段【实测 09-25】：`testTaskId, testSetId, testSetName, selectedTestCaseIds, name, canvasId, canvasName, canvasVersion, repeatTimes, concurrency, status, totalTestCaseCount, processedTestCaseCount, passedTestCaseCount, failedTestCaseCount, passRate, totalCostInCny, averageCostInCny, taskDuration, startedAt, origin, createdAt`。
+  - `totalTestCaseCount` 是用例数，`processedTestCaseCount` 是用例数 × 轮数。
+  - 任务可以只选部分用例（`selectedTestCaseIds`）；不指定时选中集里全部用例。
+- 删掉测试集之后，任务记录还在，`detail` 照样能查到【实测 09-25】。
 - 判断完成只看 `status === 'finished'`；多轮时 processed 会大于 total【实测】。
 
 **花费**
 - 任务的 `totalCostInCny / averageCostInCny / tokenCount` 只在 `finished` 后才有值，暂停后仍是 null【实测】。
-- 逐条的 `test-task-item.costInCny` 有值【实测】。
+- `averageCostInCny` = 总花费 ÷ 跑过的条数（含空跑的条目）【实测 09-25：2 条里 1 条空跑，平均是总花费的一半】。
+- 逐条的 `test-task-item.costInCny` 在这一条跑完后才有值，跑的过程中一直是 null；空跑的条目始终是 null【实测 09-25】。
+  所以进度里的「已花」只能把跑完的条目加起来。
 - 没有预估接口。单条从 ¥0（链路没触发）到 ¥0.29 不等【实测】。
 
 **逐条结果** `GET test-task-item/list?testTaskId&current&pageSize=50`
 - 关键字段：`testCaseName, passed, executedActions[{type,nodeId,nodeName,summary}], canvasActionOutputAssertionResult[{type,passed,message,llmReason,actualOutput,…}], canvasExecId, costInCny, processDuration, triggerExists`【实测】。
+- 09-25 实测的完整字段：`testTaskItemId, testTaskId, testCaseId, testCaseName, dimension, scenarioNodeId, scenarioPath, status, triggerEvent, passed, processDuration, canvasExecId, canvasExecAvailable, testNodeOutputAssertionResult, canvasActionOutputAssertionResult, executedActions, tokenCount, costInCny, errorMessage, triggerContent, triggerExists`。
+  - 条目 `status`：`pending → processing → success`。
+  - 断言结果的字段：`type, passed, assertionDetailedInfo, expectedValue, actualValue, nodeId, nodeName`；非 LLM 断言另有 `message`；事件断言另有 `similarity, threshold, actualOutput{type, payload{eventId, eventName, params}}`。样本里没见到 `llmReason`。
 - 发送在同一条链里时，回复就是 `send-text-message` 的 `summary`。
 - 发送在下游事件链里时，测试项里没有发送，要用 `canvasExecId` 去详情里取【实测】。`canvas-event-action` 的 summary 只有「触发 <事件名> 事件」，不带参数；测试执行的详情里 `outputActions` 带着事件参数【实测 09-24】。
 - 逐条结果 pageSize 200 可用，响应带 `page.total`；`test-task/list` 按 `testSetId` 筛选生效【实测 09-24】。
 
 **从执行记录导入** `POST test-case/import`
 - body 是 `{testSetId, canvasExecIds[], includeSessionMemory}`，每批 20 条跑通过【实测】。
+- 三个字段都会校验：`testSetId` 和每个 `canvasExecIds` 必须是 UUID，至少 1 条；`includeSessionMemory` 必须是布尔值【实测 09-25】。
 - 计数在 data 外面：`{imported, failed, skippedNodeTypes}`【实测】。
+- 别的智能体的执行也能导进来（`imported: 1`），导入时不做任何检查【实测 09-25】。
+- 导入的用例：
+  - 事件触发类的 `triggerInputs` 是 `{eventId, executionId, data}`；
+  - 带着当时的全部会话变量（样本 56 个）；
+  - 断言按源执行的每个动作自动生成：写字段、打标签、发文本、发事件各一条【实测 09-25】。
 - 导入后：
   - 用例名固定为 `调优中心导入(<execId>)`；
   - `isReviewed` 是 false；
@@ -138,7 +155,16 @@
 
 **跨智能体导入**
 - 导入的用例带着源 bot 的 eventId、会话变量 UUID，以及断言里的 fieldId、eventId；不改就会静默空跑【实测】。
+- 空跑时秒懂没有任何专门标记【实测 09-25】：`triggerExists` 仍是 true，条目 `status` 是 `success`、`passed` 是 false。
+  能认出来的只有 `canvasExecAvailable=false`、`costInCny=null`、`processDuration=null`。
+  所以 md 要在跑之前按名字核对事件（§6.5），结果里按 `canvasExecAvailable=false` 标「没有真正执行」。
 - 两个 bot 的事件、会话变量可以按名字一一对上：事件 52/52、会话变量 131/131 同名【实测】。
+
+**其它接口的真实形状**【实测 09-25，兴趣岛 147bd600 / 179cd443，只读】
+- `test-set/list` 每行：`testSetId, name, testCaseCount, testNodes, createdAt, updatedAt`。列表里没有区分「回归测试集」的字段（建集响应里有 `type`），所以标不出来。
+- `test-set/create {botId, name}` 返回 `data.testSetId`。
+- `scenario/tree` 返回 `data: {tree[], unclassifiedCount, classifiedCount, uncoveredNodeCount, excludedNodeCount}`；这两个 bot 的树都是空的。
+- `session-memory/list` 每个变量：`id, name, isDefault, type, description`；「消息历史」是默认变量。
 
 **外部用例**（来自 test-case-import skill，1.18.4 实测 674 条和 1075 条）
 - 写入：
@@ -324,7 +350,7 @@ md test import <集> --from-execs <文件或 id…> [--from-bot <源智能体>] 
   - 用 `test-case/update` 回写完整的用例对象，再回读核对，确认里面不再有源 bot 的 id。
   - 名字在目标 bot 里找不到、或者重名的，列出受影响的用例。这些用例在 `md test run` 的跑前检查里会被拦下。
   - 源智能体来自 JSONL 或 `--from-bot`。只给了 id 却发现事件对不上时，报错并要求补 `--from-bot`。
-- **审核状态**：导入的用例是 `isReviewed:false`。如果开工前核对发现未审核的用例会被跳过，md 就在导入后统一标成已审核，并在输出里说明。
+- **审核状态**：导入的用例是 `isReviewed:false`。核对 6 证实未审核的用例照样会跑（§2.3），所以不去改它。
 - **记下来源**：每条用例对应哪条源执行（时间、触发文本、线上回复，取自 JSONL），供结果报告的「线上回复」列使用。
 
 ### 6.3 从文件导入外部用例
@@ -534,11 +560,10 @@ md test run <集> [--version vX] [--rounds 1] [--concurrency 5] [--name <任务�
 **小额花费**（需要用户授权，总额 ≤ ¥1，在「【测试测试测试】太极2.0 测试专用版」上做）：
 
 5. ~~单节点试跑传版本的 canvasId~~：2b 决定不做。试跑只跑草稿、不提供 `--version`，常用流程是「推草稿再试跑」；也省掉一次要用户授权的花费。
-6. 建一个临时测试集，导入 1–2 条执行，核对：
-   - 未审核的用例会不会被跳过；
-   - 事件对不上时 `triggerExists` 是不是 false；
-   - 运行中逐条的 `costInCny` 是否实时更新。
-   用完删掉这个临时测试集。
+6. ✅ 09-25 已做（在「【测试测试测试】太极2.0 测试专用版」上，花费 ¥0.024，临时测试集已删）。结论写回了 §2.3：
+   - 未审核的用例不会被跳过（2/2 都跑了），所以导入后不用标成已审核；
+   - 事件对不上时 `triggerExists` 仍是 true，只能靠 `canvasExecAvailable=false` 认出空跑；
+   - 逐条 `costInCny` 不实时：跑完那一条才有值。
 7. ~~在用户机器上试弹一次对话框~~：2026-09-25 用户决定不用弹窗，不做。
 
 核对结论写回本文 §2。影响实现的地方，按上文各节里「核对后再定」的写法执行。
