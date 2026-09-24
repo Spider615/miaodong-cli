@@ -195,16 +195,23 @@ function showFind(args, target, norm) {
 
 async function showDrift(target, norm) {
   const draft = await getCanvas(target.identity, target.orgId, target.botId);
-  const { changed, removed } = driftAgainst(norm, draft.rawCanvas);
+  const { noSnapshot, changed, removed, wires } = driftAgainst(norm, draft.rawCanvas);
   out(targetLine(target));
   out(`执行时 ${norm.version || '版本未知'} → 现在的草稿（最后保存 ${formatTime(draft.updatedAt)}）`);
-  out(`这次执行跑过的 ${norm.nodes.length} 个节点里：${changed.length} 个改过、${removed.length} 个在草稿里已删除`);
+  if (noSnapshot) {
+    out('这条执行的详情里没有画布快照，没法和草稿比。');
+    return EXIT.OK;
+  }
+  const unique = new Set(norm.nodes.map((n) => n.id)).size;
+  out(`这次执行跑过的 ${unique} 个节点里：${changed.length} 个改过、${removed.length} 个在草稿里已删除；它们之间的连线新增 ${wires.added.length} 条、删掉 ${wires.removed.length} 条`);
   for (const c of changed.slice(0, 50)) {
     out(`  ~ #${c.node.order} ${c.node.name} [${shortId(c.node.id)}]：${c.paths.slice(0, 5).join('、')}${c.paths.length > 5 ? ` 等 ${c.paths.length} 处` : ''}`);
   }
   if (changed.length > 50) out(`  …另有 ${changed.length - 50} 个改过的节点`);
   for (const n of removed) out(`  - #${n.order} ${n.name} [${shortId(n.id)}]`);
-  if (!changed.length && !removed.length) out('  这次跑过的节点在草稿里都没改过。');
+  for (const [from, to] of wires.added.slice(0, 20)) out(`  + 连线 ${from} → ${to}`);
+  for (const [from, to] of wires.removed.slice(0, 20)) out(`  - 连线 ${from} → ${to}`);
+  if (!changed.length && !removed.length && !wires.added.length && !wires.removed.length) out('  这次跑过的节点和它们之间的连线在草稿里都没改过。');
   return EXIT.OK;
 }
 

@@ -115,6 +115,20 @@ test('driftAgainst：跑过的节点里哪些在草稿里改了、删了', () =>
   assert.deepEqual(removed.map((n) => n.name), ['规则中心']);
 });
 
+test('driftAgainst：也比跑过的节点之间的连线；执行里没有快照时说没法比（审查 M-3）', () => {
+  const norm = normalizeDetail(delayDetail());
+  // 只改连线的修复：去掉 规则中心→触发发送，改成 回答生成→触发发送
+  const draft = execSnapshot().filter((c) => c.id !== U(104)).concat(edge(120, 2, 4));
+  const r = driftAgainst(norm, draft);
+  assert.deepEqual(r.changed, []);
+  assert.deepEqual(r.wires.added, [['回答生成', '触发发送']]);
+  assert.deepEqual(r.wires.removed, [['规则中心', '触发发送']]);
+  const empty = delayDetail();
+  empty.canvas.rawCanvas = [];
+  empty.canvasExec.rawCanvas = [];
+  assert.equal(driftAgainst(normalizeDetail(empty), draft).noSnapshot, true);
+});
+
 test('exec-store：详情只存一份画布；缓存按 id 能找回；未结束的执行不当缓存', async () => {
   process.env.MD_HOME = mkdtempSync(join(tmpdir(), 'md-store-'));
   const { execDir, findCachedExec, loadCachedDetail, saveDetail } = await import('../src/exec-store.mjs');

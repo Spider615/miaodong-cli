@@ -225,11 +225,16 @@ export function verdictLine(v) {
 
 // 执行时的快照 vs 现在的草稿：只看这次跑过的节点；坐标、尺寸这类纯渲染字段不算改动
 export function driftAgainst(norm, draftCanvas) {
+  if (!norm.snapshot.length) return { noSnapshot: true, changed: [], removed: [], wires: { added: [], removed: [] } };
   const draft = nodeMap(draftCanvas);
   const snap = nodeMap(norm.snapshot);
   const changed = [];
   const removed = [];
+  const seen = new Set();
   for (const node of norm.nodes) {
+    // 同一个节点跑了多次（循环）只比一次
+    if (seen.has(node.id)) continue;
+    seen.add(node.id);
     const before = snap.get(node.id);
     if (!before) continue;
     const now = draft.get(node.id);
@@ -240,5 +245,17 @@ export function driftAgainst(norm, draftCanvas) {
     if (contentKey(before) === contentKey(now)) continue;
     changed.push({ node, paths: fieldChanges(stripLayout(before), stripLayout(now)).map((c) => c.path) });
   }
-  return { changed, removed };
+  // 只改连线的修复（挪节点、插节点）很常见：跑过的节点之间的连线也要比，按「源→目标」对齐，不看端口 id（审查 M-3）
+  const nameOf = new Map(norm.nodes.map((n) => [n.id, n.name]));
+  const pairs = (canvas) => new Set(asArray(canvas)
+    .filter((c) => c && typeof c === 'object' && isEdgeCell(c) && seen.has(c.source?.cell) && seen.has(c.target?.cell))
+    .map((c) => `${c.source.cell}>${c.target.cell}`));
+  const before = pairs(norm.snapshot);
+  const now = pairs(draftCanvas);
+  const names = (key) => key.split('>').map((id) => nameOf.get(id) ?? shortId(id));
+  const wires = {
+    added: [...now].filter((k) => !before.has(k)).map(names),
+    removed: [...before].filter((k) => !now.has(k)).map(names),
+  };
+  return { changed, removed, wires };
 }
