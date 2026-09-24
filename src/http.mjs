@@ -74,7 +74,7 @@ export async function request(identity, path, { method = 'GET', query, body, tim
   }
   if (res.status === 403) throw new MdError('org_expired', `${identity.label} 的企业已到期（HTTP 403）`);
   if (!res.ok) {
-    throw new MdError('upstream', `秒懂接口报错 ${method} ${path} → HTTP ${res.status}：${messageOf(payload) || text.slice(0, 200)}`);
+    throw new MdError('upstream', `秒懂接口报错 ${method} ${path} → HTTP ${res.status}：${messageOf(payload) || text.slice(0, 200)}`, { status: res.status });
   }
   if (payload && typeof payload === 'object' && !Array.isArray(payload) && 'code' in payload && Number(payload.code) !== 0) {
     throw new MdError('business', `秒懂业务错误 ${method} ${path}：code=${payload.code} ${messageOf(payload)}`.trim());

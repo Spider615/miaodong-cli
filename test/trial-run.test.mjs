@@ -60,3 +60,23 @@ test('企业已到期（HTTP 403）是明确被拒：原样报企业到期，不
     fake.server.routes['POST /api/canvas/node/exec'] = original;
   }
 });
+
+test('5xx 的正文里恰好带着「HTTP 404」：按真实状态码算，还是「不确定有没有启动」，不能判成没启动（审查 I5）', async () => {
+  reset();
+  const original = fake.server.routes['POST /api/canvas/node/exec'];
+  fake.server.routes['POST /api/canvas/node/exec'] = ({ body }) => {
+    fake.state.posts.push(body);
+    return { status: 502, body: { message: 'upstream node-exec returned HTTP 404 Not Found' } };
+  };
+  try {
+    await assert.rejects(runNodeOnce(job(), noWait), (e) => e.code === 'trial_start_unknown' && /不要重试/.test(e.hint));
+  } finally {
+    fake.server.routes['POST /api/canvas/node/exec'] = original;
+  }
+});
+
+test('还没发请求就失败（比如草稿没有 canvasId）：明确没启动，不说「不确定、不要重试」', async () => {
+  reset();
+  await assert.rejects(runNodeOnce({ ...job(), canvasId: '' }, noWait), (e) => e.code === 'trial_not_started');
+  assert.equal(fake.state.posts.length, 0);
+});
