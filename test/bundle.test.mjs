@@ -10,6 +10,7 @@ import { encodeAuthBlob } from './helpers/seed.mjs';
 import { PROMPT_FIX, planCodeOf, startBotServer } from './helpers/bot-server.mjs';
 import { seedIdentity } from './helpers/seed.mjs';
 import { startExecServer } from './helpers/exec-server.mjs';
+import { startTrialServer } from './helpers/trial-server.mjs';
 import { X } from './helpers/exec-fixtures.mjs';
 
 let bundle;
@@ -70,6 +71,19 @@ test('产物能查执行记录（把老懂的执行记录纯函数一起打进�
     assert.equal(r.code, 0, r.stderr);
     assert.match(r.stdout, /整条链最终：发文本/);
     assert.doesNotMatch(r.stderr, /ExperimentalWarning/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('产物能试跑（把老懂的试跑纯函数一起打进去，且不带数据库依赖）', async () => {
+  const { server } = await startTrialServer();
+  try {
+    const home = tempHome();
+    seedIdentity(home, { key: 'k1', label: '测试区', origin: server.origin, token: 't', orgs: [{ id: 'org-1', name: '兴趣岛平台' }], currentOrgId: 'org-1' });
+    const r = await runCli(['trial', '回答生成', '--bot', '147bd600', '--from-exec', X(2)], { home, bundle });
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout, /#1 ✅ success/);
   } finally {
     await server.close();
   }
