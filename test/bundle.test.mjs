@@ -8,6 +8,9 @@ import { runCli, tempHome } from './helpers/run-cli.mjs';
 import { writeFileSync as writeFile } from 'node:fs';
 import { encodeAuthBlob } from './helpers/seed.mjs';
 import { PROMPT_FIX, planCodeOf, startBotServer } from './helpers/bot-server.mjs';
+import { seedIdentity } from './helpers/seed.mjs';
+import { startExecServer } from './helpers/exec-server.mjs';
+import { X } from './helpers/exec-fixtures.mjs';
 
 let bundle;
 before(async () => {
@@ -56,4 +59,18 @@ test('产物不带源码注释和源码路径（打包会把内部注释原样�
   const text = readFileSync(bundle, 'utf-8');
   assert.doesNotMatch(text, /\/\/ (apps|packages|miaodong-kit)\//);
   assert.doesNotMatch(text, /锘崴|xiaoju-new-pc|ddregion/);
+});
+
+test('产物能查执行记录（把老懂的执行记录纯函数一起打进去，且不带数据库依赖）', async () => {
+  const server = await startExecServer();
+  try {
+    const home = tempHome();
+    seedIdentity(home, { key: 'k1', label: '测试区', origin: server.origin, token: 't', orgs: [{ id: 'org-1', name: '兴趣岛平台' }], currentOrgId: 'org-1' });
+    const r = await runCli(['exec', X(2)], { home, bundle });
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout, /整条链最终：发文本/);
+    assert.doesNotMatch(r.stderr, /ExperimentalWarning/);
+  } finally {
+    await server.close();
+  }
 });
