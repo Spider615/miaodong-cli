@@ -1,5 +1,7 @@
 # 秒懂 CLI 第 2 步 2b：批准闸门 + md spend + md trial Implementation Plan
 
+> **2026-09-25 执行中变更**：用户决定去掉弹窗，批准闸门改成确认码（spec §7 已改写）；终审的修复也改了试跑的花费判断（逐次止损、花费未知不当 ¥0、判断和记账加锁）。下文的 approve.mjs / 弹窗相关步骤是当时的计划，已不再代表代码现状，以 spec 和 ledger 为准。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 给 md 加三样东西：

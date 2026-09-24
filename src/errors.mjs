@@ -1,4 +1,4 @@
-// md 的错误都带退出码：AI 按退出码决定下一步（3 = 让用户重新取身份，4 = 目标有歧义，5 = 推送被拦）。
+// md 的错误都带退出码：AI 按退出码决定下一步（3 = 让用户重新取身份，4 = 目标有歧义，5 = 被拦下：推送冲突或要用户确认）。
 export const EXIT = Object.freeze({ OK: 0, ERROR: 1, USAGE: 2, AUTH: 3, TARGET: 4, BLOCKED: 5 });
 
 export class MdError extends Error {

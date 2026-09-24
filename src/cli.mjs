@@ -12,7 +12,7 @@ const BUILD = typeof __MD_BUILD__ === 'string' ? __MD_BUILD__ : 'dev';
 function renderHelp() {
   const lines = ['用法：md <命令> [参数]    （md <命令> --help 看该命令的详细用法）', '', '命令：'];
   for (const [name, command] of Object.entries(COMMANDS)) lines.push(`  ${name.padEnd(9)} ${command.summary}`);
-  lines.push('', '退出码：0 成功 · 1 错误或自检有问题 · 2 用法错误 · 3 需要取身份 · 4 目标找不到或有歧义 · 5 推送被拦');
+  lines.push('', '退出码：0 成功 · 1 错误或自检有问题 · 2 用法错误 · 3 需要取身份 · 4 目标找不到或有歧义 · 5 被拦下（推送冲突 / 计划码不符，或要用户确认）');
   return lines.join('\n');
 }
 
