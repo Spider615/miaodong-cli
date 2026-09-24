@@ -57,7 +57,8 @@
 **列表** `POST /api/canvas/history/list?orgId`
 - body 是 `{botId, startTimestamp, endTimestamp, current, pageSize, feedbackStatus?, keyword?, sessionId?, …}`。起止时间是毫秒，必传；pageSize 用 100 可以。按时间从新到旧排【实测】。
 - 每条约 25KB，其中 81% 是 `sessionMemorySnapshot`【实测】。
-- **实测生效的服务端筛选只有 4 个**：时间、`sessionId`、`feedbackStatus`、`keyword`。`triggerType / actionType / canvasId / isCanary / allNodesSuccess / execId / processStatus` 只有前端证据【前端】。按事件名、按节点都筛不了。
+- **服务端筛选**：时间、`sessionId`、`feedbackStatus`、`keyword` 早有实测；`triggerType / actionType / canvasId（版本）/ isCanary / allNodesSuccess / execId` 在 09-24 核对中全部生效【实测 09-24】。按事件名、按节点筛不了。
+- **`keyword` 按词匹配用户消息和回复文本**：整句、开头两个字都能命中；从中间截的半个词可能搜不到；事件载荷和事件名搜不到【实测 09-24】。
 - 列表项共 27 个键，包括 `execId, sessionId, createdAt, status, processDuration, canvasVersion, canvasName, isCanary, triggerContent{triggerType, content}, rawTrigger, outputActions[{type,payload}], tokenCount, totalCostInCny, feedbackStatus`。**事件名只在 `triggerContent.content.eventName` 里有**【实测】。列表项里没有 `botId`、`allNodesSuccess` 和节点数据。
 - 速度：高流量 bot（147bd600）一天约 90 万条执行。7 天窗口光首页就要 17–22 秒；按会话、按关键词查只要 1–3 秒【实测】。
 
@@ -124,7 +125,8 @@
 **逐条结果** `GET test-task-item/list?testTaskId&current&pageSize=50`
 - 关键字段：`testCaseName, passed, executedActions[{type,nodeId,nodeName,summary}], canvasActionOutputAssertionResult[{type,passed,message,llmReason,actualOutput,…}], canvasExecId, costInCny, processDuration, triggerExists`【实测】。
 - 发送在同一条链里时，回复就是 `send-text-message` 的 `summary`。
-- 发送在下游事件链里时，测试项里没有发送，要用 `canvasExecId` 去详情里取【实测】。
+- 发送在下游事件链里时，测试项里没有发送，要用 `canvasExecId` 去详情里取【实测】。`canvas-event-action` 的 summary 只有「触发 <事件名> 事件」，不带参数；测试执行的详情里 `outputActions` 带着事件参数【实测 09-24】。
+- 逐条结果 pageSize 200 可用，响应带 `page.total`；`test-task/list` 按 `testSetId` 筛选生效【实测 09-24】。
 
 **从执行记录导入** `POST test-case/import`
 - body 是 `{testSetId, canvasExecIds[], includeSessionMemory}`，每批 20 条跑通过【实测】。
@@ -189,10 +191,10 @@ md exec --bot <智能体> [--since 24h | --from … --to …] [--keyword 词] [-
 ```
 
 - **默认条件**：最近 24 小时，不筛赞踩。
-- **服务端筛和本地筛**：服务端能筛的放进请求，其余拉回本地筛。triggerType 等几个条件服务端认不认，开工前核对（§9）后再定；认的就放进请求。
-  - `--failed` 在服务端支持时用 `allNodesSuccess=false`，否则按执行状态在本地筛。
+- **服务端筛和本地筛**：`--keyword / --session / --down|--up / --trigger / --action / --version / --canary|--no-canary / --failed` 全部放进请求（09-24 核对都生效）；`--version` 先经 list-version 换成版本 canvasId，`--failed` 即 `allNodesSuccess=false`。只有 `--event` 要本地筛：请求里先带 `triggerType=canvas-event-trigger` 缩小范围，再按 `triggerContent.content.eventName` 本地比对。
   - `--trigger`、`--action` 接受简写，例如 text、image、event、send、handover。
-- **扫描量**：本地筛时每页 100 条，最多扫 `--scan` 页（默认 5 页，即 500 条），命中数够 `--limit` 就停。
+  - `--keyword` 按词匹配（见 §2.1）；搜不到时提示换成完整的词或更短的词，事件用 `--event`。
+- **扫描量**：只有 `--event` 需要翻页扫：每页 100 条，最多扫 `--scan` 页（默认 5 页，即 500 条），命中数够 `--limit` 就停。
   - 输出里说明「窗口内共 N 条，扫了 M 条，命中 K 条」。
   - 没扫完时，给出接着扫的写法。
 - **每行显示**：
@@ -209,7 +211,7 @@ md exec --bot <智能体> [--since 24h | --from … --to …] [--keyword 词] [-
 ### 4.2 看一条：`md exec <执行id> [--bot <智能体>]`
 
 - **取数和缓存**：取详情后缓存到 `execs/<区>/<bot8>/<execId>/`，去掉重复的那份 `canvasExec.rawCanvas`。状态已经结束的执行，再看时直接用缓存。
-- **省略 `--bot`**：在已取身份的各企业里按 id 找，前提是开工前核对确认查详情不需要 botId；否则 `--bot` 必填。
+- **省略 `--bot`**：在已取身份的各企业里按 id 找（09-24 核对：查详情不带 botId 也能取到）。
 - **节点加工**：
   - 名字、类型、分类取自执行当时的画布快照；
   - 顺序按快照里的连线，对执行过的节点做拓扑排序；
@@ -499,7 +501,7 @@ md test run <集> [--version vX] [--rounds 1] [--concurrency 5] [--name <任务�
 
 ## 9. 开工前真跑核对
 
-**只读，不花钱**（在兴趣岛现有的智能体上做）：
+**只读，不花钱**（在兴趣岛现有的智能体上做；09-24 已完成，结论已写回 §2）：
 1. 列表的 `triggerType / actionType / canvasId / isCanary / allNodesSuccess / execId` 在服务端是否生效：用小时间窗、小页查询，比对返回的行。
 2. 查详情时不带 botId 能不能取到。
 3. 已有测试任务的逐条结果：
