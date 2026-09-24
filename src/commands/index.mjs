@@ -4,6 +4,7 @@ import { auth } from './auth.mjs';
 import { bots } from './bots.mjs';
 import { check } from './check.mjs';
 import { diff } from './diff.mjs';
+import { exec } from './exec.mjs';
 import { node, refs, trace } from './inspect.mjs';
 import { orgs } from './orgs.mjs';
 import { pull } from './pull.mjs';
@@ -13,4 +14,4 @@ import { restore } from './restore.mjs';
 import { log, status } from './status.mjs';
 import { versions } from './versions.mjs';
 
-export const COMMANDS = { auth, orgs, bots, versions, pull, node, trace, refs, apply, diff, check, push, rebase, restore, status, log };
+export const COMMANDS = { auth, orgs, bots, versions, pull, node, trace, refs, apply, diff, check, push, rebase, restore, status, log, exec };
