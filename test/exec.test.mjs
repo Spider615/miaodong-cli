@@ -39,6 +39,16 @@ test('md exec --bot：默认最近 24 小时、新到旧；存 JSONL，不带会
   assert.ok(saved.slice(1).every((row) => !('sessionMemorySnapshot' in row)));
 });
 
+test('同一秒里并行搜两次（AI 常并行发命令）：各存各的文件，不互相覆盖（审查 M-7）', async () => {
+  const h = home();
+  const [a, b] = await Promise.all([md(['exec', '--bot', '147bd600'], h), md(['exec', '--bot', '147bd600', '--down'], h)]);
+  const fa = a.stdout.match(/已存：(\S+\.jsonl)/)[1];
+  const fb = b.stdout.match(/已存：(\S+\.jsonl)/)[1];
+  assert.notEqual(fa, fb);
+  assert.equal(JSON.parse(readFileSync(fa, 'utf-8').split('\n')[0]).filters.down, false);
+  assert.equal(JSON.parse(readFileSync(fb, 'utf-8').split('\n')[0]).filters.down, true);
+});
+
 test('md exec --event：请求里带事件触发类型，事件名在本地比，说清扫了多少', async () => {
   const r = await md(['exec', '--bot', '147bd600', '--event', '延时回复']);
   assert.equal(r.code, 0, r.stderr);

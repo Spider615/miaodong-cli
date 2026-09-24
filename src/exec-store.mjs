@@ -26,7 +26,8 @@ function writeCompact(file, value) {
 }
 
 export function saveSearch(target, meta, rows, file) {
-  const path = file ? resolve(file) : join(execRoot(target), `search-${stamp()}.jsonl`);
+  // 带上进程号：AI 常并行发命令，只到秒的时间戳会让同一秒的两次搜索互相覆盖（审查 M-7）
+  const path = file ? resolve(file) : join(execRoot(target), `search-${stamp()}-${process.pid}.jsonl`);
   ensureDir(dirname(path));
   // 会话变量快照占每条的八成，搜索结果里用不到，不存
   const lines = [JSON.stringify({ kind: 'md-exec-search', ...meta }), ...rows.map(({ sessionMemorySnapshot, ...rest }) => JSON.stringify(rest))];
