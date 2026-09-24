@@ -1,14 +1,19 @@
 // md exec：查执行记录。不给执行 id 是「搜」，给了是「看一条」。
 // 看一条时自动串事件链：一条用户消息常被拆成几条执行，回复在后面那条里（会话里两天各重新发现过一次）。
 
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { intArg, strArg } from '../args.mjs';
-import { EXIT, usage } from '../errors.mjs';
+import { EXIT, MdError, usage } from '../errors.mjs';
 import { getCanvas, listVersions } from '../api.mjs';
-import { resolveBot, resolveVersion, targetArgs } from '../target.mjs';
-import { note, out, targetLine } from '../output.mjs';
-import { timeWindow } from '../timewin.mjs';
-import { ACTION_ALIASES, TRIGGER_ALIASES, buildSearchBody, formatRow, resolveAlias, searchExecutions, summarizeRow } from '../execs.mjs';
-import { saveSearch } from '../exec-store.mjs';
+import { loadIdentities, requireIdentities } from '../identity.mjs';
+import { loadBotDirectory, resolveBot, resolveVersion, targetArgs } from '../target.mjs';
+import { formatTime, note, out, shortId, targetLine } from '../output.mjs';
+import { parseDuration, timeWindow } from '../timewin.mjs';
+import { ACTION_ALIASES, TRIGGER_ALIASES, actionTexts, buildSearchBody, clip, formatCost, formatRow, getExecDetail, resolveAlias, searchExecutions, summarizeRow } from '../execs.mjs';
+import { execDir, findCachedExec, loadCachedDetail, saveDetail, saveNodes, saveSearch } from '../exec-store.mjs';
+import { NODE_LINE_LIMIT, nodeLine, normalizeDetail } from '../exec-detail.mjs';
+import { DEFAULT_CHAIN_WINDOW_MS, chainExecFromDetail, chainOf, extractEmittedEvents, fetchSessionPool, renderChain } from '../exec-chain.mjs';
 
 const SHOW_LIMIT = 50;
 
@@ -77,8 +82,112 @@ async function searchExecs(args) {
   return EXIT.OK;
 }
 
-async function viewExec() {
-  throw usage('看单条执行还没实现');
+const EXEC_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// 找到这条执行属于哪个区 / 企业 / 智能体。查详情不需要 botId（09-24 核对），所以没给 --bot 时逐个企业试
+async function locateExec(args, execId) {
+  if (strArg(args, 'bot')) {
+    const target = await resolveBot(targetArgs(args));
+    const dir = execDir(target, execId);
+    const cached = loadCachedDetail(dir);
+    if (cached) return { target, dir, detail: cached };
+    const detail = await getExecDetail(target.identity, target.orgId, execId, target.botId);
+    if (!detail) {
+      throw new MdError('exec_not_found', `${target.botName} 下找不到执行 ${execId}`, { exitCode: EXIT.TARGET, hint: '去掉 --bot，md 会在所有已取身份的企业里找' });
+    }
+    const owner = String(detail.canvasExec.botId ?? '');
+    if (owner && owner !== target.botId) {
+      throw new MdError('exec_other_bot', `执行 ${execId} 属于另一个智能体（${shortId(owner)}）`, { exitCode: EXIT.TARGET, hint: '去掉 --bot，md 会自己找到它属于哪个智能体' });
+    }
+    return { target, dir, detail: saveDetail(dir, target, detail), fresh: true };
+  }
+  const cached = findCachedExec(execId);
+  if (cached) {
+    const identity = loadIdentities()[cached.target.identityKey];
+    if (!identity) {
+      throw new MdError('no_identity', `这条执行属于「${cached.target.regionLabel}」，本机没有这个区的身份`, { exitCode: EXIT.AUTH, hint: '先取这个区的身份：md auth snippet <域名>' });
+    }
+    return { target: { ...cached.target, identity }, dir: cached.dir, detail: cached.detail };
+  }
+  for (const identity of requireIdentities()) {
+    for (const org of identity.orgs) {
+      let detail;
+      try {
+        detail = await getExecDetail(identity, org.id, execId);
+      } catch (error) {
+        if (error instanceof MdError && error.code === 'auth_expired') throw error;
+        note(`（跳过 ${identity.label} / ${org.name}：${error.message}）`);
+        continue;
+      }
+      if (!detail) continue;
+      const botId = String(detail.canvasExec.botId ?? '');
+      const entry = (await loadBotDirectory()).find((e) => e.botId === botId);
+      const target = entry
+        ? { ...entry, identity: loadIdentities()[entry.identityKey] ?? identity }
+        : { identityKey: identity.key, regionLabel: identity.label, orgId: org.id, orgName: org.name, botId, botName: `智能体 ${shortId(botId)}`, identity };
+      const dir = execDir(target, execId);
+      return { target, dir, detail: saveDetail(dir, target, detail), fresh: true };
+    }
+  }
+  throw new MdError('exec_not_found', `在已取身份的企业里都找不到执行 ${execId}`, { exitCode: EXIT.TARGET, hint: '执行 id 抄全了吗？如果是别的区的执行，先取那个区的身份' });
+}
+
+async function showExec(args, target, norm, dir) {
+  const e = norm.exec;
+  let chainLines;
+  let eventName = '';
+  if (e.testRun) {
+    chainLines = ['事件链：测试 / 试跑执行不在执行列表里，没有事件链'];
+  } else if (!e.event && !extractEmittedEvents(e.outputActions).length) {
+    chainLines = ['事件链：无（这条没有收发事件）'];
+  } else {
+    const windowMs = args['chain-window'] !== undefined ? parseDuration(strArg(args, 'chain-window')) : DEFAULT_CHAIN_WINDOW_MS;
+    const center = Date.parse(e.createdAt ?? '') || Date.now();
+    const pool = await fetchSessionPool(target.identity, target.orgId, target.botId, e.sessionId, center, windowMs);
+    const rowsById = new Map(pool.rows.map((r) => [r.execId, r]));
+    if (!rowsById.has(e.execId)) rowsById.set(e.execId, { outputActions: e.outputActions, totalCostInCny: e.cost });
+    const chain = chainOf(e.execId, pool.rows, chainExecFromDetail(norm));
+    eventName = chain?.target?.triggeredBy?.eventName ?? '';
+    chainLines = chain
+      ? renderChain(chain, rowsById, { windowLabel: `执行时间前后 ${Math.round(windowMs / 60_000)} 分钟`, truncated: pool.truncated })
+      : ['事件链：取不到'];
+  }
+  const trigger = e.event ? `事件「${eventName || shortId(e.event.eventId)}」` : e.triggerType || '-';
+  out(targetLine(target));
+  out(`执行 ${e.execId} · ${formatTime(e.createdAt)} · ${trigger} · ${e.status} · 节点 ${norm.nodes.length} 个 · ${(e.ms / 1000).toFixed(1)}s · ${formatCost(e.cost)}${e.testRun ? ' · 测试执行' : ''}`);
+  out(`触发：${clip(e.triggerText, 200) || '-'}`);
+  out(`本条动作：${clip(actionTexts(e.outputActions).map((a) => a.text).join('；'), 300) || '无'}`);
+  for (const line of chainLines) out(line);
+  out('节点（按执行顺序）：');
+  for (const n of norm.nodes.slice(0, NODE_LINE_LIMIT)) out(nodeLine(n));
+  if (norm.nodes.length > NODE_LINE_LIMIT) out(`  …另有 ${norm.nodes.length - NODE_LINE_LIMIT} 个节点，见 ${join(dir, 'nodes.jsonl')}`);
+  out(`详情：${join(dir, 'detail.json')} · 节点：${join(dir, 'nodes.jsonl')}`);
+  out(`下一步：md exec ${e.execId} --node <节点|#序号>；--find "<文字>"；--vs-draft`);
+  return EXIT.OK;
+}
+
+// Task 8 替换这三个
+async function showNode() {
+  throw usage('--node 还没实现');
+}
+async function showFind() {
+  throw usage('--find 还没实现');
+}
+async function showDrift() {
+  throw usage('--vs-draft 还没实现');
+}
+
+async function viewExec(args) {
+  const execId = String(args._[0]).trim();
+  if (!EXEC_ID.test(execId)) throw usage(`执行 id 要写完整的 36 位，收到「${execId}」`);
+  const { target, dir, detail, fresh } = await locateExec(args, execId);
+  const norm = normalizeDetail(detail);
+  if (fresh || !existsSync(join(dir, 'nodes.jsonl'))) saveNodes(dir, norm.nodes);
+  const shown = { ...target, versionLabel: `${norm.version || '版本未知'}${norm.exec.isCanary ? '（灰度）' : ''}` };
+  if (args.node !== undefined) return showNode(args, shown, norm, dir);
+  if (args.find !== undefined) return showFind(args, shown, norm);
+  if (args['vs-draft']) return showDrift(shown, norm);
+  return showExec(args, shown, norm, dir);
 }
 
 export const exec = {

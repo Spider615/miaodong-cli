@@ -68,3 +68,41 @@ test('md exec：用法错误退出码 2，并说清错在哪', async () => {
   assert.equal(bare.code, 2);
   assert.match(bare.stderr, /缺 --bot/);
 });
+
+test('md exec <id>：不给 --bot 也能找到；事件链、节点按执行顺序、详情缓存', async () => {
+  const h = home();
+  const r = await md(['exec', X(2)], h);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /^测试区 \/ 兴趣岛平台 \/ 太极2\.0 质检革新版 \(147bd600\) \/ v1\.0\.402/);
+  assert.match(r.stdout, /事件「延时回复」 · success · 节点 4 个/);
+  assert.match(r.stdout, /← e0000001/);
+  assert.match(r.stdout, /→ e0000003 .*发文本「已为您登记退款」/);
+  assert.match(r.stdout, new RegExp(`整条链最终：发文本「${REPLY}」`));
+  assert.doesNotMatch(r.stdout, /e0000004/);
+  const order = [...r.stdout.matchAll(/^\s+\d+ ✅ (\S+)/gm)].map((m) => m[1]);
+  assert.deepEqual(order, ['延时回复入口', '回答生成', '规则中心', '触发发送']);
+  const detailFile = r.stdout.match(/详情：(\S+detail\.json)/)[1];
+  const saved = JSON.parse(readFileSync(detailFile, 'utf-8'));
+  assert.equal(saved.canvasExec.rawCanvas, undefined);
+  assert.ok(Array.isArray(saved.canvas.rawCanvas));
+  const fetched = count('/api/canvas/history/details');
+  assert.equal((await md(['exec', X(2)], h)).code, 0);
+  assert.equal(count('/api/canvas/history/details'), fetched, '第二次应当读缓存，不再请求详情');
+});
+
+test('md exec <id> --bot 走指定智能体；找不到退出码 4；id 不完整退出码 2', async () => {
+  assert.equal((await md(['exec', X(2), '--bot', '147bd600'])).code, 0);
+  const missing = await md(['exec', X(5)]);
+  assert.equal(missing.code, 4);
+  assert.match(missing.stderr, /找不到执行/);
+  assert.equal((await md(['exec', 'e0000002'])).code, 2);
+});
+
+test('测试执行：说明没有事件链，不去查列表', async () => {
+  const lists = count('/api/canvas/history/list');
+  const r = await md(['exec', X(9)]);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /测试执行/);
+  assert.match(r.stdout, /不在执行列表里，没有事件链/);
+  assert.equal(count('/api/canvas/history/list'), lists);
+});
