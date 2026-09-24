@@ -119,7 +119,7 @@ test('md exec <id> --node：输入、prompt 全文文件、工具调用', async 
 
 test('md exec <id> --find：逐节点标出现位置并给结论', async () => {
   const hard = await md(['exec', X(2), '--find', '欢迎来到兴趣岛']);
-  assert.match(hard.stdout, /结论：写死在 #2「回答生成」/);
+  assert.match(hard.stdout, /结论：这段文字写在 #2「回答生成」.*的配置里，但这次执行没有输出它/);
   const gen = await md(['exec', X(2), '--find', REPLY]);
   assert.match(gen.stdout, /结论：最早由 #2「回答生成」/);
   assert.match(gen.stdout, /#3 规则中心 \[00000003\] 配置· 输入✓ prompt· 输出·/);

@@ -181,13 +181,20 @@ export function locateText(norm, needle) {
     inPrompt: text(node.metadata?.prompt).includes(target),
     inOutput: text(node.output).includes(target) || text(node.actions).includes(target),
   }));
-  const hardcoded = rows.find((r) => r.inConfig && !r.inInput);
-  const generated = rows.find((r) => r.inOutput && !r.inInput && !r.inConfig);
-  const external = rows.find((r) => r.inInput);
-  let verdict = { kind: 'none', node: null };
-  if (hardcoded) verdict = { kind: 'hardcoded', node: hardcoded.node };
-  else if (generated) verdict = { kind: generated.node.category === 'trigger' ? 'trigger' : 'generated', node: generated.node };
-  else if (external) verdict = { kind: 'external', node: external.node };
+  // 先找起点：第一个「输入里没有、输出里有」的节点。只在配置里出现不算——意图识别的 few-shot 示例、话术库里
+  // 常写着同一句话，以前按「配置优先」会把结论指到这些根本没输出它的节点上（审查 I-1）
+  const origin = rows.find((r) => r.inOutput && !r.inInput);
+  let verdict;
+  if (origin) {
+    const kind = origin.inConfig ? 'hardcoded' : origin.node.category === 'trigger' ? 'trigger' : 'generated';
+    verdict = { kind, node: origin.node };
+  } else {
+    const external = rows.find((r) => r.inInput);
+    const configOnly = rows.find((r) => r.inConfig);
+    if (external) verdict = { kind: 'external', node: external.node };
+    else if (configOnly) verdict = { kind: 'config-only', node: configOnly.node };
+    else verdict = { kind: 'none', node: null };
+  }
   return { rows: rows.filter((r) => r.inConfig || r.inInput || r.inPrompt || r.inOutput), verdict };
 }
 
@@ -199,6 +206,7 @@ export function verdictLine(v) {
     trigger: `结论：来自触发内容 ${who}（用户消息或事件载荷）`,
     generated: `结论：最早由 ${who} 生成（它的输入里没有、输出里有）`,
     external: `结论：从这条执行外面传进来，最早出现在 ${who} 的输入里（上游执行、会话变量或用户消息）`,
+    'config-only': `结论：这段文字写在 ${who} 的配置里，但这次执行没有输出它（可能在事件链上别的执行里：先 md exec <执行id> 看事件链）`,
   };
   return texts[v.kind];
 }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { U } from './helpers/fixtures.mjs';
+import { U, edge, node } from './helpers/fixtures.mjs';
 import { ASK, REPLY, X, delayDetail, draftCanvas, execSnapshot } from './helpers/exec-fixtures.mjs';
 import { driftAgainst, findExecNode, locateText, nodeLine, normalizeDetail, orderExecuted, renderNodeDetail, verdictLine } from '../src/exec-detail.mjs';
 
@@ -59,7 +59,6 @@ test('renderNodeDetail：输入逐键、prompt 长度与文件、推理、工具
 
 test('locateText：写死在配置里 / 由节点生成 / 来自触发内容 / 没找到', () => {
   const norm = normalizeDetail(delayDetail());
-  assert.equal(locateText(norm, '欢迎来到兴趣岛').verdict.kind, 'hardcoded');
   const generated = locateText(norm, REPLY);
   assert.equal(generated.verdict.kind, 'generated');
   assert.equal(generated.verdict.node.name, '回答生成');
@@ -67,6 +66,25 @@ test('locateText：写死在配置里 / 由节点生成 / 来自触发内容 / �
   assert.equal(locateText(norm, ASK).verdict.kind, 'trigger');
   assert.equal(locateText(norm, 'zzz').verdict.kind, 'none');
   assert.throws(() => locateText(norm, '  '), (e) => e.exitCode === 2);
+});
+
+test('locateText：配置里写着这段话、但真正输出它的是别的节点时，结论指向输出它的节点（审查 I-1）', () => {
+  const detail = delayDetail();
+  // 在「延时回复入口」和「回答生成」之间加一个意图识别节点：few-shot 里写着回复原文，输出只是意图
+  detail.canvas.rawCanvas = [...detail.canvas.rawCanvas, node(10, { name: '意图识别', payload: { systemPrompt: `例：${REPLY} → 退款意图` } }), edge(110, 5, 10), edge(111, 10, 2)];
+  detail.nodeResults.push({ nodeId: U(10), status: 'success', inputs: { inputData: { text: ASK } }, output: { intent: '退款' }, actions: [] });
+  const v = locateText(normalizeDetail(detail), REPLY).verdict;
+  assert.deepEqual([v.kind, v.node.name], ['generated', '回答生成']);
+});
+
+test('locateText：输出它的节点配置里就写着 → 写死在配置里；只在配置里出现、这次没输出 → 单独说明', () => {
+  const detail = delayDetail();
+  detail.nodeResults.find((r) => r.nodeId === U(2)).output = { message: `欢迎来到兴趣岛，${REPLY}` };
+  const hard = locateText(normalizeDetail(detail), '欢迎来到兴趣岛').verdict;
+  assert.deepEqual([hard.kind, hard.node.name], ['hardcoded', '回答生成']);
+  const only = locateText(normalizeDetail(delayDetail()), '欢迎来到兴趣岛').verdict;
+  assert.deepEqual([only.kind, only.node.name], ['config-only', '回答生成']);
+  assert.match(verdictLine(only), /写在 #2「回答生成」.*的配置里，但这次执行没有输出它/);
 });
 
 test('driftAgainst：跑过的节点里哪些在草稿里改了、删了', () => {
