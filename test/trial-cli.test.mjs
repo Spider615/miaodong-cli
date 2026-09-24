@@ -307,3 +307,12 @@ test('--from-exec 的节点在执行那一版里有、草稿里已经删了：�
     fake.server.routes['GET /api/canvas/get'] = original;
   }
 });
+
+test('跑的过程中把这一笔的预留更新成按实际推算的整条命令：并行的别的命令算今天已花时，看到的是真实量级（审查 I3 的延续）', async () => {
+  reset({ cost: 0.5 });
+  const h = home();
+  const r = await md(['trial', '回答生成', '--bot', '147bd600', '--input', 'text=你好', '--times', '3'], h);
+  assert.equal(r.code, 0, r.stderr);
+  const lines = readFileSync(join(h, 'md', 'spend.jsonl'), 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
+  assert.ok(lines.some((l) => l.reserve === 1.5 && l.kind === undefined), JSON.stringify(lines));
+});

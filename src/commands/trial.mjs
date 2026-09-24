@@ -217,6 +217,8 @@ export const trial = {
             out(`已跑 ${i - 1} 次，实际 ${formatCost(sum.actual)}${sum.unknownRuns ? `（另有 ${sum.unknownRuns} 次花费不知道）` : ''}；其余 ${remaining} 次${check.rest === null ? '估不出' : `按实际单价推算要 ${formatCost(check.rest)}`}`);
             stopForConfirm({ ...codeFor(operation(remaining, check.rest), readSpends()), given: null, reasons: check.reasons, remaining });
           }
+          // 预留跟着实际走：并行的别的命令算今天已花时，看到的是这条命令真实的量级
+          if (typeof check.projected === 'number') updateSpend(plan.id, { reserve: check.projected });
         }
         let result;
         try {

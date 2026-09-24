@@ -87,6 +87,7 @@ test('nextRunCheck：每跑完一次按实际重算整条命令，超单次门�
   // 先跑 1 次：拿「已花 + 其余」比门槛，不是只拿其余
   assert.equal(nextRunCheck({ ...base, runs: [{ cost: 0.9 }], remaining: 2, perRun: null }).ok, false);
   assert.equal(nextRunCheck({ ...base, runs: [{ cost: 0.01 }], remaining: 1, perRun: 0.01 }).ok, true);
+  assert.equal(nextRunCheck({ ...base, runs: [{ cost: 0.01 }], remaining: 1, perRun: 0.01 }).projected, 0.02);
   // 还是估不出：停；用户确认过「估不出」就照跑
   const unknown = nextRunCheck({ ...base, runs: [{ cost: null }], remaining: 2, perRun: null });
   assert.deepEqual([unknown.ok, unknown.rest], [false, null]);

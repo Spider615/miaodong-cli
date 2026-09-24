@@ -112,7 +112,8 @@ export function costSummary(runs, assumedPerRun = null) {
 // 下一次开跑前按实际花费重算整条命令（审查 C1）：开跑前的预估可能偏低（执行记录里是旧价、节点后来改过），
 // 只在开头判一次，一条命令就可能不经确认花掉好几倍门槛。这样最多多花一次的钱。
 // 每次单价按「预估」和「已跑的实际」取大的；花费不知道的那几次也按这个单价算进已花。
-// 返回的 rest 是其余几次的预估，给确认码用：和重跑时的算法一致（重跑时按这次的实际单价估）
+// 返回的 rest 是其余几次的预估，给确认码用：和重跑时的算法一致（重跑时按这次的实际单价估）；
+// projected 是按实际推算的整条命令，放行时用它更新账本里这一笔的预留
 export function nextRunCheck({ runs, remaining, perRun, confirmed, confirmedEstimate, limits, othersToday }) {
   const sum = costSummary(runs);
   const unit = sum.perRun ?? perRun;
@@ -124,11 +125,11 @@ export function nextRunCheck({ runs, remaining, perRun, confirmed, confirmedEsti
   }
   const projected = sum.actual + sum.unknownRuns * forward + remaining * forward;
   if (confirmed && confirmedEstimate !== null) {
-    if (projected <= confirmedEstimate + limits.perCommand) return { ok: true };
-    return { ok: false, reasons: [`按已跑的实际推算整条命令要 ${formatCost(projected)}，比确认时的预估 ${formatCost(confirmedEstimate)} 高出一个单次门槛以上`], rest };
+    if (projected <= confirmedEstimate + limits.perCommand) return { ok: true, projected };
+    return { ok: false, reasons: [`按已跑的实际推算整条命令要 ${formatCost(projected)}，比确认时的预估 ${formatCost(confirmedEstimate)} 高出一个单次门槛以上`], rest, projected };
   }
   const reasons = [];
   if (projected > limits.perCommand) reasons.push(`按已跑的实际推算整条命令要 ${formatCost(projected)}，超过单次门槛 ${formatCost(limits.perCommand)}`);
   if (othersToday + projected > limits.perDay) reasons.push(`今天别的花费 ${formatCost(othersToday)}，加上这条命令超过每日上限 ${formatCost(limits.perDay)}`);
-  return reasons.length ? { ok: false, reasons, rest } : { ok: true };
+  return reasons.length ? { ok: false, reasons, rest, projected } : { ok: true, projected };
 }
