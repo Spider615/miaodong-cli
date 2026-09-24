@@ -70,6 +70,14 @@ test('renderNodeDetail：输入逐键、prompt 长度与文件、推理、工具
   assert.ok(text.length < 6000, `输出应当截断，实际 ${text.length} 字`);
 });
 
+test('renderNodeDetail：输入键再多也只列前 20 个，其余看文件（审查 M-2）', () => {
+  const detail = delayDetail();
+  detail.nodeResults.find((r) => r.nodeId === U(2)).inputs = { inputData: Object.fromEntries(Array.from({ length: 60 }, (_, i) => [`key${i}`, 'x'.repeat(400)])) };
+  const text = renderNodeDetail(normalizeDetail(detail).nodes[1], { nodeFile: '/tmp/n.json', promptFile: '/tmp/p.txt' }).join('\n');
+  assert.match(text, /…另有 40 个键，完整内容见 \/tmp\/n\.json/);
+  assert.ok(text.length < 9000, `输出应当有上限，实际 ${text.length} 字`);
+});
+
 test('locateText：写死在配置里 / 由节点生成 / 来自触发内容 / 没找到', () => {
   const norm = normalizeDetail(delayDetail());
   const generated = locateText(norm, REPLY);

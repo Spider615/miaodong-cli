@@ -10,6 +10,7 @@ import { actionTexts, clip, formatCost } from './execs.mjs';
 import { buildBranchNameIndex, buildNodeMetaIndex, extractEventTrigger, extractTriggerTextFromSnapshot } from '../../apps/api/lib/miaodong/badcase-normalize.ts';
 
 export const NODE_LINE_LIMIT = 150;
+const INPUT_KEY_LIMIT = 20;
 
 export function orderExecuted(nodeIds, snapshot) {
   const unique = [...new Set(nodeIds)];
@@ -151,7 +152,9 @@ export function renderNodeDetail(n, { nodeFile, promptFile }) {
   lines.push('输入：');
   const inputs = n.inputs && typeof n.inputs === 'object' ? Object.entries(n.inputs) : [];
   if (!inputs.length) lines.push('  （无）');
-  for (const [key, value] of inputs) lines.push(`  ${key}: ${clip(typeof value === 'string' ? value : JSON.stringify(value), 300)}`);
+  // 每个键截到 300 字，键的个数也要设上限：60 个键时整段能到近 2 万字（审查 M-2）
+  for (const [key, value] of inputs.slice(0, INPUT_KEY_LIMIT)) lines.push(`  ${key}: ${clip(typeof value === 'string' ? value : JSON.stringify(value), 300)}`);
+  if (inputs.length > INPUT_KEY_LIMIT) lines.push(`  …另有 ${inputs.length - INPUT_KEY_LIMIT} 个键，完整内容见 ${nodeFile}`);
   const msgs = asArray(n.metadata?.prompt);
   if (msgs.length) {
     lines.push(`Prompt：${msgs.map((m) => `${m?.role ?? '?'} ${contentText(m?.content).length} 字`).join(' · ')} → ${promptFile}`);
