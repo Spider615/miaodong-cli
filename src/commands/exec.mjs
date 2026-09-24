@@ -10,7 +10,7 @@ import { loadIdentities, requireIdentities } from '../identity.mjs';
 import { loadBotDirectory, resolveBot, resolveVersion, targetArgs } from '../target.mjs';
 import { formatTime, note, out, shortId, targetLine } from '../output.mjs';
 import { parseDuration, timeWindow } from '../timewin.mjs';
-import { ACTION_ALIASES, TRIGGER_ALIASES, actionTexts, buildSearchBody, clip, formatCost, formatRow, getExecDetail, resolveAlias, searchExecutions, summarizeRow } from '../execs.mjs';
+import { ACTION_ALIASES, TRIGGER_ALIASES, actionSummary, buildSearchBody, clip, formatCost, formatRow, getExecDetail, resolveAlias, searchExecutions, summarizeRow } from '../execs.mjs';
 import { execDir, findCachedExec, loadCachedDetail, saveDetail, saveNodes, saveSearch } from '../exec-store.mjs';
 import { NODE_LINE_LIMIT, driftAgainst, findExecNode, locateText, nodeLine, normalizeDetail, promptText, renderNodeDetail, verdictLine } from '../exec-detail.mjs';
 import { DEFAULT_CHAIN_WINDOW_MS, chainExecFromDetail, chainOf, extractEmittedEvents, fetchSessionPool, renderChain } from '../exec-chain.mjs';
@@ -156,7 +156,7 @@ async function showExec(args, target, norm, dir) {
   out(targetLine(target));
   out(`执行 ${e.execId} · ${formatTime(e.createdAt)} · ${trigger} · ${e.status} · 节点 ${norm.nodes.length} 个 · ${(e.ms / 1000).toFixed(1)}s · ${formatCost(e.cost)}${e.testRun ? ' · 测试执行' : ''}`);
   out(`触发：${clip(e.triggerText, 200) || '-'}`);
-  out(`本条动作：${clip(actionTexts(e.outputActions).map((a) => a.text).join('；'), 300) || '无'}`);
+  out(`本条动作：${clip(actionSummary(e.outputActions), 300) || '无'}`);
   for (const line of chainLines) out(line);
   out('节点（按执行顺序）：');
   for (const n of norm.nodes.slice(0, NODE_LINE_LIMIT)) out(nodeLine(n));

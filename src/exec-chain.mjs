@@ -3,7 +3,7 @@
 // 一次「同会话 ± 时间窗」的列表查询就拿到了整条链要的数据，不用逐条查详情。
 
 import { buildExecutionChain, compareEventPayload, extractEmittedEvents, toChainExec } from '../../apps/api/lib/miaodong/badcase-normalize.ts';
-import { PAGE_SIZE, TRIGGER_LABEL, actionTexts, clip, formatCost, listExecutions } from './execs.mjs';
+import { PAGE_SIZE, TRIGGER_LABEL, actionSummary, actionTexts, clip, formatCost, listExecutions } from './execs.mjs';
 import { formatTime, shortId } from './output.mjs';
 
 export { extractEmittedEvents };
@@ -84,7 +84,7 @@ export function renderChain(chain, rowsById, { windowLabel, truncated }) {
   const actionsOf = (hop) => actionTexts(rowsById.get(hop.execId)?.outputActions);
   const describe = (hop) => {
     const row = rowsById.get(hop.execId);
-    const acts = row ? actionsOf(hop).map((a) => a.text).join('；') : hop.actionTypes.join('、');
+    const acts = row ? actionSummary(row.outputActions) : hop.actionTypes.join('、');
     const trigger = hop.triggeredBy
       ? `事件「${hop.triggeredBy.eventName || shortId(hop.triggeredBy.eventId)}」`
       : `${TRIGGER_LABEL[hop.triggerType] ?? hop.triggerType}「${clip(hop.triggerText, 30)}」`;

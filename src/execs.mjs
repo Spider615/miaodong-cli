@@ -80,7 +80,7 @@ export function actionTexts(outputActions) {
         return { kind: 'event', text: `发出事件「${str(p.eventName) || String(p.eventId ?? '').slice(0, 8)}」${text ? `：${text}` : ''}` };
       }
       case 'update-data':
-        return { kind: 'other', text: `写 ${asArray(p.operations).length} 个字段` };
+        return { kind: 'other', text: `写 ${asArray(p.operations).length} 个字段`, fields: asArray(p.operations).length };
       case 'tag-user':
       case 'smart-tag': {
         const names = asArray(p.tags).map((t) => str(t?.tagName)).filter(Boolean);
@@ -90,6 +90,25 @@ export function actionTexts(outputActions) {
         return { kind: 'other', text: String(action?.type ?? '未知动作') };
     }
   });
+}
+
+const KIND_ORDER = { reply: 0, handover: 1, event: 2, other: 3 };
+
+// 只有几十个字的摘要里，回复和转人工排最前：它们最常被找，平台原顺序里却常排在一串写字段、打标签后面（真机上因此被截掉）。
+// 多次写字段合成一条，其余保持平台原顺序
+export function actionSummary(outputActions) {
+  const items = actionTexts(outputActions);
+  const fields = items.filter((a) => a.fields !== undefined).reduce((sum, a) => sum + a.fields, 0);
+  const merged = [];
+  for (const item of items) {
+    if (item.fields === undefined) merged.push(item);
+    else if (!merged.some((a) => a.fields !== undefined)) merged.push({ ...item, text: `写 ${fields} 个字段` });
+  }
+  return merged
+    .map((a, i) => ({ ...a, i }))
+    .sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || a.i - b.i)
+    .map((a) => a.text)
+    .join('；');
 }
 
 export function summarizeRow(row) {
@@ -105,7 +124,7 @@ export function summarizeRow(row) {
     trigger: eventName ? `事件「${eventName}」` : TRIGGER_LABEL[triggerType] ?? (triggerType || '-'),
     eventName,
     triggerText: extractTriggerTextFromSnapshot({ triggerContent: row?.triggerContent, eventSnapshot: row?.rawTrigger }),
-    actions: actionTexts(row?.outputActions).map((a) => a.text).join('；'),
+    actions: actionSummary(row?.outputActions),
     version: str(row?.canvasVersion),
     canary: row?.isCanary === true,
     cost: Number.isFinite(cost) ? cost : null,

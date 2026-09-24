@@ -1,6 +1,6 @@
 import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
-import { ACTION_ALIASES, TRIGGER_ALIASES, actionTexts, buildSearchBody, clip, formatCost, formatRow, resolveAlias, searchExecutions, summarizeRow } from '../src/execs.mjs';
+import { ACTION_ALIASES, TRIGGER_ALIASES, actionSummary, actionTexts, buildSearchBody, clip, formatCost, formatRow, resolveAlias, searchExecutions, summarizeRow } from '../src/execs.mjs';
 import { ok, startFakeMiaodong } from './helpers/fake-miaodong.mjs';
 import { ASK, REPLY, X, chainRows } from './helpers/exec-fixtures.mjs';
 
@@ -18,6 +18,19 @@ test('actionTexts：发文本、组合消息、转人工、发出事件、写字
     '发文本「你好」', '发组合消息「第一句 / https://x/a.png」', '转人工「需要人工」', '发出事件「发送」：回复', '写 2 个字段', '打标签 意向', 'send-material',
   ]);
   assert.deepEqual(texts.map((t) => t.kind), ['reply', 'reply', 'handover', 'event', 'other', 'other', 'other']);
+});
+
+test('actionSummary：回复和转人工排前面，多次写字段合成一条（真机上回复常被一串写字段挤出截断范围）', () => {
+  const s = actionSummary([
+    { type: 'update-data', payload: { operations: [{}, {}] } },
+    { type: 'tag-user', payload: { operation: 'ADD', tags: [{ tagName: 'L6' }] } },
+    { type: 'update-data', payload: { operations: [{}] } },
+    { type: 'canvas-event-action', payload: { eventName: '发送', params: { text: '回复' } } },
+    { type: 'handover', payload: {} },
+    { type: 'send-text-message', payload: { text: '你好' } },
+  ]);
+  assert.equal(s, '发文本「你好」；转人工；发出事件「发送」：回复；写 3 个字段；打标签 L6');
+  assert.equal(actionSummary(null), '');
 });
 
 test('summarizeRow / formatRow：事件名、触发文本、动作、版本、灰度、花费、点踩', () => {
