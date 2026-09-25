@@ -49,5 +49,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
   console.log(`已构建 ${relative(REPO, outfile)}（${tag}），扫描干净。这次的改动：`);
   console.log(execFileSync('git', ['status', '--short'], { cwd: REPO, encoding: 'utf-8' }));
-  console.log('看过 git diff 后：git add -A && git commit（dist/md.mjs 一起提交），再 git push');
+  console.log('看过 git diff 后：git add dist/md.mjs 和这次要发的改动，git commit，再 git push。同事 git pull 拿到的就是这一版');
 }

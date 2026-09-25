@@ -9,7 +9,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 NAME="miaodong"
 SKILL_SRC="${ROOT}/skill"
-BIN_SRC="${ROOT}/dist/md.mjs"
+# MD_BIN_SRC：开发者 npm run install:local 用它让 md 链到开发构建 build/md.mjs；同事不用设，默认链到已发布的 dist/md.mjs
+BIN_SRC="${MD_BIN_SRC:-${ROOT}/dist/md.mjs}"
 CLAUDE_SKILLS="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/skills"
 CODEX_SKILLS="${CODEX_HOME:-${HOME}/.codex}/skills"
 AGENTS_SKILLS="${AGENTS_SKILLS_DIR:-${HOME}/.agents/skills}"
@@ -22,7 +23,7 @@ if [ "${major}" -lt 18 ]; then
   exit 1
 fi
 if [ ! -f "${BIN_SRC}" ]; then
-  echo "缺 dist/md.mjs：仓库不完整。重新 git clone 一次；开发者可以先 npm run build"
+  echo "缺 ${BIN_SRC#"${ROOT}"/}：仓库不完整。重新 git clone 一次；开发者可以先 npm run build"
   exit 1
 fi
 # 仓库本身不能放在任何一个 skills 位置：那里要放的是仓库里的 skill/ 目录

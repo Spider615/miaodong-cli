@@ -24,7 +24,8 @@ md：让 Claude Code / Codex 读写秒懂（JZ Insight）智能体的命令行�
 npm test                                   # 全部测试。要 Node 22（这台机器默认是 18）：先 nvm use，或者把 Node 22 的 bin 放到 PATH 前面
 MD_E2E_NODE=<Node 18 的 node> npm test     # 同时验证打包产物在 Node 18 上能跑
 npm run build                              # 构建 dist/md.mjs
-npm run install:local                      # 构建 + install.sh + 桌面副本（MD_EXPORT_DIR='' 不放）
+./install.sh                               # 用发过版的 dist/md.mjs 装（和同事一样）；日常修 bot 用这个
+npm run install:local                      # 试新构建：开发版构建进 build/md.mjs（被忽略）+ install.sh 链过去 + 桌面副本（MD_EXPORT_DIR='' 不放）
 MD_E2E_NODE=<Node 18 的 node> npm run release   # 发版检查；看过 diff 后连同 dist/md.mjs 一起提交、推送
 npm run sync:laodong -- <老懂仓库路径>       # 同步 vendor/laodong
 ```
@@ -37,7 +38,7 @@ npm run sync:laodong -- <老懂仓库路径>       # 同步 vendor/laodong
 4. **花钱、调插件、调高门槛要用户确认**（`src/confirm.mjs`）：需要确认时 md 不跑，只给预估和确认码（退出码 5）。AI 单独问用户，同意后在同一条命令加 `--confirm <码>`。这是约定不是锁：不要加「跳过确认」的开关，也不要把确认码写进任何自动流程。
 5. **测试中心**（`src/testcenter.mjs` 接口，`src/testcases.mjs` 换 id 与跑前检查）：秒懂对事件、会话变量对不上的用例不报错，显示成功但其实空跑，所以跑前检查必须拦。导入的撤回只按导入前后的差集删，不碰集里原有的用例。
 6. **外部用例与批量改**（`src/casefile.mjs` 解析与校验，`src/caseedit.mjs` 改动脚本）：写秒懂之前先在本地校验全部，外部用例先写 1 条读回来核对。断言只生成实测过的形状（发文本、发事件、转人工），别的用 raw。批量改走计划码，先备份再写。
-7. **`dist/md.mjs` 只在发版时更新**：`npm run release` 构建、扫过之后再提交；平时开发别把 dist 的改动混进别的提交。
-8. **`skill/` 改了就对所有人生效**：它是软链装的，同事 `git pull` 之后马上用上新说明。
+7. **main 就是同事拿到的版本**：同事 `git pull` 之后，说明来自 main 上的 `skill/`（软链，立即生效），命令来自 main 上的 `dist/md.mjs`。所以改 `src/`、`vendor/` 的活在分支上做，合进 main 时带上 `npm run release` 重新构建的 `dist/md.mjs`；只改说明文字、不涉及新命令的，可以直接进 main。
+8. **`dist/md.mjs` 只有 `npm run release` 写**：`npm run install:local` 把开发构建放进被忽略的 `build/md.mjs`，不碰 dist。
 9. **本仓库必须保持私有**：`vendor/laodong/packages/shared/src/miaodong-regions.ts` 里有独立部署客户的名单。
 10. **`install.sh` 里的变量一律写成 `${VAR}`**：UTF-8 locale 下，macOS 自带的 bash 3.2 会把紧跟在变量后面的中文标点字节读进变量名，`set -u` 时直接报 unbound variable。C locale 下没事，所以 `test/install-sh.test.mjs` 固定在 `zh_CN.UTF-8` 下跑，别改回去。

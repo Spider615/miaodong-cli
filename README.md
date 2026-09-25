@@ -79,6 +79,7 @@ clone 到哪都行，就是**不要 clone 到 `~/.claude/skills/` 下面**（`in
 
 源码在 `src/`，测试在 `test/`，开发说明见 `CLAUDE.md`。
 - 测试：Node 22 下 `npm test`（`.nvmrc` 写着 22）。
+- 本机试新构建：`npm run install:local`（md 链到开发构建 `build/md.mjs`）；换回发过版的：再跑一次 `./install.sh`。
 - 发版：`MD_E2E_NODE=<Node 18 的 node 路径> npm run release`，看过 diff 后把 `dist/md.mjs` 一起提交、推送。同事 `git pull` 拿到的就是这一版。
 - `vendor/laodong/` 是句子老懂仓库的代码，原样拷贝，不在这里改：`npm run sync:laodong -- <老懂仓库路径>` 同步。
 
