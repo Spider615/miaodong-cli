@@ -78,7 +78,6 @@ export async function run(args) {
 
   out(targetLine({ ...t, versionLabel: label }));
   out(`测试集「${set.name}」(${shortId(set.testSetId)})：${cases.length} 条 × ${rounds} 轮 = ${runsCount} 次 · 并发 ${concurrency}${pre.unreviewed ? ` · 未审核 ${pre.unreviewed} 条（照样会跑）` : ''}`);
-  if (!events || !vars) out('⚠️ 取不到事件或会话变量列表：没法核对用例会不会空跑');
   if (pre.errors.length) {
     out(`❌ 跑前检查：${pre.errors.length} 处对不上（这些用例会「成功」但什么都没执行）：`);
     for (const e of pre.errors.slice(0, 20)) out(`  - ${e.name}：${e.reason}`);

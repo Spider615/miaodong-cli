@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { strArg } from '../args.mjs';
 import { EXIT } from '../errors.mjs';
 import { writeJson } from '../home.mjs';
-import { formatTime, out, shortId, targetLine } from '../output.mjs';
+import { DATA_NOTE, formatTime, out, shortId, targetLine } from '../output.mjs';
 import { clip } from '../execs.mjs';
 import { stamp } from '../workspace.mjs';
 import { listEvents } from '../api.mjs';
@@ -34,10 +34,13 @@ export async function cases(args) {
   const eventName = new Map((events ?? []).map((e) => [e.eventId, e.name]));
   const s = summarizeCases(rows);
   out(targetLine(t));
+  out(DATA_NOTE);
   out(`测试集「${set.name}」(${shortId(set.testSetId)})：${s.total} 条 · ${Object.entries(s.byTrigger).map(([k, v]) => `${k} ${v}`).join('、') || '无'} · 未审核 ${s.unreviewed} · 挂了场景 ${s.attached}`);
   for (const c of rows.slice(0, 30)) {
     const eventId = String(c.triggerInputs?.eventId ?? '');
-    const trigger = c.triggerType === 'canvas-event-trigger' ? `事件「${eventName.get(eventId) ?? `${eventId.slice(0, 8)}（这个智能体里没有）`}」` : c.triggerType;
+    // 取不到事件列表时说「取不到」，不能说成「没有」（审查 I4）
+    const missing = events === null ? '（取不到事件列表）' : '（这个智能体里没有）';
+    const trigger = c.triggerType === 'canvas-event-trigger' ? `事件「${eventName.get(eventId) ?? `${eventId.slice(0, 8)}${missing}`}」` : c.triggerType;
     out(`  ${c.name} · ${trigger} · ${clip(caseText(c), 40) || '-'}`);
   }
   if (rows.length > 30) out(`  …另有 ${rows.length - 30} 条`);

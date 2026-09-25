@@ -125,6 +125,8 @@ export function preflight(cases, { canvas, events, vars }) {
   const entries = new Set(cells.filter((c) => c.data.type === 'canvas-event-trigger').flatMap((c) => [String(c.shape ?? ''), String(c.data.nodePayload?.eventId ?? '')]).filter(Boolean));
   const types = new Set(cells.map((c) => String(c.data.type ?? '')));
   const errors = idProblems(cases, { events, vars });
+  // 取不到列表就没法核对：不能当作没问题放过去（审查 I4；api.mjs 里写着个别区版本不齐）
+  if (!events || !vars) errors.unshift({ name: '（全部用例）', reason: '取不到这个智能体的事件或会话变量列表，没法核对会不会空跑' });
   const eventIds = events ? new Set(events.map((e) => String(e?.eventId ?? ''))) : null;
   for (const c of cases) {
     const name = String(c?.name ?? c?.testCaseId ?? '?');

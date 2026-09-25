@@ -75,14 +75,7 @@ function sourceEntry(row) {
 }
 
 // 跨智能体：按名字把事件 id、会话变量 id 从源换成目标的，全量回写，再回读核对不剩源 bot 的 id（spec §6.2）
-async function remapInto(t, source, testSetId, cases, { targetEvents, targetVars }) {
-  const [sourceEvents, sourceVars] = await Promise.all([
-    listEvents(source.identity, source.orgId, source.botId),
-    listSessions(source.identity, source.orgId, source.botId),
-  ]);
-  if (!sourceEvents || !sourceVars || !targetEvents || !targetVars) {
-    throw new MdError('remap_unavailable', '取不到事件或会话变量列表，没法跨智能体换 id', { hint: '这个区的版本可能不支持；改用目标智能体自己的执行导入' });
-  }
+async function remapInto(t, testSetId, cases, { sourceEvents, sourceVars, targetEvents, targetVars }) {
   const maps = buildIdMap({ sourceEvents, targetEvents, sourceVars, targetVars });
   let changed = 0;
   const problems = [];
@@ -118,6 +111,21 @@ export async function importCmd(args) {
   const source = await sourceOf(t, src.header, strArg(args, 'from-bot'));
   const cross = source.bot.botId !== t.botId;
 
+  // 先取两边的事件和会话变量：取不到就没法核对导进来的用例会不会空跑、跨智能体也没法换 id。
+  // 在写秒懂之前停下（审查 I4：以前是先建集、先导入，出错时把没换 id 的用例留在集里）
+  const allowUnverified = boolArg(args, 'allow-preflight-errors');
+  const [targetEvents, targetVars] = await Promise.all([listEvents(t.identity, t.orgId, t.botId), listSessions(t.identity, t.orgId, t.botId)]);
+  const [sourceEvents, sourceVars] = cross
+    ? await Promise.all([listEvents(source.bot.identity, source.bot.orgId, source.bot.botId), listSessions(source.bot.identity, source.bot.orgId, source.bot.botId)])
+    : [targetEvents, targetVars];
+  const listsOk = Boolean(targetEvents && targetVars && sourceEvents && sourceVars);
+  if (!listsOk && !allowUnverified) {
+    throw new MdError('lists_unavailable', `取不到${cross ? '源或目标' : '这个'}智能体的事件 / 会话变量列表：没法核对导进来的用例会不会空跑${cross ? '，也没法跨智能体换 id' : ''}；什么都没写`, {
+      exitCode: EXIT.BLOCKED,
+      hint: '这个区的版本可能不支持这两个接口；确认要照导（不核对、不换 id）加 --allow-preflight-errors',
+    });
+  }
+
   const existing = await listTestSets(t);
   let set;
   let created = false;
@@ -132,17 +140,25 @@ export async function importCmd(args) {
   }
   out(targetLine(t));
   out(`${created ? '新建' : '导进已有的'}测试集「${set.name}」(${shortId(set.testSetId)})；${src.ids.length} 条执行${cross ? `，来自「${source.bot.botName}」（跨智能体，导完按名字换 id）` : ''}`);
+  if (!listsOk) out('⚠️ 取不到事件 / 会话变量列表：这次不核对、不换 id（--allow-preflight-errors）');
 
-  // 按导入前后的差集认「这次导进来的」：--into 时集里可能已经有同名用例（重复导了同一条执行），不能碰
-  const before = new Set((await listCases(t, set.testSetId)).map((c) => c.testCaseId));
-  const sum = await importExecs(t, set.testSetId, src.ids);
-  let fresh = (await listCases(t, set.testSetId)).filter((c) => !before.has(c.testCaseId));
-  out(`导入：成功 ${sum.imported} · 失败 ${sum.failed}${sum.skippedNodeTypes.length ? ` · 跳过的节点类型 ${sum.skippedNodeTypes.join('、')}` : ''}`);
-  const missing = src.ids.filter((id) => !fresh.some((c) => execIdOfCase(c.name) === id));
-  if (missing.length) out(`⚠️ 没导进来的执行 ${missing.length} 条：${missing.slice(0, 10).map(shortId).join('、')}${missing.length > 10 ? '…' : ''}`);
-
-  const [targetEvents, targetVars] = await Promise.all([listEvents(t.identity, t.orgId, t.botId), listSessions(t.identity, t.orgId, t.botId)]);
-  if (cross && fresh.length) fresh = await remapInto(t, source.bot, set.testSetId, fresh, { targetEvents, targetVars });
+  let fresh;
+  try {
+    // 按导入前后的差集认「这次导进来的」：--into 时集里可能已经有同名用例（重复导了同一条执行），不能碰
+    const before = new Set((await listCases(t, set.testSetId)).map((c) => c.testCaseId));
+    const sum = await importExecs(t, set.testSetId, src.ids);
+    fresh = (await listCases(t, set.testSetId)).filter((c) => !before.has(c.testCaseId));
+    out(`导入：成功 ${sum.imported} · 失败 ${sum.failed}${sum.skippedNodeTypes.length ? ` · 跳过的节点类型 ${sum.skippedNodeTypes.join('、')}` : ''}`);
+    const missing = src.ids.filter((id) => !fresh.some((c) => execIdOfCase(c.name) === id));
+    if (missing.length) out(`⚠️ 没导进来的执行 ${missing.length} 条：${missing.slice(0, 10).map(shortId).join('、')}${missing.length > 10 ? '…' : ''}`);
+    if (cross && listsOk && fresh.length) fresh = await remapInto(t, set.testSetId, fresh, { sourceEvents, sourceVars, targetEvents, targetVars });
+  } catch (error) {
+    // 写到一半出错：说清留下了什么、怎么清理（审查 I4）
+    throw new MdError(error?.code ?? 'upstream', `${error?.message ?? error}（测试集「${set.name}」(${shortId(set.testSetId)}) ${created ? '已经建了' : '是已有的'}，可能已经导进去了一部分）`, {
+      exitCode: error?.exitCode,
+      hint: `md test cases ${set.testSetId} --bot ${shortId(t.botId)} 看留下了什么；要清理用 md test drop ${set.testSetId} --bot ${shortId(t.botId)}`,
+    });
+  }
   const bad = idProblems(fresh, { events: targetEvents, vars: targetVars });
   const badNames = [...new Set(bad.map((b) => b.name))];
   if (badNames.length && !source.stated) {

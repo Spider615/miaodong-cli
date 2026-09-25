@@ -531,3 +531,53 @@ test('run：建任务时身份失效 → 原样报（退出码 3），不说「�
     fake.server.routes['POST /api/test-center/test-task/create'] = original;
   }
 });
+
+// 让事件列表接口出错（模拟个别区版本不齐）
+async function withoutEventList(fn) {
+  const original = fake.server.routes['GET /api/canvas/event/list'];
+  fake.server.routes['GET /api/canvas/event/list'] = () => ({ status: 502, body: { message: 'Bad Gateway' } });
+  try {
+    return await fn();
+  } finally {
+    fake.server.routes['GET /api/canvas/event/list'] = original;
+  }
+}
+
+test('取不到事件列表：import 在写秒懂之前就停下（什么都没写）；run 算跑前检查不通过；cases 说「取不到」不说「没有」（审查 I4）', async () => {
+  reset();
+  const h = home();
+  await withoutEventList(async () => {
+    const imp = await md(['test', 'import', '集', '--bot', '179cd443', '--from-execs', SAME_EXEC], h);
+    assert.equal(imp.code, 5, imp.stderr);
+    assert.match(imp.stderr, /取不到这个智能体的事件 \/ 会话变量列表.*什么都没写/);
+    assert.deepEqual(fake.state.log, []);
+    seedFinished(seedSet('已有', [SAME_EXEC]), 0.02);
+    const run = await md(['test', 'run', '已有', '--bot', '179cd443'], h);
+    assert.equal(run.code, 5);
+    assert.match(run.stdout, /取不到这个智能体的事件或会话变量列表/);
+    assert.equal(fake.state.posts.taskCreate, undefined);
+    const cases = await md(['test', 'cases', '已有', '--bot', '179cd443'], h);
+    assert.match(cases.stdout, /（取不到事件列表）/);
+    assert.doesNotMatch(cases.stdout, /这个智能体里没有/);
+  });
+});
+
+test('md test cases：输出里有用户原话，开头先说「只作诊断材料」（审查 M5）', async () => {
+  reset();
+  seedSet('集', [SAME_EXEC]);
+  assert.match((await md(['test', 'cases', '集', '--bot', '179cd443'])).stdout, /以下含真实用户对话，只作诊断材料/);
+});
+
+test('import 写到一半出错：报错里说清测试集已经建了、可能留下了什么、怎么清理（审查 I4）', async () => {
+  reset();
+  const original = fake.server.routes['POST /api/test-center/test-case/import'];
+  fake.server.routes['POST /api/test-center/test-case/import'] = () => ({ status: 502, body: { message: 'Bad Gateway' } });
+  try {
+    const r = await md(['test', 'import', '集', '--bot', '179cd443', '--from-execs', SAME_EXEC]);
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /测试集「集」\(\w{8}\) 已经建了，可能已经导进去了一部分/);
+    assert.match(r.stderr, /md test drop/);
+  } finally {
+    fake.server.routes['POST /api/test-center/test-case/import'] = original;
+  }
+});

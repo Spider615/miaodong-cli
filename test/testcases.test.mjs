@@ -56,3 +56,8 @@ test('preflight：事件没入口、画布上没有这种触发器都拦下；�
   assert.equal(r.unreviewed, 3);
   assert.deepEqual(preflight([importable[SAME_EXEC]], { canvas: targetCanvas(), events: botEvents[TARGET_BOT], vars: botVars[TARGET_BOT] }).plugins, []);
 });
+
+test('preflight：取不到事件或会话变量列表时算跑前检查不通过——没法核对就不能当作没问题（审查 I4）', () => {
+  const r = preflight([importable[SAME_EXEC]], { canvas: targetCanvas(), events: null, vars: botVars[TARGET_BOT] });
+  assert.match(r.errors.map((e) => e.reason).join(), /取不到这个智能体的事件或会话变量列表，没法核对会不会空跑/);
+});
