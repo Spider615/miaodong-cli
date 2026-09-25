@@ -181,6 +181,24 @@
   - 断言的 `type` 服务端不校验；写错时 `actionContent` 会被丢掉，这条断言永远不生效【实测】。
 - 触发类型：服务端枚举共 20 个【实测】。
 
+**核对 8**【实测 09-25：兴趣岛 179cd443 测试专用版，临时测试集，只写不跑、¥0，核完已删】
+- `test-case/create` 只回 `{code: 0}`，不给 id；7 条按 name 回读全部找到。
+- 必填由 400 校验列出：`triggerType`（20 个枚举之一）、`triggerInputs`（对象）、`sessionMemoryCustomData`（对象）、`testNodeOutputAssertions`（数组）、`canvasActionOutputAssertions`（数组）。`name` 不是必填。
+- 20 个触发类型：`input, receive-text-message, receive-image-message, receive-audio-message, receive-video-message, receive-file-message, receive-other-message, receive-intent-comment, receive-note-message, receive-share-note-comment-message, receive-email-message, custom-attr-event, tag-event, join-room, new-friend, canvas-event-trigger, bot-receive-text-message, write-message, contact-lead-filled, wecom-contact-bind`。
+- 这个区**丢 `dimension`**：写进去，读回来是空字符串。分类、溯源信息只能写进 name。
+- 用接口建的用例 `status=ready`、`isReviewed=true`；从执行记录导入的是 `isReviewed=false`。
+- 下面这些写进去、读回来逐字段不变：
+  - 发文本：`text` 为 `{verifyType:'llm', description}`、`{verifyType:'similarity', value, threshold}` 或 `{verifyType:'equal', value}`；
+  - 发事件：`verifyPayload {type, eventId, params}`，`actionContent {type, payload {eventId, eventName, params}}`；`params` 每个事件变量一项，例如 `{verifyType:'llm', description, value:''}`；`params` 可以是空对象；
+  - 转人工：`{verifyPayload:{type:'handover'}, actionContent:{type:'handover'}}`，没有 payload。这个形状取自秒懂按一条转人工执行自动生成的断言；
+  - 聊天历史 `[{role, content}]`、字符串会话变量、`isStrictVerify: true`。
+- 发事件断言的 `actionContent.payload` 没带 `eventName` 时，服务端按 eventId 补上。
+- 真实用例里还有两种断言，`verifyPayload` 和 `actionContent` 的字段名不一样，md 不生成：
+  - 打标签：`verifyPayload {type, tagOperation, tagIds}`，`actionContent.payload {operation, tags[{tagId, tagName}], tagIds}`；
+  - 写字段：`verifyPayload {type, operations[{fieldId, updateOperation, value}]}`，`actionContent.payload` 的每项多一个 `fieldName`。
+- 事件列表每项带 `variables: [{name, type:{type}}]`。会话变量的 `type` 是 `{type: string | number | boolean | array | tag | datetime}`；「消息历史」是 `array`，元素是 `{role, content}`，真实历史里 role 只见过 `user`、`assistant`。
+- 没实测的：这些外部用例跑起来判定得对不对（没跑）；事件触发的外部用例不带 `executionId` 能不能正常跑。
+
 **「沙箱」的准确含义**
 - 测试执行带 `testRun=true`，不进调优中心列表。
 - 发送、打标签、转人工是「执行并记为动作」。用户经验是不会真的送到客户手里，但接口本身证明不了。
@@ -370,38 +388,47 @@ AI 先把 Excel、飞书、聊天记录转成 JSONL，一行一条用例。格�
 
 | 字段 | 含义 |
 |---|---|
-| `name` | 必填，同一个测试集里唯一；溯源信息（例如源文件第几行）写在这里 |
-| `trigger` | triggerType，默认 `receive-text-message`；只接受服务端的 20 个枚举值 |
-| `text` / `image` / `event` + `data` | 常用触发的简写。`text` 填文本；`image` 填最后一张图，写进 `imageUrl`；`event` 填事件名，按名字换成 eventId，`data` 是事件变量 |
-| `input` | 完整的 `triggerInputs`；给了它就不再用上面的简写 |
-| `history` | 此前的上下文：字符串数组（图片写裸 URL），或 `{role, content}` 数组。写进这个 bot 的「消息历史」变量 |
-| `vars` | `{会话变量名: 值}`，按名字换成 UUID |
-| `expect` | 断言的简写。见下方说明 |
-| `scenario` | 场景名或场景路径；有场景树时挂上去 |
-| `dimension`、`strict`、`mocks` | 可选 |
+| `name` | 必填，前后空格去掉；同一个测试集里唯一。溯源信息（例如源文件第几行）写在这里：这个区不保存 `dimension`（§2.3 核对 8） |
+| `trigger` | triggerType，只接受 20 个枚举值。不写时按简写推：`event` → `canvas-event-trigger`，`image` → `receive-image-message`，`text` → `receive-text-message` |
+| `text` | 文本消息的内容，只用于 `receive-text-message` |
+| `image` | 最后一张图的 URL，写进 `imageUrl`。图片用例不能再写 `text`：用户另发的文字属于聊天历史，写进 `history` |
+| `event` + `data` | 事件名，按名字换成 eventId；`data` 是事件变量，变量名要在这个事件里有 |
+| `input` | 完整的 `triggerInputs`，要和 `trigger` 一起写，不能和上面的简写混用。没有简写的触发类型只能用它 |
+| `history` | 此前的上下文：字符串（记成 user 说的；图片写裸 URL），或 `{role: user 或 assistant, content}`。写进这个 bot 的「消息历史」变量 |
+| `vars` | `{会话变量名: 值}`，按名字换成 UUID；字符串、数字、布尔、数组类型的变量会核对值的类型 |
+| `expect` | 断言：一种写法，或几种写法组成的数组。见下方说明 |
+| `scenario` | 场景名或场景路径（`父/子`）；有场景树时挂上去 |
+| `dimension`、`strict`、`mocks` | 可选。`strict` 写进 `isStrictVerify`；`mocks` 是 `{plugin, sql}`，原样写进 `pluginMockOutputs`、`sqlDbMockOutputs` |
+| 以 `_` 开头的字段 | 自己的备注，md 不看 |
 
-`expect` 有这几种写法：
-- 字符串：用 LLM 判定回复；
-- `{reply: …}`，里面写 `llm`、`similar` 或 `equal`；
+别的字段一律报错：比如把 `expect` 拼成 `expected`，不报错的话就会建出一条没有断言的用例。
+
+`expect` 的写法（只生成 §2.3 核对 8 实测过的形状）：
+- 字符串：用 LLM 判定回复（发文本）；
+- `{reply: …}`：字符串同上；或者 `{llm: …}`、`{similar: …, threshold}`、`{equal: …}` 三选一。`threshold` 默认 0.75，和秒懂自动生成的一样；
 - `{handover: true}`：期望转人工；
-- `{event: "事件名"}`：期望发出某个事件；
-- `raw`：原样写入的断言。
+- `{event: "事件名"}`：期望发出某个事件。加 `params: {变量名: …}` 还能核对事件变量，每项的写法同 `reply`。
+  太极类 bot 的回复是通过「发送」这类事件发出去的，要核对回复内容就用它，例如 `{event: "发送4.0", params: {text: "应说明退款流程"}}`；
+- `{raw: …}`：原样写入的断言（一条或数组），`verifyPayload.type` 和 `actionContent.type` 要一致。打标签、写字段这类 md 不生成的断言用它。
+
+没写 `expect` 的用例照样导入，但会提醒：没有断言，跑了只能看实际回复。
 
 导入流程：
-1. **本地先校验全部用例**：
-   - name 唯一，用了 `--into` 时还要和集里已有的用例比；
-   - 触发类型合法，常用触发的必填字段齐全；
-   - 历史变量、会话变量、事件、场景的名字都能在目标 bot 里找到。
-   - 有任何错误就一条都不写，并列出全部错误。
-2. **生成请求体**，按 skill 的建模规则：文字进历史、图片写裸 URL、断言两份都给，只生成已知有效的断言形态。
-3. **先写 1 条并回读**，逐字段核对有没有被服务端丢掉。字段在不同部署间会漂移，例如 `dimension`。
-   - 关键字段（触发输入、会话数据、断言）被丢了，就停下来报告；
-   - 非关键字段被丢了，提示后继续。
-4. **写入其余用例**：每批 50 条。写完按 name 回读拿到 id，再按 `scenario` 每批 100 个挂场景；老一代的区跳过这一步，并说明原因。
+1. **本地先校验全部用例**。有任何错误就一条都不写，列出全部错误（带行号），退出码 1：
+   - 每行是 JSON；name 唯一，用了 `--into` 时还要和集里已有的用例比；
+   - 触发类型合法，简写和触发类型对得上，必需的简写齐全；
+   - 历史变量、会话变量、事件、事件变量、场景的名字都能在目标 bot 里找到，而且不重名；
+   - 用到这些列表却取不到，也算错误。
+2. **生成请求体**，按 §2.3 的建模规则：文字进历史、图片写裸 URL、断言两份都给，只生成核对 8 实测过的形状。
+3. **先写 1 条并回读**，逐字段核对有没有被服务端丢掉：
+   - 关键字段（name、触发类型、触发输入、会话数据、断言）被丢了：撤回这 1 条（新建的集也删掉），报出哪些字段被丢，退出码 1；
+   - 非关键字段（`dimension`、`isStrictVerify`、mocks）被丢了：提示后继续。
+4. **写入其余用例**：每批 50 条。写完按 name 回读拿到 id；按 `scenario` 分组，每批 100 个挂场景。老一代的区跳过挂场景，并说明原因。
 5. **审计**：
-   - 全部用例逐字段比对；
-   - 导入前后，场景树各节点用例数的变化加起来要等于这次挂上的条数，否则提示有旧批次被重复挂载。
+   - 全部用例逐字段比对，按字段汇总差异；
+   - 挂场景前后，场景树各节点用例数的变化要等于这次挂上的条数，否则提示有旧批次被重复挂载。
 6. **输出**：提交、回读、挂载、缺失各多少条，以及字段差异。
+- 写到一半出错：同 §6.2，说清测试集是新建的还是已有的、可能已经写进去一部分。用 `--into` 重导时，已经写进去的 name 会被第 1 步拦下，所以只导缺的那几行。
 
 ### 6.4 批量改用例
 
@@ -409,10 +436,18 @@ AI 先把 Excel、飞书、聊天记录转成 JSONL，一行一条用例。格�
 md test edit <集> <脚本.mjs> [--confirm <计划码>]
 ```
 
-- 脚本默认导出 `({cases, h}) => void`，直接修改用例对象。
-- `h` 提供几类辅助：按名字换 eventId 或会话变量 id、生成断言、按名字挑用例。
-- 不带 `--confirm` 时只预演：md 比较改前和改后，列出改了几条、每条改了哪些字段，并给出计划码。
-- 带 `--confirm` 时：先备份，再用完整对象逐条 `update`，最后回读核对。
+- 脚本默认导出 `({cases, h}) => void`，直接修改用例对象（完整对象，同 `md test cases --out` 导出的）。
+- `h` 提供：
+  - `h.pick(条件)`：按名字（字符串、名字数组、正则）或函数挑用例；给的名字找不到就报错；
+  - `h.eventId(名字)`、`h.varId(名字)`、`h.historyVarId()`：按名字取 id；
+  - `h.expect(写法)`：按 §6.3 的 `expect` 写法生成断言数组；
+  - `h.history(条目)`：按 §6.3 的 `history` 写法生成「消息历史」的值；
+  - `h.log(文字)`：写进预演输出。
+- 只能改 `update` 会写的字段：name、dimension、触发类型、触发输入、会话数据、mocks、断言、严格校验。
+  改了别的字段（id、场景挂载、审核状态…）、增删用例、把 name 改成空的或重名的，都报错，什么都不改。
+- 不带 `--confirm` 时只预演：列出改了几条、每条改了哪些字段，给出计划码。计划码绑定每条改前和改后的内容：预演之后集里的用例变了，确认就对不上，要重新预演。
+- 带 `--confirm` 时：先把全部用例备份到本机，再用完整对象逐条 `update`（全量覆盖），最后回读核对；`dimension` 这类会被这个区丢掉的字段只提醒。
+- 批量改走计划码，skill 规定必须先得到用户明确同意（§7）。
 
 ### 6.5 跑
 
@@ -594,6 +629,10 @@ md test run <集> [--version vX] [--rounds 1] [--concurrency 5] [--name <任务�
    - 逐条 `costInCny` 不实时：跑完那一条才有值。
 7. ~~在用户机器上试弹一次对话框~~：2026-09-25 用户决定不用弹窗，不做。
 
+**2c-2 开工前（只写不跑，¥0）**：
+
+8. ✅ 09-25 已做（用户同意；在「【测试测试测试】太极2.0 测试专用版」上建临时测试集，导 1 条转人工执行、写 7 条外部用例，回读核对后删掉）。结论写回了 §2.3「核对 8」。
+
 核对结论写回本文 §2。影响实现的地方，按上文各节里「核对后再定」的写法执行。
 
 ## 10. 分步
@@ -602,7 +641,7 @@ md test run <集> [--version vX] [--rounds 1] [--concurrency 5] [--name <任务�
 - **2a（只读，零花费）**：公共部分、`md exec` 全部功能、执行记录相关文档；做核对 1–4。
 - **2b**：确认闸门（原为弹窗，09-25 改成确认码）、`md spend`、`md trial`、相关文档；核对 5、7 都不做（见 §9）。
 - **2c-1**：`md test` 的看、从执行记录导入（含跨智能体换 id）、跑、进度（含止损）、结果（含 xlsx）、暂停、删；相关文档；做了核对 6（09-25）。
-- **2c-2**：从外部文件导入用例（§6.3，含审计）、批量改用例（§6.4）；征得同意后停用旧 skill。
+- **2c-2**：从外部文件导入用例（§6.3，含审计）、批量改用例（§6.4）；做了核对 8（09-25）；征得同意后停用旧 skill。
 
 ## 11. 不确定项与假设
 
