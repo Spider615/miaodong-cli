@@ -34,7 +34,7 @@ export function syncVendor({ from, root = ROOT, force = false }) {
     return [file, r.status === 0 ? r.stdout : null];
   });
   const missing = contents.filter(([, data]) => data === null).map(([file]) => file);
-  if (missing.length) return { changed: [], missing, commit: null, branch, dirty: false };
+  if (missing.length) return { changed: [], missing, commit: null, branch, dirty: false, sourceUpdated: false };
   const changed = [];
   for (const [file, next] of contents) {
     const target = join(vendor, file);
@@ -44,10 +44,19 @@ export function syncVendor({ from, root = ROOT, force = false }) {
     changed.push(file);
   }
   const dirty = text(['status', '--porcelain', '--', ...source.files]) !== '';
-  if (changed.length || source.commit !== commit || source.branch !== branch) {
+  const sourceUpdated = changed.length > 0 || source.commit !== commit || source.branch !== branch;
+  if (sourceUpdated) {
     writeFileSync(sourceFile, `${JSON.stringify({ ...source, commit, branch, syncedAt: new Date().toISOString().slice(0, 10) }, null, 2)}\n`);
   }
-  return { changed, missing: [], commit, branch, dirty };
+  return { changed, missing: [], commit, branch, dirty, sourceUpdated };
+}
+
+// 同步结果怎么跟人说。只改了 SOURCE.json（老懂往前提交了、清单里的文件没变）也是要提交的改动，不能说「没有变化」（审查 M7）
+export function syncReport(r) {
+  const at = `老懂 ${r.branch} ${r.commit.slice(0, 7)}`;
+  if (r.changed.length) return [`更新了 ${r.changed.length} 个文件（${at}）：`, ...r.changed.map((file) => `  ${file}`)];
+  if (r.sourceUpdated) return [`清单里的文件内容都一样，只有 vendor/laodong/SOURCE.json 改了（现在记着${at}）：这也是要提交的改动`];
+  return [`没有变化（${at}）`];
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -69,12 +78,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     process.exit(1);
   }
   if (r.dirty) console.log('⚠️ 老懂工作区里这些文件有没提交的改动：拷的是已提交的版本（HEAD），没提交的没拷');
-  if (!r.changed.length) {
-    console.log(`没有变化（老懂 ${r.branch} ${r.commit.slice(0, 7)}）`);
-    process.exit(0);
-  }
-  console.log(`更新了 ${r.changed.length} 个文件（老懂 ${r.branch} ${r.commit.slice(0, 7)}）：`);
-  for (const file of r.changed) console.log(`  ${file}`);
+  for (const line of syncReport(r)) console.log(line);
+  if (!r.changed.length) process.exit(0);
   console.log('跑测试……');
   const t = spawnSync('npm', ['test'], { cwd: ROOT, stdio: 'inherit' });
   process.exit(t.status ?? 1);

@@ -4,8 +4,11 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { syncVendor } from '../scripts/sync-laodong.mjs';
+import { syncReport, syncVendor } from '../scripts/sync-laodong.mjs';
 import { tempHome } from './helpers/run-cli.mjs';
+import { gitCommitAll, gitInit, useSigningGitConfig } from './helpers/git.mjs';
+
+useSigningGitConfig();
 
 function write(dir, files) {
   for (const [path, text] of Object.entries(files)) {
@@ -13,17 +16,13 @@ function write(dir, files) {
     writeFileSync(join(dir, path), text);
   }
 }
-const commitAll = (dir) => {
-  execFileSync('git', ['add', '.'], { cwd: dir });
-  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'c'], { cwd: dir });
-};
 const head = (dir) => execFileSync('git', ['-C', dir, 'rev-parse', 'HEAD'], { encoding: 'utf-8' }).trim();
 // 一个假的老懂仓库：git init、写文件、提交
 function fakeLaodong(files) {
   const dir = tempHome();
-  execFileSync('git', ['init', '-q'], { cwd: dir });
+  gitInit(dir);
   write(dir, files);
-  commitAll(dir);
+  gitCommitAll(dir);
   return dir;
 }
 // 一个假的本仓库：vendor/laodong 下有 SOURCE.json（记着上次同步的提交）和旧文件
@@ -67,7 +66,25 @@ test('sync：只拷已提交的内容，SOURCE.json 记下分支；上次同步�
   // 老懂切到一条不含上次同步提交的分支（另起一段历史）
   execFileSync('git', ['checkout', '-q', '--orphan', 'other'], { cwd: from });
   write(from, { 'a/x.ts': 'v0\n' });
-  commitAll(from);
+  gitCommitAll(from);
   assert.throws(() => syncVendor({ from, root }), /不在.*历史里/);
   assert.deepEqual(syncVendor({ from, root, force: true }).changed, ['a/x.ts']);
+});
+
+test('sync：清单里的文件没变、只是老懂往前提交了，SOURCE.json 改记新提交，而且要说出来，不能说「没有变化」（审查 M7）', () => {
+  const from = fakeLaodong({ 'a/x.ts': 'x\n' });
+  const root = fakeRoot(['a/x.ts'], { 'a/x.ts': 'x\n' }, head(from));
+  syncVendor({ from, root }); // 先同步一次，SOURCE.json 记下分支
+  let r = syncVendor({ from, root });
+  assert.deepEqual([r.changed, r.sourceUpdated], [[], false]);
+  assert.match(syncReport(r).join('\n'), /没有变化/);
+  // 老懂提交了清单外的文件：清单里的文件没变，但 SOURCE.json 要改记新提交——这是要提交的改动
+  write(from, { 'other.ts': 'y\n' });
+  gitCommitAll(from);
+  r = syncVendor({ from, root });
+  assert.deepEqual([r.changed, r.sourceUpdated], [[], true]);
+  assert.equal(JSON.parse(readFileSync(join(root, 'vendor', 'laodong', 'SOURCE.json'), 'utf-8')).commit, head(from));
+  const report = syncReport(r).join('\n');
+  assert.match(report, /SOURCE\.json/);
+  assert.doesNotMatch(report, /没有变化/);
 });
