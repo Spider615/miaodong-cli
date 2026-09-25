@@ -162,9 +162,13 @@ export async function importCmd(args) {
   const bad = idProblems(fresh, { events: targetEvents, vars: targetVars });
   const badNames = [...new Set(bad.map((b) => b.name))];
   if (badNames.length && !source.stated) {
-    await deleteCases(t, fresh.map((c) => c.testCaseId));
-    if (created) await deleteTestSet(t, set.testSetId);
-    throw new MdError('source_mismatch', `${badNames.length} 条用例的事件或会话变量在「${t.botName}」里对不上，多半是别的智能体的执行；已撤回这次导进来的 ${fresh.length} 条${created ? '，也删了新建的测试集' : ''}`, {
+    // 撤回后回读：没删干净就不删集，并说清还剩几条（审查 M6）
+    const freshIds = new Set(fresh.map((c) => c.testCaseId));
+    await deleteCases(t, [...freshIds]);
+    const left = (await listCases(t, set.testSetId)).filter((c) => freshIds.has(c.testCaseId)).length;
+    if (created && !left) await deleteTestSet(t, set.testSetId);
+    const tail = left ? `；但还剩 ${left} 条没删掉，用 md test drop ${set.testSetId} --bot ${shortId(t.botId)} 清理` : created ? '，也删了新建的测试集' : '';
+    throw new MdError('source_mismatch', `${badNames.length} 条用例的事件或会话变量在「${t.botName}」里对不上，多半是别的智能体的执行；已撤回这次导进来的 ${fresh.length - left} 条${tail}`, {
       exitCode: EXIT.BLOCKED,
       hint: '补 --from-bot <源智能体> 再导：md 会按名字把 id 换成这个智能体的',
     });

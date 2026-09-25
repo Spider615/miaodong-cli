@@ -581,3 +581,43 @@ test('import 写到一半出错：报错里说清测试集已经建了、可能�
     fake.server.routes['POST /api/test-center/test-case/import'] = original;
   }
 });
+
+// 让批量删用例只删掉第一条（模拟部分失败）
+async function withPartialDelete(fn) {
+  const original = fake.server.routes['POST /api/test-center/test-case/batch-delete'];
+  fake.server.routes['POST /api/test-center/test-case/batch-delete'] = (req) => original({ ...req, body: { testCaseIds: req.body.testCaseIds.slice(0, 1) } });
+  try {
+    return await fn();
+  } finally {
+    fake.server.routes['POST /api/test-center/test-case/batch-delete'] = original;
+  }
+}
+
+test('drop：用例没删干净就不删集，说清还剩几条、备份在哪；预演时说明有任务还在跑（审查 M6）', async () => {
+  reset({ perPoll: 0 });
+  const set = seedSet('集', [SAME_EXEC, CROSS_EXEC]);
+  seedFinished(set, 0.02);
+  const h = home();
+  await md(['test', 'run', '集', '--bot', '179cd443', '--allow-preflight-errors'], h);
+  const preview = await md(['test', 'drop', '集', '--bot', '179cd443'], h);
+  assert.match(preview.stdout, /其中 1 个还在跑或排队/);
+  const code = preview.stdout.match(/计划码：([0-9a-f]{8})/)[1];
+  await withPartialDelete(async () => {
+    const r = await md(['test', 'drop', '集', '--bot', '179cd443', '--confirm', code], h);
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /还剩 1 条用例没删掉，测试集先不删/);
+    assert.match(r.stderr, /已备份/);
+  });
+  assert.ok(fake.state.sets.some((s) => s.testSetId === set));
+  assert.equal(fake.state.posts.setDelete, undefined);
+});
+
+test('import 撤回没删干净：不删集，说清还剩几条、怎么清理（审查 M6）', async () => {
+  reset();
+  await withPartialDelete(async () => {
+    const r = await md(['test', 'import', '新集', '--bot', '179cd443', '--from-execs', `${CROSS_EXEC},${LOST_EXEC}`]);
+    assert.equal(r.code, 5);
+    assert.match(r.stderr, /还剩 1 条没删掉，用 md test drop/);
+  });
+  assert.equal(fake.state.sets.length, 1);
+});

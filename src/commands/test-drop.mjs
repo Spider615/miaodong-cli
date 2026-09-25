@@ -11,6 +11,8 @@ import { confirmCode, givenCode } from '../confirm.mjs';
 import { deleteCases, deleteTestSet, listCases, listTestSets, recentTasks } from '../testcenter.mjs';
 import { resolveTestSet, testTarget, testsDir } from '../test-common.mjs';
 
+const ACTIVE = new Set(['pending', 'processing', 'running']);
+
 export async function drop(args) {
   const t = await testTarget(args);
   const given = givenCode(args);
@@ -20,7 +22,8 @@ export async function drop(args) {
   // 计划码绑定预演时的用例：之后集里的用例变了，确认就对不上
   const code = confirmCode({ kind: 'drop', botId: t.botId, testSetId: set.testSetId, cases: hashOf(cases.map((c) => c.testCaseId).sort()) });
   out(targetLine(t));
-  out(`要删的测试集「${set.name}」(${shortId(set.testSetId)})：${cases.length} 条用例 · 挂了场景 ${cases.filter((c) => c.scenarioNodeId).length} 条 · 跑过的任务 ${tasks.length} 个（任务记录会留着）`);
+  const active = tasks.filter((x) => ACTIVE.has(String(x.status))).length;
+  out(`要删的测试集「${set.name}」(${shortId(set.testSetId)})：${cases.length} 条用例 · 挂了场景 ${cases.filter((c) => c.scenarioNodeId).length} 条 · 跑过的任务 ${tasks.length} 个（任务记录会留着）${active ? `；其中 ${active} 个还在跑或排队，删了集它们可能出错` : ''}`);
   if (given === null) {
     out(`这是预演，什么都没删。计划码：${code}`);
     out(`用户明确同意后执行：md test drop ${set.testSetId} --bot ${shortId(t.botId)} --confirm ${code}`);
@@ -32,6 +35,11 @@ export async function drop(args) {
   const backup = join(testsDir(t, 'backups'), `${shortId(set.testSetId)}-${stamp()}.json`);
   writeJson(backup, { testSet: set, cases });
   await deleteCases(t, cases.map((c) => c.testCaseId));
+  // 用例删干净了才删集：有删不掉的就停在这里（先删集会在场景树上留下孤儿计数，审查 M6）
+  const left = await listCases(t, set.testSetId);
+  if (left.length) {
+    throw new MdError('drop_incomplete', `还剩 ${left.length} 条用例没删掉，测试集先不删`, { hint: `全部用例已备份：${backup}；再运行一次 md test drop（会重新预演）` });
+  }
   await deleteTestSet(t, set.testSetId);
   if ((await listTestSets(t)).some((s) => s.testSetId === set.testSetId)) {
     throw new MdError('drop_incomplete', `测试集「${set.name}」删了，但回读还在`, { hint: `用例已备份：${backup}` });
