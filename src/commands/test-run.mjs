@@ -2,16 +2,16 @@
 
 import { boolArg, intArg, strArg } from '../args.mjs';
 import { EXIT, MdError } from '../errors.mjs';
-import { out, shortId, targetLine } from '../output.mjs';
+import { formatTime, note, out, shortId, targetLine } from '../output.mjs';
 import { formatCost } from '../execs.mjs';
 import { getCanvas, listEvents, listSessions, listVersions } from '../api.mjs';
 import { resolveVersion } from '../target.mjs';
 import { hashOf } from '../canvas.mjs';
 import { dayKey, loadLimits, readSpends, recordSpend, spendDecision, spentOn, updateSpend, withSpendLock } from '../spend.mjs';
 import { codeFor, givenCode, roundCost, stopForConfirm } from '../confirm.mjs';
-import { createTask, listCases, recentTasks } from '../testcenter.mjs';
+import { createTask, listCases, pauseTask, recentTasks, taskDetail, taskItems } from '../testcenter.mjs';
 import { UNKNOWN_CASE_COST, preflight } from '../testcases.mjs';
-import { readSources, resolveTestSet, testTarget, writeTaskRecord } from '../test-common.mjs';
+import { readSources, readTaskRecord, resolveTestSet, testTarget, writeTaskRecord } from '../test-common.mjs';
 
 const QUEUED = new Set(['pending', 'processing', 'running']);
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -117,5 +117,124 @@ export async function run(args) {
   updateSpend(plan.id, { taskId: testTaskId });
   out(`已建任务 ${name}（${testTaskId}）：跑的是${label}，${cases.length} 条 × ${rounds} 轮`);
   out(`下一步：md test status ${shortId(testTaskId)} --bot ${shortId(t.botId)} --wait（每 15 秒看一次；按实际花费推算超出额度会自动暂停）`);
+  return EXIT.OK;
+}
+
+const TERMINAL = new Set(['finished', 'paused', 'failed', 'error', 'cancelled', 'canceled']);
+const pollMs = () => (Number(process.env.MD_TEST_POLL_MS) > 0 ? Number(process.env.MD_TEST_POLL_MS) : 15_000);
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// 找任务：完整 id、id 前缀（至少 4 位）、任务名，在最近 50 个里找；给了完整 id 却不在里面，就直接查 detail
+export async function resolveTask(t, query) {
+  const q = String(query ?? '').trim();
+  if (!q) throw new MdError('usage', '缺任务：给任务 id、id 前缀或任务名', { exitCode: EXIT.USAGE });
+  const rows = await recentTasks(t, { limit: 50 });
+  const hits = rows.filter((x) => x.testTaskId === q || (q.length >= 4 && String(x.testTaskId).startsWith(q)) || x.name === q);
+  if (hits.length === 1) return hits[0];
+  if (hits.length > 1) {
+    throw new MdError('task_ambiguous', `「${q}」匹配到 ${hits.length} 个任务：${hits.slice(0, 5).map((x) => `${x.name}(${shortId(x.testTaskId)})`).join('、')}`, { exitCode: EXIT.TARGET, hint: '用更长的 id 前缀' });
+  }
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(q)) {
+    const detail = await taskDetail(t, q);
+    if (detail) return detail;
+  }
+  throw new MdError('task_not_found', `${t.botName} 最近的任务里没有「${q}」`, { exitCode: EXIT.TARGET, hint: `md test status --bot ${shortId(t.botId)} 看最近的任务` });
+}
+
+// 进度：跑完的条目数、通过、空跑（spec §2.3：没有执行、花费为空）、已完成条目的花费和平均
+function progressOf(detail, items) {
+  const done = items.filter((i) => i?.status && !['pending', 'processing'].includes(i.status));
+  const costs = done.map((i) => i.costInCny).filter((c) => typeof c === 'number');
+  const spent = costs.reduce((a, b) => a + b, 0);
+  return {
+    total: Math.max(items.length, (Number(detail?.totalTestCaseCount) || 0) * (Number(detail?.repeatTimes) || 1)),
+    done: done.length,
+    passed: done.filter((i) => i.passed === true).length,
+    noop: done.filter((i) => i.canvasExecAvailable === false && (i.costInCny === null || i.costInCny === undefined)).length,
+    spent,
+    unit: costs.length ? spent / costs.length : null,
+  };
+}
+
+function statusLine(detail, p) {
+  const cost = typeof detail?.totalCostInCny === 'number' ? formatCost(detail.totalCostInCny) : `已完成的 ${formatCost(p.spent)}`;
+  return `${detail?.name ?? ''} ${detail?.status} · ${p.done}/${p.total} · 通过 ${p.passed}${p.noop ? ` · 空跑 ${p.noop}` : ''} · ${cost}`;
+}
+
+// 止损（同 md trial 的逐次止损，审查 C1）：md 建的任务，按已完成条目的平均花费推算整个任务，超过额度就暂停
+function stopLoss(t, detail, p) {
+  const rec = readTaskRecord(t, detail?.testTaskId);
+  if (!rec || p.unit === null) return null;
+  const projected = p.unit * p.total;
+  if (projected <= rec.allowance) return null;
+  return `按已跑完的 ${p.done} 条平均 ${formatCost(p.unit)} 推算，整个任务要 ${formatCost(projected)}，超过额度 ${formatCost(rec.allowance)}`;
+}
+
+// 跑完记账：用秒懂给的总花费（没有就用逐条加起来的），只记一次（spec §6.6）。暂停的不记，账本保留预估
+function settle(t, detail, p) {
+  const rec = readTaskRecord(t, detail?.testTaskId);
+  if (!rec?.spendId || rec.settled || detail?.status !== 'finished') return;
+  updateSpend(rec.spendId, { actual: typeof detail.totalCostInCny === 'number' ? detail.totalCostInCny : p.spent, runs: p.total });
+  writeTaskRecord(t, { ...rec, settled: true });
+}
+
+export async function status(args) {
+  const t = await testTarget(args);
+  if (!args._[0]) {
+    const setQuery = strArg(args, 'set');
+    const set = setQuery ? await resolveTestSet(t, setQuery) : null;
+    const rows = await recentTasks(t, { testSetId: set?.testSetId, limit: 10 });
+    out(targetLine(t));
+    if (!rows.length) out('没有任务');
+    for (const x of rows) {
+      const total = (Number(x.totalTestCaseCount) || 0) * (Number(x.repeatTimes) || 1);
+      out(`  ${formatTime(x.createdAt)} ${shortId(x.testTaskId)} ${x.name} · ${x.status} · ${x.processedTestCaseCount ?? 0}/${total} · 通过 ${x.passedTestCaseCount ?? 0} · ${typeof x.totalCostInCny === 'number' ? formatCost(x.totalCostInCny) : '花费跑完才有'}`);
+    }
+    return EXIT.OK;
+  }
+  const task = await resolveTask(t, args._[0]);
+  const wait = boolArg(args, 'wait');
+  const timeoutMs = intArg(args, 'timeout', 540, 3600) * 1000;
+  const started = Date.now();
+  out(targetLine(t));
+  let detail = await taskDetail(t, task.testTaskId);
+  let p = progressOf(detail, await taskItems(t, task.testTaskId));
+  let last = '';
+  while (wait && !TERMINAL.has(String(detail?.status)) && Date.now() - started < timeoutMs) {
+    const line = statusLine(detail, p);
+    if (line !== last) note(`${Math.round((Date.now() - started) / 1000)}s ${line}`);
+    last = line;
+    const guard = stopLoss(t, detail, p);
+    if (guard) {
+      await pauseTask(t, task.testTaskId);
+      out(`⛔ ${guard}，已暂停任务（秒懂没有取消；要接着跑，把新的预估告诉用户，再重新 md test run）`);
+      detail = await taskDetail(t, task.testTaskId);
+      break;
+    }
+    await sleep(pollMs());
+    detail = await taskDetail(t, task.testTaskId);
+    p = progressOf(detail, await taskItems(t, task.testTaskId));
+  }
+  settle(t, detail, p);
+  out(statusLine(detail, p));
+  if (!TERMINAL.has(String(detail?.status))) {
+    out(wait ? `还没跑完（等了 ${Math.round(timeoutMs / 1000)} 秒）；接着等：md test status ${shortId(task.testTaskId)} --bot ${shortId(t.botId)} --wait` : '还没跑完；盯着跑加 --wait');
+  } else {
+    out(`看结果：md test results ${shortId(task.testTaskId)} --bot ${shortId(t.botId)} --out <文件.xlsx>`);
+  }
+  return EXIT.OK;
+}
+
+export async function stop(args) {
+  const t = await testTarget(args);
+  const task = await resolveTask(t, args._[0]);
+  out(targetLine(t));
+  if (TERMINAL.has(String(task.status))) {
+    out(`任务 ${task.name}（${shortId(task.testTaskId)}）已经是 ${task.status}，不用暂停`);
+    return EXIT.OK;
+  }
+  await pauseTask(t, task.testTaskId);
+  const detail = await taskDetail(t, task.testTaskId);
+  out(`已暂停任务 ${detail?.name ?? task.name}（${shortId(task.testTaskId)}）：${detail?.status}。秒懂没有取消，只能暂停；暂停后秒懂不给任务花费，账本保留预估`);
   return EXIT.OK;
 }

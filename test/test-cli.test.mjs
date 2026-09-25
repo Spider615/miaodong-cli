@@ -244,3 +244,58 @@ test('run：建任务明确被拒（4xx）→ 这一笔记 0；结果不明（5x
     fake.server.routes['POST /api/test-center/test-task/create'] = original;
   }
 });
+
+const taskOf = (name) => fake.state.tasks.find((x) => x.name.startsWith(name)).testTaskId;
+
+test('status：不给任务时列最近的任务；--wait 跑完后记一次实际花费，再查不重复记（审查重点 3）', async () => {
+  reset({ perPoll: 1 });
+  seedFinished(seedSet('集', [SAME_EXEC]), 0.02);
+  const h = home();
+  assert.equal((await md(['test', 'run', '集', '--bot', '179cd443', '--rounds', '2'], h)).code, 0);
+  const list = await md(['test', 'status', '--bot', '179cd443'], h);
+  assert.match(list.stdout, /集-草稿-\d{4}-\d{4} · processing/);
+  const task = taskOf('集-草稿');
+  const r = await md(['test', 'status', task.slice(0, 8), '--bot', '179cd443', '--wait'], h, { MD_TEST_POLL_MS: '5' });
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /finished · 2\/2 · 通过 2 · ¥0\.040/);
+  assert.match(r.stdout, /看结果：md test results/);
+  assert.equal(spendRows(h).find((x) => x.kind === 'test').actual, 0.04);
+  await md(['test', 'status', task.slice(0, 8), '--bot', '179cd443', '--wait'], h, { MD_TEST_POLL_MS: '5' });
+  const settles = readFileSync(join(h, 'md', 'spend.jsonl'), 'utf-8').trim().split('\n').filter((line) => line.includes('"actual":0.04'));
+  assert.equal(settles.length, 1);
+});
+
+test('status --wait 止损：按已跑完的平均花费推算整个任务超过额度就暂停（审查重点 3）', async () => {
+  reset({ perPoll: 1, itemCost: 1 });
+  seedFinished(seedSet('集', [SAME_EXEC]), 0.001);
+  const h = home();
+  assert.equal((await md(['test', 'run', '集', '--bot', '179cd443', '--rounds', '3'], h)).code, 0);
+  const task = taskOf('集-草稿');
+  const r = await md(['test', 'status', task, '--bot', '179cd443', '--wait'], h, { MD_TEST_POLL_MS: '5' });
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /⛔ 按已跑完的 1 条平均 ¥1\.00 推算，整个任务要 ¥3\.00，超过额度 ¥2\.00，已暂停任务/);
+  assert.deepEqual(fake.state.posts.pause.at(-1), { testTaskId: task });
+});
+
+test('status --wait 到时限还没跑完：说还没跑完、怎么接着等', async () => {
+  reset({ perPoll: 0 });
+  seedFinished(seedSet('集', [SAME_EXEC]), 0.02);
+  const h = home();
+  await md(['test', 'run', '集', '--bot', '179cd443'], h);
+  const r = await md(['test', 'status', taskOf('集-草稿'), '--bot', '179cd443', '--wait', '--timeout', '1'], h, { MD_TEST_POLL_MS: '200' });
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /还没跑完（等了 1 秒）；接着等：md test status/);
+});
+
+test('stop：暂停正在跑的任务；已经跑完的说不用暂停；找不到的任务退出码 4', async () => {
+  reset({ perPoll: 0 });
+  seedFinished(seedSet('集', [SAME_EXEC]), 0.02);
+  const h = home();
+  await md(['test', 'run', '集', '--bot', '179cd443'], h);
+  const task = taskOf('集-草稿');
+  const r = await md(['test', 'stop', task.slice(0, 8), '--bot', '179cd443'], h);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /已暂停任务 .*paused/);
+  assert.match((await md(['test', 'stop', '70000099', '--bot', '179cd443'], h)).stdout, /已经是 finished，不用暂停/);
+  assert.equal((await md(['test', 'stop', 'ffffffff', '--bot', '179cd443'], h)).code, 4);
+});
