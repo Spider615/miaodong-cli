@@ -2,6 +2,7 @@
 // 撤回本身也能中断：再运行一次，预演会说明停在哪一步，确认后接着做。
 // 导入时认不清的（可能是秒懂改写了内容的这次写的，也可能是别人加的），撤回不删、列出来，退出码 1；
 // 人在秒懂上处理完，再运行一次 md kb revoke <导入id> 复查。重建一直过不去的，预演给出跳过它的重建（要用户确认）。
+import { boolArg } from '../args.mjs';
 import { confirmCode, givenCode } from '../confirm.mjs';
 import { EXIT, MdError, usage } from '../errors.mjs';
 import { loadIdentities } from '../identity.mjs';
@@ -43,7 +44,8 @@ function withBriefLock(state, importId, fn) {
 
 export async function revoke(args) {
   const importId = args._[0];
-  if (!importId) throw usage('用法：md kb revoke <导入id> [--confirm <计划码>]', 'md kb imports 看本机有哪些导入记录');
+  if (!importId) throw usage('用法：md kb revoke <导入id> [--skip-rebuild] [--confirm <计划码>]', 'md kb imports 看本机有哪些导入记录');
+  const skipRebuild = boolArg(args, 'skip-rebuild');
   const given = givenCode(args);
   let rec = loadRecord(importId);
   const release = given === null ? null : lockKb(rec.state.region.identityKey, rec.state.kb.id, `撤回导入 ${importId}`);
@@ -80,7 +82,7 @@ export async function revoke(args) {
       out(`它们要是都不是这次导入建的（比如同事同一时间加的），用户确认后运行 md kb revoke ${importId} --confirm ${code}：md 不再追踪它们，秒懂上什么都不动。计划码：${code}`);
       return EXIT.ERROR;
     }
-    const plan = await revokePlan(ctx, rec);
+    const plan = await revokePlan(ctx, rec, { skipRebuild });
 
     const status = state.status === 'done' ? '已完成'
       : state.stopped ? `停在「${STEP_NAMES[state.stopped.step]}」`
@@ -107,8 +109,20 @@ export async function revoke(args) {
           : '  在库里找不到，写的时候库里也没多出来别的：就是没建成，接着做会重新发一次');
       }
     }
-    const skipped = ['faq', 'doc'].flatMap((t) => plan.skip[t].map((k) => (t === 'faq' ? plan.faqItems : plan.docItems).find((it) => it.key === k)).filter(Boolean)
-      .map((it) => (t === 'faq' ? `FAQ #${it.key}「${it.question}」` : `文件 #${it.key}「${it.full}」`)));
+    const named = (t, keys) => keys.map((k) => (t === 'faq' ? plan.faqItems : plan.docItems).find((it) => it.key === k)).filter(Boolean)
+      .map((it) => (t === 'faq' ? `FAQ #${it.key}「${it.question}」` : `文件 #${it.key}「${it.full}」`));
+    const skipped = ['faq', 'doc'].flatMap((t) => named(t, plan.skip[t]));
+    const must = ['faq', 'doc'].flatMap((t) => named(t, plan.mustSkip[t]));
+    const may = ['faq', 'doc'].flatMap((t) => named(t, plan.maySkip[t]));
+    if (!skipRebuild && must.length) {
+      throw new MdError('kb_revoke_needs_skip', `有 ${must.length} 条重建再发也没用（库里一模一样的不止一条，或者两次都对不上）：${must.join('、')}`, {
+        exitCode: EXIT.BLOCKED,
+        hint: `把这几条告诉用户：只能跳过它们的重建、先把这次导入建的删掉（原样在备份里：${rec.dir}/backup）。用户同意后加 --skip-rebuild 再预演：md kb revoke ${importId} --skip-rebuild`,
+      });
+    }
+    if (!skipRebuild && may.length) {
+      out(`重建连续失败两次的：${may.join('、')}。接着重试就确认下面的计划码；要跳过它们的重建、先把这次导入建的删掉，加 --skip-rebuild 再预演（md kb revoke ${importId} --skip-rebuild）`);
+    }
     if (skipped.length) {
       const doubt = rs?.open.op === 'create' ? [...Object.values(rs.ambiguous).flat(), ...rs.suspects, ...rs.past] : [];
       out(`重建不了（同一条重建失败了两次：认不上、核对不过或者段落写不进去，多半是秒懂改写或拒收了内容）：${skipped.join('、')}${doubt.length ? `；写的时候多出来的：${describe(rs.open.type, doubt)}（不删，列出来）` : ''}`);
@@ -116,6 +130,9 @@ export async function revoke(args) {
     }
     const del = plan.deleteFaqs.length || plan.deleteDocs.length;
     out(`要删（这次建的，还在库里的）：${del ? `FAQ ${plan.deleteFaqs.length} 条 · 文件 ${plan.deleteDocs.length} 个${listOf('faq', plan.deleteFaqs)}${listOf('doc', plan.deleteDocs)}` : '没有'}`);
+    const partials = [...plan.partial.del.faq.map((id) => `FAQ #${id}`), ...plan.partial.del.doc.map((id) => `文件 #${id}`)];
+    if (partials.length) out(`  其中 ${partials.join('、')} 是跳过重建的那几条撤回自己建了一半的（还是 md 写的内容）`);
+    if (plan.partial.keep.length) out(`跳过重建的那几条，撤回建了一半、又被人改过的，不删：${plan.partial.keep.join('、')}`);
     if (del) out(`  删之前先把它们当时的内容备份到本机：${rec.dir}/revoke-backup`);
     const paragraphs = plan.docItems.reduce((n, d) => n + d.paragraphs.length, 0);
     out(`要重建（这次删的，从备份）：${plan.faqItems.length || plan.docItems.length ? `FAQ ${plan.faqItems.length} 条 · 文件 ${plan.docItems.length} 个（${paragraphs} 段）` : '没有'}`);
@@ -128,7 +145,7 @@ export async function revoke(args) {
     if (plan.docItems.some((d) => d.originalFile)) out(`原文件传不回秒懂：重建的是同名手工文件（段落一样），原文件在备份里：${rec.dir}/backup/docs`);
 
     const code = confirmCode({
-      kind: 'kb-revoke', importId, steps: Object.keys(state.revoke?.steps ?? {}), scope: plan.scope, skip: plan.skip,
+      kind: 'kb-revoke', importId, steps: Object.keys(state.revoke?.steps ?? {}), scope: plan.scope, skip: plan.skip, skipRebuild,
       deleteFaqIds: plan.deleteFaqs.map((r) => r.id), deleteDocIds: plan.deleteDocs.map((r) => r.id), changed: plan.changed.map((c) => c.key),
       doubt: plan.doubt?.mixed ? plan.doubt.mixed.map(({ type, row }) => `${type}#${row.id}`) : plan.doubt?.rows.map((r) => r.id) ?? [], dupes: plan.dupes, goneBefore: plan.goneBefore,
       revokeOpen: rs ? {
@@ -138,7 +155,7 @@ export async function revoke(args) {
     });
     if (given === null) {
       out(`这是预演，什么都没写。计划码：${code}`);
-      out(`用户明确同意后执行：md kb revoke ${importId} --confirm ${code}`);
+      out(`用户明确同意后执行：md kb revoke ${importId}${skipRebuild ? ' --skip-rebuild' : ''} --confirm ${code}`);
       return EXIT.OK;
     }
     if (given !== code) throw new MdError('plan_mismatch', `计划码对不上（给的是 ${given || '空'}，当前是 ${code}）：库里的情况在预演之后变了，或者计划码抄错了`, { exitCode: EXIT.BLOCKED, hint: '重新预演一次，把新的清单给用户看' });

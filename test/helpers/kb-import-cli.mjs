@@ -43,9 +43,9 @@ export async function resume(importId, h, env) {
   return { preview: p, done: await runCli(['kb', 'import', '--resume', importId, '--confirm', codeOf(p)], { home: h, env }) };
 }
 
-// 撤回：预演拿计划码，再确认
-export async function revoke(importId, h, env) {
-  const p = await runCli(['kb', 'revoke', importId], { home: h, env });
+// 撤回：预演拿计划码，再确认（extra：比如 --skip-rebuild）
+export async function revoke(importId, h, env, extra = []) {
+  const p = await runCli(['kb', 'revoke', importId, ...extra], { home: h, env });
   assert.equal(p.code, 0, p.stderr);
-  return { preview: p, done: await runCli(['kb', 'revoke', importId, '--confirm', codeOf(p)], { home: h, env }) };
+  return { preview: p, done: await runCli(['kb', 'revoke', importId, ...extra, '--confirm', codeOf(p)], { home: h, env }) };
 }

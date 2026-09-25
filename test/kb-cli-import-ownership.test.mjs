@@ -297,7 +297,10 @@ test('撤回时秒懂一直改写重建的内容：两次都对不上之后，�
     assert.equal(first.done.code, 1);
     const second = await revoke(importId, h);
     assert.equal(second.done.code, 1);
-    const third = await revoke(importId, h);
+    const needs = await runCli(['kb', 'revoke', importId], { home: h });
+    assert.equal(needs.code, 5);
+    assert.match(needs.stderr, /--skip-rebuild/);
+    const third = await revoke(importId, h, undefined, ['--skip-rebuild']);
     assert.match(third.preview.stdout, /重建不了[^\n]*FAQ #7002「退款多久到账（原路）」/);
     assert.match(third.preview.stdout, /backup/);
     assert.equal(third.done.code, 1);

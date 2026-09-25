@@ -8,10 +8,12 @@
 //    撤回时一直列出来（它们可能就是这次晚落库的）。一模一样的不止一条：分不清哪条是这次建的，一律不认、不删（ambiguous）。
 // 3. 窗口里没认上的是「可疑的」：可能是秒懂改写了内容的这次写的，也可能是同一时间别人加的——只列出来，不删、不往里写。
 //    窗口不知道时（发完之后一次列表都没成功），只把内容相近的算可疑，免得把不相干的都算进来。
-// 4. 每个没认上的 key 记下每一次尝试：窗口里有可疑的、一模一样的不止一条、或者请求成功却没认上，算「可疑的尝试」；
-//    请求本身失败（断网、5xx）又什么都没多出来，不算。可疑的尝试到两次，多半是秒懂在改写内容，不再重发。
-// 5. 删也先记意图：请求前在、请求后不在了的，才是这次删的；撤回只重建这些，别人删的不复活。
-// 6. 这里不删「自己的副本」：好几条一模一样的分不清是谁的，交给人。
+// 4. 每个没认上的 key 记下每一次尝试：窗口里有可疑的、一模一样的不止一条、请求成功却没认上、或者之后才冒出一模一样的，
+//    算「可疑的尝试」；请求本身失败（断网、5xx）又什么都没多出来，不算。可疑的尝试到两次，不再重发。
+// 5. 窗口里的判断只在请求刚发完时做一次，记进意图（exact / same / suspectIds）；续跑、撤回按记下的来，不按现在的库重判——
+//    当时可疑的，后来被人改成一样也还是可疑；当时一模一样不止一条的，后来被删掉一条也还是分不清（最后一次核实 Critical）。
+// 6. 删也先记意图：请求前在、请求后不在了的，才是这次删的；撤回只重建这些，别人删的不复活。
+// 7. 这里不删「自己的副本」：好几条一模一样的分不清是谁的，交给人。
 import { EXIT, MdError } from './errors.mjs';
 import { listFaqs, listFiles } from './kb.mjs';
 import { appendLog, claimedIds, saveState } from './kb-import-store.mjs';
@@ -28,7 +30,7 @@ export const chunks = (xs, n) => Array.from({ length: Math.ceil(xs.length / n) }
 export const mapOf = (book, type) => (type === 'faq' ? book.faqIds : book.docIds);
 export const label = (type) => (type === 'faq' ? 'FAQ' : '文件');
 const idsOf = (rows) => rows.map((r) => r.id);
-const DOUBTFUL = new Set(['doubt', 'unseen']);
+const DOUBTFUL = new Set(['doubt', 'unseen', 'late']);
 
 export function save(ctx) {
   saveState(ctx.dir, ctx.state);
@@ -118,6 +120,40 @@ export function settleCreate(open, rows, items, exclude, empty = new Set()) {
   return { claimed, late, ambiguous, unresolved, suspects };
 }
 
+// 续跑、撤回时按请求刚发完时记下的来认（纯函数）：记下的「窗口里唯一一条一模一样的」还在就认；记下的「不止一条」还是分不清；
+// 记下的可疑的还是可疑的；窗口之后才出现的一模一样的是 late（一条）或者分不清（不止一条）。
+// 当时一次列表都没成功（窗口不知道）：没有记录，窗口之后的规则套到请求之后新出现的全部
+export function resettle(open, rows, items, exclude, empty = new Set()) {
+  if (!Array.isArray(open.after) || !open.exact) return settleCreate({ ...open, after: null }, rows, items, exclude, empty);
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const before = new Set(open.before);
+  const window = new Set(open.after);
+  const same = (it, r) => (open.type === 'faq'
+    ? textKey(r.question) === textKey(it.question) && textKey(r.answer) === textKey(it.answer)
+    : textKey(r.name) === textKey(it.name) && !r.extension && empty.has(r.id));
+  const outside = rows.filter((r) => !before.has(r.id) && !window.has(r.id) && !exclude.has(r.id));
+  const claimed = {};
+  const late = {};
+  const ambiguous = {};
+  const unresolved = [];
+  for (const key of open.keys) {
+    const exactId = open.exact[key];
+    if (exactId && byId.has(exactId) && !exclude.has(exactId)) {
+      claimed[key] = exactId;
+      continue;
+    }
+    unresolved.push(key);
+    const it = items[key];
+    const hits = it ? outside.filter((r) => same(it, r)) : [];
+    const was = (open.same?.[key] ?? []).map((id) => byId.get(id)).filter(Boolean);
+    if (was.length) ambiguous[key] = [...was, ...hits];
+    else if (hits.length === 1) late[key] = hits[0];
+    else if (hits.length > 1) ambiguous[key] = hits;
+  }
+  const suspects = (open.suspectIds ?? []).map((id) => byId.get(id)).filter(Boolean);
+  return { claimed, late, ambiguous, unresolved, suspects };
+}
+
 // 认文件要知道候选是不是一段都没有：只查同名、手工、请求之后才出现的
 async function emptyDocs(ctx, open, rows, items, exclude) {
   if (open.type !== 'doc') return new Set();
@@ -130,9 +166,10 @@ async function emptyDocs(ctx, open, rows, items, exclude) {
   return empty;
 }
 
-async function settleRows(ctx, open, rows, items) {
+async function settleRows(ctx, open, rows, items, { recorded = false } = {}) {
   const exclude = excluded(ctx, open.type);
-  return settleCreate(open, rows, items, exclude, await emptyDocs(ctx, open, rows, items, exclude));
+  const empty = await emptyDocs(ctx, open, rows, items, exclude);
+  return recorded ? resettle(open, rows, items, exclude, empty) : settleCreate(open, rows, items, exclude, empty);
 }
 
 const attemptsOf = (book, type) => {
@@ -160,13 +197,19 @@ function noteAttempts(book, open, s) {
   }
 }
 
-// 这几条以前的尝试留下的可疑的（现在还在、这次没列的）；可疑的尝试已经两次的 key
-function history(book, type, keys, rows, current) {
+// 这几条以前的尝试留下的可疑的（现在还在、这次没列的）；可疑的尝试已经两次的 key。
+// 现在冒出了一模一样的晚到的（lateKeys），这个意图的那次尝试也算可疑（请求其实落库了，只是晚）
+function history(book, type, keys, rows, current, { lateKeys = new Set(), openAt = null } = {}) {
   const tries = attemptsOf(book, type);
   const shown = new Set(idsOf(current));
   const byId = new Map(rows.map((r) => [r.id, r]));
   const past = [...new Set(keys.flatMap((k) => (tries[k] ?? []).flatMap((a) => a.suspects)))].filter((id) => byId.has(id) && !shown.has(id)).map((id) => byId.get(id));
-  const stuck = keys.filter((k) => (tries[k] ?? []).filter((a) => DOUBTFUL.has(a.outcome)).length >= 2);
+  const doubtful = (k) => {
+    const list = tries[k] ?? [];
+    const n = list.filter((a) => DOUBTFUL.has(a.outcome) || (lateKeys.has(k) && a.intentAt === openAt)).length;
+    return n + (lateKeys.has(k) && !list.some((a) => a.intentAt === openAt) ? 1 : 0);
+  };
+  const stuck = keys.filter((k) => doubtful(k) >= 2);
   return { past, stuck };
 }
 
@@ -226,8 +269,12 @@ export async function createTracked(ctx, book, type, items, beforeRows) {
       continue;
     }
     open.after = idsOf(rows);
-    save(ctx);
     s = await settleRows(ctx, open, rows, byKey);
+    // 当时的判断记下来（先存再认）：续跑、撤回只按这份记录认，不按以后的库重判
+    open.exact = { ...s.claimed };
+    open.same = Object.fromEntries(Object.entries(s.ambiguous).map(([k, rs]) => [k, idsOf(rs)]));
+    open.suspectIds = idsOf(s.suspects);
+    save(ctx);
     if (!s.unresolved.length) break;
   }
   if (!s) throw failure ?? listError; // 一次都没列出来：认不了，意图开着（after 不知道），续跑、撤回时再认
@@ -299,15 +346,16 @@ export async function settleOpen(ctx, book, items) {
     const present = new Set(rows.map((r) => r.id));
     return { open, gone: open.ids.filter((id) => !present.has(id)) };
   }
-  const s = await settleRows(ctx, open, rows, items[open.type] ?? {});
-  return { open, ...s, ...history(book, open.type, s.unresolved, rows, [...s.suspects, ...Object.values(s.ambiguous).flat(), ...Object.values(s.late)]) };
+  const s = await settleRows(ctx, open, rows, items[open.type] ?? {}, { recorded: true });
+  const lateKeys = new Set(Object.keys(s.late));
+  return { open, ...s, ...history(book, open.type, s.unresolved, rows, [...s.suspects, ...Object.values(s.ambiguous).flat(), ...Object.values(s.late)], { lateKeys, openAt: open.at }) };
 }
 
 // 用户确认之后把重新认的结果写进 book。
 // claimLate：窗口之后才出现、一模一样的那条，用户确认是这次建的，认下。
 // 没认上的：意图关掉，步骤里会重发（没多出来别的，就是没建成；多出来的已经给人看过，确认就是认定它们不是这次建的——尝试还记着）。
 // keep：还有认不清的（一模一样的、可疑的），意图留着（撤回用：以后再运行 revoke 时复查它们还在不在）
-export function applySettle(ctx, book, s, { keep = false, claimLate = false } = {}) {
+export function applySettle(ctx, book, s, { keep = false, claimLate = false, skip = [] } = {}) {
   if (!s) return;
   const { open } = s;
   if (open.op === 'delete') {
@@ -317,11 +365,22 @@ export function applySettle(ctx, book, s, { keep = false, claimLate = false } = 
     return;
   }
   const takeLate = claimLate && open.type === 'faq';
-  const claimed = { ...s.claimed, ...(takeLate ? Object.fromEntries(Object.entries(s.late).map(([k, r]) => [k, r.id])) : {}) };
+  const lateTaken = takeLate ? Object.fromEntries(Object.entries(s.late).filter(([k]) => !skip.includes(k)).map(([k, r]) => [k, r.id])) : {};
+  const claimed = { ...s.claimed, ...lateTaken };
   const unresolved = s.unresolved.filter((k) => !claimed[k]);
   const settled = { ...s, claimed, unresolved };
   Object.assign(mapOf(book, open.type), claimed);
+  if (Object.keys(lateTaken).length) {
+    book.lateClaimed ??= { faq: [], doc: [] };
+    book.lateClaimed[open.type] = [...new Set([...(book.lateClaimed[open.type] ?? []), ...Object.keys(lateTaken)])];
+  }
   noteAttempts(book, open, settled);
+  // 晚出现、一模一样、没认下的：这个意图的那次尝试算可疑（请求其实落库了，只是晚）
+  const tries = attemptsOf(book, open.type);
+  for (const key of unresolved.filter((k) => s.late[k])) {
+    const attempt = (tries[key] ?? []).find((a) => a.intentAt === open.at);
+    if (attempt) attempt.outcome = 'late';
+  }
   // 晚出现、一模一样、又没认下的：可能就是这次晚落库的，一直记着（撤回时列出来，不删）
   const orphans = unresolved.map((k) => s.late[k]).filter(Boolean).map((r) => r.id);
   if (orphans.length) {

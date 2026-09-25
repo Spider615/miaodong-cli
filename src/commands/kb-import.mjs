@@ -73,7 +73,7 @@ function printSettle(s, pkg, importId) {
     out(`  库里有同名的文件，是这次请求之后才出现的：${late.map(([, r]) => `#${r.id}「${r.name}」（空的手工文件）`).join('、')}——可能是这次的请求晚落库了，也可能是别人建的；md 不认它、也不往里写，续跑会另建一个`);
     out('  它要是这次晚落库的，请用户之后在秒懂上删掉这个空文件（撤回时也会把它列出来）');
   }
-  const resend = s.unresolved.filter((k) => !(s.late[k] && open.type === 'faq') && !s.ambiguous[k]);
+  const resend = s.unresolved.filter((k) => !s.late[k] && !s.ambiguous[k]);
   if (!resend.length) return;
   const doubt = [...s.suspects, ...s.past];
   if (doubt.length) {
@@ -97,9 +97,11 @@ async function duplicatesNow(ctx, rec, settle) {
   const waiting = settle?.open.op !== 'delete' ? new Set([...Object.keys(settle?.claimed ?? {}), ...Object.keys(settle?.late ?? {}), ...Object.keys(settle?.ambiguous ?? {})]) : new Set();
   const pending = pkg.faqs.filter((f) => !state.faqIds[f.key] && !waiting.has(f.key));
   if (!pending.length) return [];
-  const listed = new Set([...(settle?.suspects ?? []), ...(settle?.past ?? []), ...Object.values(settle?.late ?? {}), ...Object.values(settle?.ambiguous ?? {}).flat()].map((r) => r.id));
+  // 一模一样、等用户确认或者分不清的，按它们自己的规矩处理，这里不重复拦；可疑的（问题一样、答案不同）照样拦：再发就有两条同样的问题
+  const listed = new Set([...Object.values(settle?.late ?? {}), ...Object.values(settle?.ambiguous ?? {}).flat()].map((r) => r.id));
   const mine = new Set([...Object.values(state.faqIds), ...Object.values(settle?.claimed ?? {})]);
-  const before = new Set(snapshot?.faqIds ?? []);
+  // 导入开始时就在的，预演时查过：有快照按快照；快照还没拍（停在第一步），至少把包里要删的排除掉（它们还没备份，绝不能让人先删）
+  const before = new Set(snapshot?.faqIds ?? pkg.deletes.filter((t) => t.type === 'faq').map((t) => t.id));
   const rows = (await rowsOf(ctx, 'faq')).filter((r) => !before.has(r.id) && !mine.has(r.id) && !listed.has(r.id));
   return pending.flatMap((f) => rows.filter((r) => textKey(r.question) === textKey(f.question)).slice(0, 1)
     .map((r) => `新 FAQ「${f.question}」（${f.key}）和库里 #${r.id} 问题一样（导入开始之后才出现的，不是这次建的）：续跑会让这个问题有两条。请用户在秒懂上看一眼 #${r.id}：要保留它，就撤回这次导入（md kb revoke ${state.importId}）；要换成这次的内容，由用户在秒懂上处理掉它之后再续跑`));

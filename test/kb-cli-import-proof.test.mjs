@@ -171,7 +171,9 @@ for (const [label, rows, route, mangle] of [
       const importId = recordOf(r)[1];
       assert.equal((await revoke(importId, h)).done.code, 1);
       assert.equal((await revoke(importId, h)).done.code, 1);
-      const third = await revoke(importId, h);
+      const offer = await runCli(['kb', 'revoke', importId], { home: h });
+      assert.match(offer.stdout, /重建连续失败两次的[^\n]*--skip-rebuild/);
+      const third = await revoke(importId, h, undefined, ['--skip-rebuild']);
       assert.match(third.preview.stdout, /重建不了/);
       assert.equal(third.done.code, 1);
       assert.equal(faqsAsking(server, '课程怎么退款呀').length, 0);
@@ -191,7 +193,7 @@ test('撤回：要删的旧文件有一段超过 1000 字，秒懂拒收——�
     const importId = recordOf(r)[1];
     assert.equal((await revoke(importId, h)).done.code, 1);
     assert.equal((await revoke(importId, h)).done.code, 1);
-    const third = await revoke(importId, h);
+    const third = await revoke(importId, h, undefined, ['--skip-rebuild']);
     assert.match(third.preview.stdout, /重建不了[^\n]*文件 #601「旧价格表」/);
     assert.equal(third.done.code, 1);
     assert.equal(server.state.files.some((f) => f.name === '新价格表'), false);

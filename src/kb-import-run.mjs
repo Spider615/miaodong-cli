@@ -8,7 +8,7 @@ import { mapPool, unrestorable } from './kb-import-plan.mjs';
 import { readBackupDocs, readBackupFaqs, saveBackupDoc, saveBackupFaqs, saveSnapshot } from './kb-import-store.mjs';
 import { textKey } from './kb-package.mjs';
 import { WRITE_BATCH, createParagraph, docDetailRaw, downloadOriginal, listFaqRows, reviewFaqs } from './kb-write.mjs';
-import { batchesOf, chunks, createTracked, deleteTracked, log, paragraphsOf, rowsOf, save, trimmed, writeDoc } from './kb-ops.mjs';
+import { batchesOf, chunks, createTracked, deleteTracked, describe, log, orphanRows, paragraphsOf, rowsOf, save, trimmed, writeDoc } from './kb-ops.mjs';
 import { out } from './output.mjs';
 
 export const IMPORT_STEPS = ['snapshot', 'backup', 'canary', 'faqs', 'docs', 'verify', 'review', 'index', 'delete'];
@@ -53,17 +53,18 @@ export async function reviewAll(ctx, ids) {
   if (!ids.length) return;
   const byId = new Map((await listFaqs(ctx.identity, ctx.orgId, ctx.kbId, { checked: true })).map((f) => [f.id, f]));
   const left = ids.filter((id) => byId.get(id)?.reviewed !== true);
-  if (left.length) throw new MdError('kb_review_failed', `审核之后还有 ${left.length} 条不是已审核（#${left.slice(0, 10).join('、#')}）`);
+  if (left.length) throw Object.assign(new MdError('kb_review_failed', `审核之后还有 ${left.length} 条不是已审核（#${left.slice(0, 10).join('、#')}）`), { left });
 }
 
-// 等向量化：每个文件的段落数对得上、全部 ready（一段都没有的文件直接算好，审查 I4）；FAQ 用自己的问题做语义搜索要搜到自己。
-// done 记已确认的 key（写进状态，续跑时不重查）
+// 等向量化：每个文件的段落数对得上、全部 ready（一段都没有的文件直接算好，审查 I4；撤回重建的文件，备份里原来就不是 ready 的段落不等，
+// mustReady 标出要等的）；FAQ 用自己的问题做语义搜索要搜到自己。done 记已确认的 key（写进状态，续跑时不重查）。
+// 超时的错误带上还没好的是哪几条（撤回按条数失败次数）
 export async function waitIndexed(ctx, faqItems, faqIds, docItems, docIds, done) {
   const deadline = Date.now() + waitMs();
   for (;;) {
     for (const d of docItems.filter((x) => !done.doc.includes(x.key))) {
       const have = d.paragraphs.length ? await paragraphsOf(ctx, docIds[d.key]) : [];
-      if (have.length === d.paragraphs.length && have.every((p) => p.status === 'ready')) done.doc.push(d.key);
+      if (have.length === d.paragraphs.length && have.every((p, i) => p.status === 'ready' || d.mustReady?.[i] === false)) done.doc.push(d.key);
     }
     const pending = faqItems.filter((f) => !done.faq.includes(f.key));
     const found = await mapPool(pending, INDEX_CONCURRENCY, async (f) => (await searchFaqs(ctx.identity, ctx.orgId, ctx.kbId, f.question, { mode: 'semantic', size: SEARCH_SIZE }))
@@ -75,7 +76,8 @@ export async function waitIndexed(ctx, faqItems, faqIds, docItems, docIds, done)
     if (!docsLeft && !faqsLeft) return;
     if (Date.now() >= deadline) {
       const parts = [docsLeft ? `${docsLeft} 个文件的段落还没 ready` : '', faqsLeft ? `${faqsLeft} 条 FAQ 还搜不到自己` : ''].filter(Boolean);
-      throw new MdError('kb_index_waiting', `向量化还没完成：${parts.join('、')}`);
+      const items = [...docItems.filter((x) => !done.doc.includes(x.key)).map((x) => ({ type: 'doc', key: x.key })), ...faqItems.filter((x) => !done.faq.includes(x.key)).map((x) => ({ type: 'faq', key: x.key }))];
+      throw Object.assign(new MdError('kb_index_waiting', `向量化还没完成：${parts.join('、')}`), { items });
     }
     await sleep(pollMs());
   }
@@ -322,5 +324,10 @@ export async function runImport(ctx) {
   }
   ctx.state.status = 'done';
   save(ctx);
+  const orphans = await orphanRows(ctx, ctx.state);
+  for (const type of ['faq', 'doc']) {
+    const rows = orphans.filter((x) => x.type === type).map((x) => x.row);
+    if (rows.length) out(`另外：库里有 ${rows.length} 条和要建的一模一样、但是请求之后才出现的，md 没认：${describe(type, rows)}——可能是这次晚落库的（多出来的），也可能是别人建的；请用户在秒懂上看一眼，是多出来的就删掉`);
+  }
   out(`完成。要撤回就运行：md kb revoke ${id}`);
 }
