@@ -323,23 +323,26 @@ const STEPS = {
     if (changed.length) {
       throw new MdError('kb_target_changed', `要删的内容在备份之后被人改过：${changed.join('、')}。按旧备份删掉会丢掉这些改动，所以一条都没删`, { hint: `新内容已经写进去了；要撤回就运行 md kb revoke ${ctx.state.importId}，再按改过的内容重新生成导入包` });
     }
-    if (faqTargets.length) {
-      const present = new Set(nowFaqs.keys());
-      const todo = faqTargets.filter((id) => present.has(id));
-      for (const batch of chunks(todo, WRITE_BATCH)) {
-        await deleteFaqs(ctx.identity, ctx.orgId, ctx.kbId, batch);
-        log(ctx, { op: 'batch-delete', count: batch.length, ids: batch });
-      }
+    // 每删完一批就记进状态：删到一半断了，撤回也知道要重建哪些
+    const mark = (type, ids) => {
+      ctx.state.deleted[type] = [...new Set([...ctx.state.deleted[type], ...ids])];
+      save(ctx);
+    };
+    const todo = faqTargets.filter((id) => nowFaqs.has(id));
+    mark('faq', faqTargets.filter((id) => !nowFaqs.has(id)));
+    for (const batch of chunks(todo, WRITE_BATCH)) {
+      await deleteFaqs(ctx.identity, ctx.orgId, ctx.kbId, batch);
+      log(ctx, { op: 'batch-delete', count: batch.length, ids: batch });
+      mark('faq', batch);
     }
-    const presentDocs = new Set((await listFiles(ctx.identity, ctx.orgId, ctx.kbId)).map((d) => d.id));
-    for (const id of docTargets.filter((x) => presentDocs.has(x))) {
+    mark('doc', docTargets.filter((id) => !nowDocs.has(id)));
+    for (const id of docTargets.filter((x) => nowDocs.has(x))) {
       await deleteDoc(ctx.identity, ctx.orgId, ctx.kbId, id);
       log(ctx, { op: 'file-delete', ids: [id] });
+      mark('doc', [id]);
     }
     const leftFaqs = new Set((await listFaqs(ctx.identity, ctx.orgId, ctx.kbId)).map((f) => f.id));
     const leftDocs = new Set((await listFiles(ctx.identity, ctx.orgId, ctx.kbId)).map((d) => d.id));
-    ctx.state.deleted = { faq: faqTargets.filter((id) => !leftFaqs.has(id)), doc: docTargets.filter((id) => !leftDocs.has(id)) };
-    save(ctx);
     const still = [...faqTargets.filter((id) => leftFaqs.has(id)).map((id) => `FAQ #${id}`), ...docTargets.filter((id) => leftDocs.has(id)).map((id) => `文件 #${id}`)];
     if (still.length) throw new MdError('kb_delete_incomplete', `删了之后读回来还在：${still.join('、')}`);
     return `删了 FAQ ${faqTargets.length} 条、文件 ${docTargets.length} 个，读回确认已经不在`;
