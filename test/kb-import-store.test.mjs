@@ -24,7 +24,7 @@ test('kb import store：新建记录——导入 id 是时间加包指纹前 4 �
   assert.equal(readFileSync(join(rec.dir, 'package', 'faqs.jsonl'), 'utf-8'), readFileSync(join(pkg.dir, 'faqs.jsonl'), 'utf-8'));
   assert.equal(existsSync(join(rec.dir, 'package', 'docs.jsonl')), false);
   assert.deepEqual({ ...rec.state, createdAt: 'x' }, {
-    schema: 1, importId: rec.importId, region, org, kb, fingerprint: pkg.fingerprint, createdAt: 'x', status: 'new',
+    schema: 1, importId: rec.importId, region, org, kb, fingerprint: pkg.fingerprint, contentHash: pkg.contentHash, createdAt: 'x', status: 'new',
     steps: {}, stopped: null, faqIds: {}, docIds: {}, deleted: { faq: [], doc: [] }, indexed: { faq: [], doc: [] }, open: null, revoke: null,
   });
   assert.equal(mode(rec.dir), 0o700);
@@ -100,9 +100,9 @@ test('kb import store：本机导入记录认下的 id（导入建的、撤回�
   saveState(other.dir, { ...other.state, faqIds: { f1: 1 } });
   const ids = claimedIds('k1', KB_FAQ);
   assert.deepEqual([[...ids.faq].sort(), [...ids.doc]], [[90001, 90005], [9001]]);
-  assert.equal(activeImport('k1', KB_FAQ, pkg.fingerprint).state.importId, a.importId);
+  assert.equal(activeImport('k1', KB_FAQ, pkg.contentHash).state.importId, a.importId);
   saveState(a.dir, { ...loadRecord(a.importId).state, status: 'revoked' });
-  assert.equal(activeImport('k1', KB_FAQ, pkg.fingerprint), null);
+  assert.equal(activeImport('k1', KB_FAQ, pkg.contentHash), null);
 });
 
 test('kb import store：一个库同一时间只能有一个 md 在写——锁着就报 kb_locked（退出码 5）；解锁后能再锁；锁的主人不在了就接过来', () => {

@@ -72,8 +72,8 @@ test('md kb import 执行：备份在第一个写请求之前；试写一条；�
   });
 });
 
-test('md kb import 执行：试写的 FAQ 按问题认得出、答案被秒懂改了——它是自己建的，删掉，停下，别的一条都不写', async () => {
-  await withServer({ mangle: (s) => (s.endsWith('。') ? `${s}（改）` : s) }, async (server, h) => {
+test('md kb import 执行：试写的 FAQ 读回来只差空白（问题、答案去掉空白后一样）——能证明是自己建的，删掉，停下，别的一条都不写', async () => {
+  await withServer({ mangle: (s) => s.replace('，', '， ') }, async (server, h) => {
     const dir = writePackage(goodPackage());
     const code = await preview(['kb', 'import', dir], h);
     const r = await runCli(['kb', 'import', dir, '--confirm', code], { home: h });
@@ -86,18 +86,20 @@ test('md kb import 执行：试写的 FAQ 按问题认得出、答案被秒懂�
   });
 });
 
-test('md kb import 执行：试写的 FAQ 连问题都被改了——认不出是不是自己建的：不删它，停下并列出来，别的一条都不写', async () => {
-  await withServer({ mangle: (s) => `${s}（改）` }, async (server, h) => {
-    const dir = writePackage(goodPackage());
-    const code = await preview(['kb', 'import', dir], h);
-    const r = await runCli(['kb', 'import', dir, '--confirm', code], { home: h });
-    assert.equal(r.code, 1);
-    assert.match(r.stderr, /停在「试写一条」：1 条 FAQ 发出去了，但在库里对不上（「课程怎么退款呀」）；写的时候库里多出来 1 条对不上的：#90001「课程怎么退款呀（改）」/);
-    assert.match(r.stderr, /md 不会动它们/);
-    assert.equal(server.state.faqs.some((f) => f.id === 90001), true);
-    assert.deepEqual(server.writes().map((q) => q.path), ['/api/qa/batch-create']);
+for (const [label, mangle] of [['答案被改了', (s) => (s.endsWith('。') ? `${s}（改）` : s)], ['问题、答案都被改了', (s) => `${s}（改）`]]) {
+  test(`md kb import 执行：试写的 FAQ ${label}——证明不了是自己建的（可能是同一时间别人加的）：不删它，停下并列出来，别的一条都不写`, async () => {
+    await withServer({ mangle }, async (server, h) => {
+      const dir = writePackage(goodPackage());
+      const code = await preview(['kb', 'import', dir], h);
+      const r = await runCli(['kb', 'import', dir, '--confirm', code], { home: h });
+      assert.equal(r.code, 1);
+      assert.match(r.stderr, /停在「试写一条」：1 条 FAQ 发出去了，但在库里没有一模一样的（「课程怎么退款呀」）；写的时候库里多出来 1 条对不上的：#90001「课程怎么退款呀/);
+      assert.match(r.stderr, /md 不会动它们/);
+      assert.equal(server.state.faqs.some((f) => f.id === 90001), true);
+      assert.deepEqual(server.writes().map((q) => q.path), ['/api/qa/batch-create']);
+    });
   });
-});
+}
 
 const sixty = () => ({ faqs: Array.from({ length: 60 }, (_, i) => faq(`f${i + 1}`, `批量问题${i + 1}`)) });
 const countNew = (server) => server.state.faqs.filter((f) => f.kb === KB_FAQ && f.question.startsWith('批量问题')).length;

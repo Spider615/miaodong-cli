@@ -4,11 +4,13 @@
 // 同一个库同一时间只许一个 md 在写：<区>/<知识库 id 前 8 位>/.lock（审查 C2：两个续跑同时跑会重复建）。
 import { appendFileSync, chmodSync, existsSync, linkSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, join } from 'node:path';
+import { hostname } from 'node:os';
 import { EXIT, MdError } from './errors.mjs';
 import { ensureDir, ensureNewDir, mdHome, readJson, writeJson } from './home.mjs';
 import { stamp } from './workspace.mjs';
 
 const safe = (v) => String(v).replace(/[^\w.@-]+/g, '_');
+const HOST = hostname();
 const PACKAGE_FILES = ['manifest.json', 'faqs.jsonl', 'docs.jsonl', 'deletes.jsonl'];
 export const importsRoot = () => join(mdHome(), 'kb-imports');
 const kbDir = (regionKey, kbId) => join(importsRoot(), safe(regionKey), safe(String(kbId).slice(0, 8)));
@@ -32,7 +34,7 @@ export function createRecord({ region, org, kb, pkg, now = new Date() }) {
   for (const name of PACKAGE_FILES) {
     if (typeof pkg.raw?.[name] === 'string') writeSecret(join(dir, 'package', name), pkg.raw[name]);
   }
-  const parsed = { fingerprint: pkg.fingerprint, kb: pkg.kb, source: pkg.source, faqs: pkg.faqs, docs: pkg.docs, deletes: pkg.deletes };
+  const parsed = { fingerprint: pkg.fingerprint, contentHash: pkg.contentHash, kb: pkg.kb, source: pkg.source, faqs: pkg.faqs, docs: pkg.docs, deletes: pkg.deletes };
   writeJson(join(dir, 'package', 'parsed.json'), parsed, { secret: true });
   const state = {
     schema: 1,
@@ -41,6 +43,7 @@ export function createRecord({ region, org, kb, pkg, now = new Date() }) {
     org: { id: org.id, name: org.name },
     kb: { id: kb.id, name: kb.name },
     fingerprint: pkg.fingerprint,
+    contentHash: pkg.contentHash,
     createdAt: now.toISOString(),
     status: 'new',
     steps: {},
@@ -70,25 +73,26 @@ export function saveSnapshot(dir, snapshot) {
   writeJson(join(dir, 'snapshot.json'), snapshot, { secret: true });
 }
 
-export function saveBackupFaqs(dir, rows) {
-  writeSecret(join(dir, 'backup', 'faqs.jsonl'), jsonl(rows));
+// sub：导入删旧的之前备份在 backup/；撤回删这次建的之前，把它们当时的内容备份在 revoke-backup/（被人改过的也能找回来）
+export function saveBackupFaqs(dir, rows, sub = 'backup') {
+  writeSecret(join(dir, sub, 'faqs.jsonl'), jsonl(rows));
 }
 
-export function readBackupFaqs(dir) {
-  return readJsonl(join(dir, 'backup', 'faqs.jsonl'));
+export function readBackupFaqs(dir, sub = 'backup') {
+  return readJsonl(join(dir, sub, 'faqs.jsonl'));
 }
 
 // 一个要删的文件：详情、全部段落、原文件（没有原文件的手工文件，original 为 null）
-export function saveBackupDoc(dir, { detail, paragraphs, original }) {
-  const docDir = join(dir, 'backup', 'docs', String(detail.id));
+export function saveBackupDoc(dir, { detail, paragraphs, original }, sub = 'backup') {
+  const docDir = join(dir, sub, 'docs', String(detail.id));
   writeJson(join(docDir, 'detail.json'), detail, { secret: true });
   writeSecret(join(docDir, 'paragraphs.jsonl'), jsonl(paragraphs));
   if (original) writeSecret(join(docDir, `original${safe(extname(detail.name ?? '') || (detail.extension ? `.${detail.extension}` : ''))}`), original);
 }
 
 // 只认数字名的子目录（文件 id）：用户照撤回预演给的路径在 Finder 里取原文件，会留下 .DS_Store（审查 I5）
-export function readBackupDocs(dir) {
-  const root = join(dir, 'backup', 'docs');
+export function readBackupDocs(dir, sub = 'backup') {
+  const root = join(dir, sub, 'docs');
   return dirsIn(root).filter((n) => /^\d+$/.test(n)).sort((a, b) => Number(a) - Number(b)).map((id) => {
     const docDir = join(root, id);
     const original = readdirSync(docDir).find((n) => n.startsWith('original'));
@@ -140,15 +144,25 @@ export function claimedIds(regionKey, kbId) {
     for (const book of [state, state.revoke].filter(Boolean)) {
       for (const id of Object.values(book.faqIds ?? {})) ids.faq.add(id);
       for (const id of Object.values(book.docIds ?? {})) ids.doc.add(id);
+      for (const id of book.extras?.faq ?? []) ids.faq.add(id);
+      for (const id of book.extras?.doc ?? []) ids.doc.add(id);
     }
   }
   return ids;
 }
 
-// 同一个库上、同一个导入包（指纹一样）还没撤回的导入记录：有就不许再导一次（审查 I2：同一个计划码能用两次）
-export function activeImport(regionKey, kbId, fingerprint) {
-  return listRecords().find(({ state }) => state.region?.identityKey === regionKey && state.kb?.id === kbId
-    && state.fingerprint === fingerprint && state.status !== 'revoked') ?? null;
+// 同一个库上、同一个导入包（内容一样，不看空白）的导入记录
+const sameContent = (regionKey, kbId, contentHash) => listRecords().filter(({ state }) => state.region?.identityKey === regionKey
+  && state.kb?.id === kbId && (state.contentHash ?? state.fingerprint) === contentHash);
+
+// 还没撤回的那一条：有就不许再导一次（审查 I2）
+export function activeImport(regionKey, kbId, contentHash) {
+  return sameContent(regionKey, kbId, contentHash).find(({ state }) => state.status !== 'revoked') ?? null;
+}
+
+// 这个包在这个库上导过几次（进计划码：导过一次、撤回了，旧计划码也作废，要重新预演、重新问用户，复审 Important 4）
+export function importCount(regionKey, kbId, contentHash) {
+  return sameContent(regionKey, kbId, contentHash).length;
 }
 
 const alive = (pid) => {
@@ -169,34 +183,53 @@ function lockHolder(file) {
   }
 }
 
+// 锁的主人确实不在了：同一台机器上、进程已经没了（别的机器上的锁判断不了，不接管）
+const dead = (held) => Number.isInteger(held?.pid) && (held.host ?? HOST) === HOST && !alive(held.pid);
+const sameHolder = (a, b) => a && b && a.pid === b.pid && a.at === b.at && a.host === b.host;
+
 // 给这个库上锁，返回解锁函数。先写好临时文件再硬链接成锁文件：锁一出现就带着 pid，不会被读到半截。
-// 锁里记着的进程已经不在了（被杀、崩了）就接过来
+// 锁的主人已经不在了（被杀、崩了）就接过来：先原子地抢一把接管标记（.lock.takeover），抢到了再读一遍锁，
+// 还是刚才那条死记录才删——不然两个进程同时接管，一个删掉另一个刚拿到的锁，两个都以为自己拿到了（复审 Important 5）
 export function lockKb(regionKey, kbId, what) {
   const file = join(kbDir(regionKey, kbId), '.lock');
+  const takeover = `${file}.takeover`;
   ensureDir(dirname(file));
   const tmp = `${file}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify({ pid: process.pid, what, at: new Date().toISOString() }), { mode: 0o600 });
-  try {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        linkSync(tmp, file);
-        return () => {
-          if (lockHolder(file)?.pid === process.pid) rmSync(file, { force: true });
-        };
-      } catch (error) {
-        if (error.code !== 'EEXIST') throw error;
-      }
-      const held = lockHolder(file);
-      if (attempt === 0 && Number.isInteger(held?.pid) && !alive(held.pid)) {
-        rmSync(file, { force: true });
-        continue;
-      }
-      throw new MdError('kb_locked', `另一个 md 进程（pid ${held?.pid ?? '?'}）正在写这个库（${held?.what ?? '不知道在做什么'}${held?.at ? `，${held.at} 开始` : ''}）`, {
-        exitCode: EXIT.BLOCKED,
-        hint: `等它做完再来。确认那个进程已经不在了，就删掉 ${file}`,
-      });
+  const me = { pid: process.pid, host: HOST, what, at: new Date().toISOString() };
+  writeFileSync(tmp, JSON.stringify(me), { mode: 0o600 });
+  const release = () => {
+    if (sameHolder(lockHolder(file), me)) rmSync(file, { force: true });
+  };
+  const blocked = (held) => new MdError('kb_locked', `另一个 md 进程（pid ${held?.pid ?? '?'}${held?.host && held.host !== HOST ? `，在 ${held.host} 上` : ''}）正在写这个库（${held?.what ?? '不知道在做什么'}${held?.at ? `，${held.at} 开始` : ''}）`, {
+    exitCode: EXIT.BLOCKED,
+    hint: `等它做完再来。确认那个进程已经不在了，就删掉 ${file}`,
+  });
+  const grab = (path) => {
+    try {
+      linkSync(tmp, path);
+      return true;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      return false;
     }
-    throw new MdError('kb_locked', `这个库的锁文件接不过来：${file}`, { exitCode: EXIT.BLOCKED, hint: `确认没有别的 md 在写这个库，就删掉 ${file}` });
+  };
+  try {
+    if (grab(file)) return release;
+    const held = lockHolder(file);
+    if (!dead(held)) throw blocked(held);
+    if (!grab(takeover)) {
+      const taker = lockHolder(takeover);
+      if (!dead(taker)) throw blocked(taker ?? held);
+      rmSync(takeover, { force: true }); // 接管到一半死掉的进程留下的标记
+      if (!grab(takeover)) throw blocked(lockHolder(takeover));
+    }
+    try {
+      if (sameHolder(lockHolder(file), held)) rmSync(file, { force: true });
+      if (grab(file)) return release;
+      throw blocked(lockHolder(file));
+    } finally {
+      if (sameHolder(lockHolder(takeover), me)) rmSync(takeover, { force: true });
+    }
   } finally {
     rmSync(tmp, { force: true });
   }

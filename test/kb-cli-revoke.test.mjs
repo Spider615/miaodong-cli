@@ -1,7 +1,7 @@
 // md kb revoke（spec 3b §5）：删掉这次建的，把这次删的从备份原样重建（id 会变），读回核对；先重建后删；导入后被人改过的要列出来；撤回也能续做
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCli, tempHome } from './helpers/run-cli.mjs';
 import { seedIdentity } from './helpers/seed.mjs';
@@ -100,16 +100,23 @@ test('md kb revoke：导入做到一半（停在建 FAQ）——只删已经建�
   });
 });
 
-test('md kb revoke：导入后被人改过的条目要列出来（撤回会连改动一起删掉），计划码绑定它们', async () => {
+test('md kb revoke：导入后被人改过的条目要列出来（撤回会连改动一起删掉），计划码绑定它们；删之前把当时的内容（连改动）备份到本机', async () => {
   await withServer({}, async (server, h) => {
     const r = await importPackage(goodPackage(), h);
-    const importId = recordOf(r)[1];
+    const [, importId, recDir] = recordOf(r);
     server.state.faqs.find((f) => f.question === '课程怎么退款呀').answer = '运营改过的答案';
+    server.state.paragraphs.find((p) => p.content === '瑜伽年卡 2999 元').content = '运营改过的段落';
     const p = await runCli(['kb', 'revoke', importId], { home: h });
-    assert.match(p.stdout, /导入后被人改过的（撤回会连改动一起删掉）：FAQ「课程怎么退款呀」/);
+    assert.match(p.stdout, /导入后被人改过的（撤回会连改动一起删掉）：FAQ「课程怎么退款呀」、文件「新价格表」/);
+    assert.match(p.stdout, new RegExp(`删之前先把它们当时的内容备份到本机：${recDir.replace(/[/\\.]/g, '\\$&')}/revoke-backup`));
     const done = await runCli(['kb', 'revoke', importId, '--confirm', codeOf(p)], { home: h });
     assert.equal(done.code, 0, done.stderr);
     assert.equal(server.state.faqs.some((f) => f.question === '课程怎么退款呀'), false);
+    const saved = readFileSync(join(recDir, 'revoke-backup', 'faqs.jsonl'), 'utf-8').trim().split('\n').map((l) => JSON.parse(l));
+    assert.deepEqual(saved.map((f) => [f.question, f.answer]), [['课程怎么退款呀', '运营改过的答案']]);
+    const doc = readdirSync(join(recDir, 'revoke-backup', 'docs'));
+    assert.equal(doc.length, 1);
+    assert.deepEqual(readFileSync(join(recDir, 'revoke-backup', 'docs', doc[0], 'paragraphs.jsonl'), 'utf-8').trim().split('\n').map((l) => JSON.parse(l).content), ['瑜伽月卡 399 元', '运营改过的段落']);
   });
 });
 

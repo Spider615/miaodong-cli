@@ -145,12 +145,14 @@ export async function planImport({ target, kb, pkg }) {
   return { blockers, targets, counts, similar, sameName, longNames, oddParagraphs };
 }
 
-// 计划码绑定：库、包指纹、要删对象的现状、增删条数。之后任何一样变了，确认就对不上
-export function importCode(kb, pkg, plan) {
+// 计划码绑定：库、包指纹、要删对象的现状、增删条数，以及这个包在这个库上已经导过几次（导过一次、撤回了，旧码也作废）。
+// 之后任何一样变了，确认就对不上
+export function importCode(kb, pkg, plan, imported = 0) {
   return confirmCode({
     kind: 'kb-import',
     kbId: kb.id,
     fingerprint: pkg.fingerprint,
+    imported,
     targets: plan.targets.map((t) => (t.type === 'faq'
       ? { type: 'faq', id: t.id, question: t.question, answer: hashOf(t.answer), reviewed: t.reviewed }
       : { type: 'doc', id: t.id, name: t.name, paragraphCount: t.paragraphCount })),

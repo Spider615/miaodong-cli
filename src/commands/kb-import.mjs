@@ -8,11 +8,12 @@ import { confirmCode, givenCode } from '../confirm.mjs';
 import { EXIT, MdError, usage } from '../errors.mjs';
 import { loadIdentities } from '../identity.mjs';
 import { loadPackage } from '../kb-package.mjs';
-import { activeImport, createRecord, listRecords, loadRecord, lockKb } from '../kb-import-store.mjs';
-import { IMPORT_STEPS, STEP_NAMES, itemsOf, runImport } from '../kb-import-run.mjs';
-import { REVOKE_NAMES } from '../kb-revoke.mjs';
+import { activeImport, createRecord, importCount, listRecords, loadRecord, lockKb } from '../kb-import-store.mjs';
+import { IMPORT_STEPS, STEP_NAMES, itemsByType, itemsOf, runImport } from '../kb-import-run.mjs';
+import { REVOKE_NAMES, tracking } from '../kb-revoke.mjs';
 import { affectedBots, findKbById, importCode, planImport } from '../kb-import-plan.mjs';
-import { applySettle, describe, save, settleOpen } from '../kb-ops.mjs';
+import { applySettle, describe, label, rowsOf, save, settleOpen } from '../kb-ops.mjs';
+import { textKey } from '../kb-package.mjs';
 import { out, shortId } from '../output.mjs';
 import { targetArgs } from '../target.mjs';
 
@@ -55,25 +56,39 @@ function printSettle(s, pkg, importId) {
   if (!s) return;
   const { open } = s;
   if (open.op === 'delete') {
-    const label = open.type === 'faq' ? 'FAQ' : '文件';
-    out(`上次停下时正在删：${open.ids.map((id) => `${label} #${id}`).join('、')}；现在已经不在的 ${s.gone.length} 个算这次删的，还在的接着删`);
+    out(`上次停下时正在删：${open.ids.map((id) => `${label(open.type)} #${id}`).join('、')}；现在已经不在的 ${s.gone.length} 个算这次删的，还在的接着删`);
     return;
   }
   const items = itemsOf(pkg);
   const text = (k) => (open.type === 'faq' ? items[k]?.question : items[k]?.name);
-  out(`上次停下时发出去、还没对上的：${open.type === 'faq' ? 'FAQ' : '文件'} ${open.keys.length} 条（${open.keys.slice(0, 5).map((k) => `「${text(k)}」`).join('、')}${open.keys.length > 5 ? '……' : ''}）`);
+  out(`上次停下时发出去、还没对上的：${label(open.type)} ${open.keys.length} 条（${open.keys.slice(0, 5).map((k) => `「${text(k)}」`).join('、')}${open.keys.length > 5 ? '……' : ''}）`);
   const claimed = Object.entries(s.claimed);
   if (claimed.length) out(`  现在在库里对上了、当成这次建的：${claimed.map(([k, id]) => `#${id}「${text(k)}」`).join('、')}`);
+  if (s.extras.length) out(`  还多出 ${s.extras.length} 条一模一样的：是这次重复建出来的，续跑时删掉（#${s.extras.join('、#')}）`);
   if (!s.unresolved.length) return;
-  if (s.others.length) {
-    out(`  写的时候库里多出来、对不上的：${describe(open.type, s.others)}`);
+  const doubt = [...s.suspects, ...s.past];
+  if (doubt.length) {
+    out(`  没对上的 ${s.unresolved.length} 条在库里没有一模一样的；写的时候库里多出来、对不上的：${describe(open.type, doubt)}`);
     out(`  确认续跑就是认定它们不是这次建的：md 不会动它们，没对上的 ${s.unresolved.length} 条会重新发一次。它们要是这次写进去的（秒懂改写了内容），就别续跑：先 md kb revoke ${importId}，再在秒懂上手动删掉它们`);
   } else {
     out(`  没对上的 ${s.unresolved.length} 条在库里找不到，写的时候库里也没多出来别的：就是没建成，续跑会重新发一次`);
   }
 }
 
-const settleKey = (s) => (s ? { op: s.open.op, keys: s.open.keys ?? null, ids: s.open.ids ?? null, claimed: s.claimed ?? null, others: s.others?.map((r) => r.id) ?? null, gone: s.gone ?? null } : null);
+const settleKey = (s) => (s ? {
+  op: s.open.op, keys: s.open.keys ?? null, ids: s.open.ids ?? null, claimed: s.claimed ?? null, extras: s.extras ?? null,
+  doubt: s.suspects ? [...s.suspects, ...s.past].map((r) => r.id) : null, gone: s.gone ?? null,
+} : null);
+
+// 续跑要发的 FAQ（还没认上的）里，库里已经有同一个问题、又不是这次建的：和导入时的闸门一样拦下（复审：预演之后有人加了同样的问题）
+async function duplicatesNow(ctx, pkg, state, settle) {
+  const pending = pkg.faqs.filter((f) => !state.faqIds[f.key] && !settle?.claimed?.[f.key]);
+  if (!pending.length) return [];
+  const mine = new Set([...Object.values(state.faqIds), ...Object.values(settle?.claimed ?? {}), ...(state.extras?.faq ?? []), ...(settle?.extras ?? [])]);
+  const rows = (await rowsOf(ctx, 'faq')).filter((r) => !mine.has(r.id));
+  return pending.flatMap((f) => rows.filter((r) => textKey(r.question) === textKey(f.question)).slice(0, 1)
+    .map((r) => `新 FAQ「${f.question}」（${f.key}）和库里 #${r.id} 完全一样（导入之后有人加的）：要保留它就先撤回这次导入（md kb revoke ${state.importId}），要换掉就先在秒懂上删掉它`));
+}
 
 // 停下之后接着做（3b §4.3）：说明做完了哪几步、还剩什么（包括还要删的），上次开着的意图重新认一次，给一个新的计划码；
 // 确认后（先上锁、再按锁里读到的记录重算）从停下的那一步接着做
@@ -94,15 +109,18 @@ async function resumeImport(args, importId) {
     const identity = loadIdentities()[state.region.identityKey];
     if (!identity) throw new MdError('no_identity', `本机没有「${state.region.label}」的身份`, { exitCode: EXIT.AUTH, hint: '先问用户秒懂控制台的域名，然后 md auth snippet <域名>' });
     const ctx = { identity, orgId: state.org.id, kbId: state.kb.id, regionKey: state.region.identityKey, dir: rec.dir, state, pkg: rec.pkg };
-    const settle = await settleOpen(ctx, state, itemsOf(rec.pkg));
+    const settle = await settleOpen(ctx, state, itemsByType(rec.pkg));
     const doneSteps = IMPORT_STEPS.filter((s) => state.steps[s]);
     const left = IMPORT_STEPS.filter((s) => !state.steps[s]);
     if (state.stopped) out(`停在「${STEP_NAMES[state.stopped.step]}」：${state.stopped.reason}`);
-    if (settle?.repeat?.length) {
-      throw new MdError('kb_resume_refused', `有 ${settle.repeat.length} 条已经确认过「多出来的不是这次建的」、重发了一次，写的时候库里又多出来对不上的：${describe(settle.open.type, settle.others)}。两次都对不上，多半是秒懂改写了这几条的内容，不能再续跑`, {
+    if (settle?.stuck?.length) {
+      const doubt = [...settle.suspects, ...settle.past];
+      throw new MdError('kb_resume_refused', `有 ${settle.stuck.length} 条已经发了两次，两次写的时候库里都多出来对不上的（或者发出去都找不到）${doubt.length ? `：${describe(settle.open.type, doubt)}` : ''}。多半是秒懂改写了这几条的内容，不能再续跑`, {
         hint: `先 md kb revoke ${importId}，再在秒懂上手动删掉上面列的；按秒懂改写后的样子改导入包，再重新导入`,
       });
     }
+    const dups = await duplicatesNow(ctx, rec.pkg, state, settle);
+    if (dups.length) throw new MdError('kb_import_blocked', `闸门没过（续跑一条都不会写）：\n${dups.map((b) => `  - ${b}`).join('\n')}`, { hint: '按上面处理之后再预演一次' });
     printSettle(settle, rec.pkg, importId);
     out(`做完的：${doneSteps.map((s) => STEP_NAMES[s]).join('、') || '没有'}`);
     out(`还要做：${left.map((s) => STEP_NAMES[s]).join('、')}`);
@@ -144,7 +162,7 @@ export async function importCmd(args) {
     out(headLine(target, kb, `导入包 ${basename(pkg.dir)}`));
     const plan = await planImport({ target, kb, pkg });
     // 同一个包在这个库上已经导入过、没撤回：再导一次会重复建（同一个计划码也不能用第二次，审查 I2）
-    const same = activeImport(target.identityKey, kb.id, pkg.fingerprint);
+    const same = activeImport(target.identityKey, kb.id, pkg.contentHash);
     if (same) {
       const id = same.state.importId;
       plan.blockers.unshift(`这个导入包在这个库上已经导入过：${id}（${statusText(same.state)}）。${same.state.status === 'done' ? '' : `接着做：md kb import --resume ${id}；`}要重来先撤回：md kb revoke ${id}`);
@@ -155,7 +173,7 @@ export async function importCmd(args) {
     }
     printPlan(pkg, plan, await affectedBots(target, kb.id));
     out('闸门：全部通过');
-    const code = importCode(kb, pkg, plan);
+    const code = importCode(kb, pkg, plan, importCount(target.identityKey, kb.id, pkg.contentHash));
     if (given === null) {
       out(`这是预演，什么都没写。计划码：${code}`);
       out(`用户明确同意后执行：md kb import ${dirArg} --confirm ${code}`);
@@ -196,7 +214,7 @@ export async function importsCmd() {
 }
 
 export function statusText(state) {
-  if (state.status === 'revoked') return state.open ? `已撤回（有 ${state.open.others?.length ?? state.open.keys.length} 条分不清是不是这次建的，要人看一眼）` : '已撤回';
+  if (state.status === 'revoked') return tracking(state) ? `已撤回（有 ${state.revoke?.leftoverIds?.length ?? '几'} 条分不清是不是这次建的，要人看一眼）` : '已撤回';
   if (state.revoke) return state.revoke.stopped ? `撤回停在「${REVOKE_NAMES[state.revoke.stopped.step]}」` : '撤回中';
   if (state.status === 'done') return '已完成';
   if (state.stopped) return `停在「${STEP_NAMES[state.stopped.step]}」`;

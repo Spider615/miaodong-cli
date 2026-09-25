@@ -320,7 +320,7 @@ test('确认过「多出来的不是这次建的」、重发了一次，又对�
     const again = await runCli(['kb', 'import', '--resume', importId], { home: h });
     assert.equal(again.code, 1);
     assert.doesNotMatch(again.stdout, /计划码/);
-    assert.match(again.stderr, /两次都对不上，多半是秒懂改写了这几条的内容，不能再续跑/);
+    assert.match(again.stderr, /已经发了两次[^\n]*多半是秒懂改写了这几条的内容，不能再续跑/);
     assert.equal(server.state.faqs.filter((f) => f.question === '退款(部分)怎么算').length, 2);
   });
 });

@@ -3,12 +3,12 @@
 // 认不清的不删、不重发，停下交给人判断。
 // 顺序是安全的关键：先备份（全部读操作）再写；先试写一条读回核对；新 FAQ 审核之前检索不到；新内容全部就绪之后才删旧的。
 import { EXIT, MdError } from './errors.mjs';
-import { SEARCH_SIZE, listFaqs, listFiles, searchFaqs } from './kb.mjs';
+import { SEARCH_SIZE, listFaqs, listFiles, normalizeFaq, searchFaqs } from './kb.mjs';
 import { mapPool, unrestorable } from './kb-import-plan.mjs';
 import { readBackupDocs, readBackupFaqs, saveBackupDoc, saveBackupFaqs, saveSnapshot } from './kb-import-store.mjs';
 import { textKey } from './kb-package.mjs';
 import { WRITE_BATCH, createParagraph, docDetailRaw, downloadOriginal, listFaqRows, reviewFaqs } from './kb-write.mjs';
-import { batchesOf, chunks, createTracked, deleteTracked, log, paragraphsOf, save, trimmed, writeDoc } from './kb-ops.mjs';
+import { batchesOf, chunks, createTracked, deleteTracked, dropExtras, log, paragraphsOf, rowsOf, save, trimmed, writeDoc } from './kb-ops.mjs';
 import { out } from './output.mjs';
 
 export const IMPORT_STEPS = ['snapshot', 'backup', 'canary', 'faqs', 'docs', 'verify', 'review', 'index', 'delete'];
@@ -22,8 +22,9 @@ const pollMs = () => Number(process.env.MD_KB_POLL_MS) || 5000;
 const waitMs = () => (Number(process.env.MD_KB_WAIT_S) || 480) * 1000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// 导入包里的 FAQ、文件按 key 查（认 id、重新认意图时用）
+// 导入包里的 FAQ、文件按 key 查（认 id、重新认意图时用）。包里 FAQ 和文件的 key 共用一套、不会重复
 export const itemsOf = (pkg) => Object.fromEntries([...pkg.faqs, ...pkg.docs].map((it) => [it.key, it]));
+export const itemsByType = (pkg) => ({ faq: Object.fromEntries(pkg.faqs.map((f) => [f.key, f])), doc: Object.fromEntries(pkg.docs.map((d) => [d.key, d])) });
 
 // 核对：FAQ 的问题、答案，文件的每一段，都要和期望的逐字一致（比较前去掉首尾空白）
 export async function verifyContent(ctx, faqItems, faqIds, docItems, docIds) {
@@ -88,19 +89,21 @@ async function deleteBlockers(ctx, faqTargets, docTargets) {
   const nowDocs = new Map((await listFiles(ctx.identity, ctx.orgId, ctx.kbId, { checked: true })).map((d) => [d.id, d]));
   const changed = [];
   const stuck = [];
+  // 撤回按备份重建：问题、答案、审核状态，文件名、段落、摘要，哪一样变了都会被恢复错
   for (const id of faqTargets.filter((x) => rows.has(x))) {
     const row = rows.get(id);
     const b = backFaqs.get(id);
-    if (!b || trimmed(row.question) !== trimmed(b.question) || trimmed(row.answer) !== trimmed(b.answer)) changed.push(`FAQ #${id}`);
+    if (!b || trimmed(row.question) !== trimmed(b.question) || trimmed(row.answer) !== trimmed(b.answer) || normalizeFaq(row).reviewed !== normalizeFaq(b).reviewed) changed.push(`FAQ #${id}`);
     const u = unrestorable('faq', row);
     if (u) stuck.push(`FAQ #${id} ${u.reason}`);
   }
   for (const id of docTargets.filter((x) => nowDocs.has(x))) {
     const b = backDocs.get(id);
     const have = await paragraphsOf(ctx, id);
-    const renamed = !b || trimmed(nowDocs.get(id).name) !== trimmed(b.detail.name);
+    const detail = await docDetailRaw(ctx.identity, ctx.orgId, ctx.kbId, id);
+    const renamed = !b || trimmed(nowDocs.get(id).name) !== trimmed(b.detail.name) || trimmed(detail.abstract) !== trimmed(b.detail.abstract);
     if (renamed || have.length !== b.paragraphs.length || have.some((p, i) => trimmed(p.content) !== trimmed(b.paragraphs[i].content))) changed.push(`文件 #${id}「${nowDocs.get(id).name}」`);
-    const u = unrestorable('doc', await docDetailRaw(ctx.identity, ctx.orgId, ctx.kbId, id));
+    const u = unrestorable('doc', detail);
     if (u) stuck.push(`文件 #${id}「${nowDocs.get(id).name}」${u.reason}`);
   }
   const parts = [
@@ -161,26 +164,38 @@ const STEPS = {
     return `FAQ ${faqTargets.length} 条、文件 ${docTargets.length} 个（${paragraphs} 段，原文件 ${originals} 个）→ ${ctx.dir}/backup`;
   },
 
-  // 试写：建 1 条 FAQ、1 个文件和它的第 1 段，读回核对。对不上就删掉试写的（认得出是自己建的才删），然后停下
+  // 试写：建 1 条 FAQ、1 个文件和它的第 1 段，读回核对。认上的一定和发出去的内容一样（去掉空白后）；
+  // 读回来只差空白、或者文件第 1 段被改写（文件里只有自己写的这一段），能证明是自己的，删掉再停下；
+  // 文件里还有别的段落，说明有人往里写过，不删，停下列出来。试写建好的被人删了，就重建
   async canary(ctx) {
     const done = [];
     const f = ctx.pkg.faqs[0];
     if (f) {
-      if (!ctx.state.faqIds[f.key]) await createTracked(ctx, ctx.state, 'faq', [f]);
-      const id = ctx.state.faqIds[f.key];
-      const row = (await listFaqs(ctx.identity, ctx.orgId, ctx.kbId, { checked: true })).find((r) => r.id === id);
-      if (!row || trimmed(row.question) !== f.question || trimmed(row.answer) !== f.answer) {
-        if (row) await deleteTracked(ctx, ctx.state, 'faq', [id], { record: false });
+      const known = ctx.state.faqIds[f.key];
+      let row = known ? (await rowsOf(ctx, 'faq')).find((r) => r.id === known) : null;
+      if (known && !row) {
         delete ctx.state.faqIds[f.key];
         save(ctx);
-        throw new MdError('kb_canary_failed', row
-          ? '试写的 FAQ 读回来和包里的不一样（秒懂改了内容），已经把它删了，别的一条都没写'
-          : `试写的 FAQ #${id} 建了之后又不见了，别的一条都没写`);
+      }
+      if (!ctx.state.faqIds[f.key]) {
+        await createTracked(ctx, ctx.state, 'faq', [f]);
+        row = (await rowsOf(ctx, 'faq')).find((r) => r.id === ctx.state.faqIds[f.key]);
+      }
+      if (!row || trimmed(row.question) !== f.question || trimmed(row.answer) !== f.answer) {
+        if (row) await deleteTracked(ctx, ctx.state, 'faq', [row.id], { record: false });
+        delete ctx.state.faqIds[f.key];
+        save(ctx);
+        throw new MdError('kb_canary_failed', '试写的 FAQ 读回来和包里的不一样（秒懂改了空白），已经把它删了，别的一条都没写');
       }
       done.push(`FAQ「${f.question}」`);
     }
     const d = ctx.pkg.docs[0];
     if (d) {
+      const known = ctx.state.docIds[d.key];
+      if (known && !(await rowsOf(ctx, 'doc')).some((x) => x.id === known)) {
+        delete ctx.state.docIds[d.key];
+        save(ctx);
+      }
       if (!ctx.state.docIds[d.key]) await createTracked(ctx, ctx.state, 'doc', [d]);
       const docId = ctx.state.docIds[d.key];
       let have = await paragraphsOf(ctx, docId);
@@ -189,14 +204,19 @@ const STEPS = {
         await createParagraph(ctx.identity, ctx.orgId, ctx.kbId, docId, d.paragraphs[0]);
         have = await paragraphsOf(ctx, docId);
       }
+      if (have.length > 1) {
+        throw new MdError('kb_doc_mismatch', `试写的文件「${d.name}」（#${docId}）里有 ${have.length} 段，md 只写了 1 段：可能有人往里写过；md 不删它、也不再往里写`);
+      }
       if (!have.length || trimmed(have[0].content) !== d.paragraphs[0]) {
-        await deleteTracked(ctx, ctx.state, 'doc', [docId], { record: false });
+        if (have.length) await deleteTracked(ctx, ctx.state, 'doc', [docId], { record: false });
         delete ctx.state.docIds[d.key];
         save(ctx);
-        throw new MdError('kb_canary_failed', `试写的文件「${d.name}」第 1 段读回来和包里的不一样（秒懂改了内容），已经把这个文件删了，其余的都还没写`);
+        throw new MdError('kb_canary_failed', `试写的文件「${d.name}」第 1 段${have.length ? '读回来和包里的不一样（秒懂改了内容），已经把这个文件删了' : '写了之后读不回来'}，其余的都还没写`);
       }
       done.push(`文件「${d.name}」的第 1 段`);
     }
+    await dropExtras(ctx, ctx.state, 'faq');
+    await dropExtras(ctx, ctx.state, 'doc');
     return done.length ? `${done.join('和')}，读回一致` : '没有要加的（这次只删）';
   },
 
@@ -206,6 +226,7 @@ const STEPS = {
     const todo = items.filter((f) => !ctx.state.faqIds[f.key]);
     let rows;
     for (const batch of batchesOf(todo, WRITE_BATCH, (f) => textKey(f.question))) rows = await createTracked(ctx, ctx.state, 'faq', batch, rows);
+    await dropExtras(ctx, ctx.state, 'faq');
     return `共 ${items.length} 条（这次新建 ${todo.length} 条，每批不超过 ${WRITE_BATCH} 条）`;
   },
 
@@ -216,6 +237,7 @@ const STEPS = {
       await writeDoc(ctx, ctx.state, d);
       save(ctx);
     }
+    await dropExtras(ctx, ctx.state, 'doc');
     return `${items.length} 个文件、${items.reduce((n, d) => n + d.paragraphs.length, 0)} 段`;
   },
 
@@ -261,6 +283,9 @@ function stopHint(error, id) {
   if (error.code === 'kb_canary_failed' || error.code === 'kb_verify_failed') return `导入包的内容写进秒懂之后会变样，接着做也没用；要撤回已经写进去的：md kb revoke ${id}`;
   if (error.code === 'kb_write_doubt') {
     return `在秒懂上看一眼上面列的：是这次写进去的（秒懂改写了内容），就别续跑——先 md kb revoke ${id}，再在秒懂上手动删掉它们；不是，就 md kb import --resume ${id}（预演会再列一遍，确认就是认定它们不是这次建的）`;
+  }
+  if (error.code === 'kb_doc_mismatch') {
+    return `在秒懂上看一眼这个文件；不要这次导入了就 md kb revoke ${id}（撤回会先把它现在的内容备份到本机，再删）`;
   }
   if (error.code?.startsWith('kb_') && error.hint) return error.hint;
   const next = `查明原因后接着做：md kb import --resume ${id}；不要了就撤回：md kb revoke ${id}`;
