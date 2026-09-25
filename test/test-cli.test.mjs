@@ -1,6 +1,6 @@
 import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCli, tempHome } from './helpers/run-cli.mjs';
 import { seedIdentity } from './helpers/seed.mjs';
@@ -161,8 +161,12 @@ function spendRows(h) {
   }
   return [...byId.values()];
 }
-// 这个集上次跑完的任务：平均每条 avg 元（md test run 按它估花费）
-const seedFinished = (testSetId, avg) => fake.state.tasks.push({ testTaskId: '70000099-0000-4000-8000-000000000000', botId: TARGET_BOT, testSetId, name: '上次', status: 'finished', averageCostInCny: avg, createdAt: '2026-09-24T00:00:00.000Z' });
+// 这个集上次跑完的任务：真正执行了 1 条，花了 avg 元（md test run 按「总花费 ÷ 真正执行的条数」估单价，审查 C1）
+function seedFinished(testSetId, avg) {
+  const testTaskId = '70000099-0000-4000-8000-000000000000';
+  fake.state.tasks.push({ testTaskId, botId: TARGET_BOT, testSetId, name: '上次', status: 'finished', totalCostInCny: avg, averageCostInCny: avg, createdAt: '2026-09-24T00:00:00.000Z' });
+  fake.state.items.set(testTaskId, [{ testTaskItemId: '90000099-0000-4000-8000-000000000000', testTaskId, testCaseId: 'x', testCaseName: '上次的用例', status: 'success', passed: true, costInCny: avg, canvasExecAvailable: true }]);
+}
 const codeIn = (stdout) => stdout.match(/确认码：([0-9a-f]{8})/)?.[1];
 
 test('run：跑前检查不过（跨智能体没换 id 的用例）→ 不建任务、不记账，退出码 5（审查重点 1）', async () => {
@@ -208,7 +212,7 @@ test('run：这个集上次跑完的任务有平均花费 → 按它估；不超
   fake.state.tasks.push({ testTaskId: '70000098-0000-4000-8000-000000000000', botId: TARGET_BOT, testSetId: set, name: '别人的任务', status: 'processing', createdAt: '2026-09-24T01:00:00.000Z' });
   const r = await md(['test', 'run', '集', '--bot', '179cd443']);
   assert.equal(r.code, 0, r.stderr);
-  assert.match(r.stdout, /预计 ¥0\.020（上次跑完的任务「上次」平均每条 ¥0\.020）/);
+  assert.match(r.stdout, /预计 ¥0\.020（上次跑完的任务「上次」真正执行的 1 条平均 ¥0\.020）/);
   assert.match(r.stdout, /排队：这个智能体上还有 1 个任务没跑完/);
   assert.equal(fake.state.posts.taskCreate.length, 1);
 });
@@ -438,5 +442,92 @@ test('results --deep：某一条取详情失败，标出来、接着取别的，
     assert.equal(rows.find((x) => x.testExecId !== first.canvasExecId).reply, '发出事件「发送4.0」：详情里的回复');
   } finally {
     fake.server.routes['GET /api/canvas/history/details'] = original;
+  }
+});
+
+const writeLimits = (h, spend) => { mkdirSync(join(h, 'md'), { recursive: true }); writeFileSync(join(h, 'md', 'config.json'), JSON.stringify({ spend })); };
+
+test('止损暂停后：账本按观察到的花费记实际，「今天已花」看得到；重跑按观察到的单价估价，超门槛就要确认，不会一轮轮自动放行（审查 C1）', async () => {
+  reset({ perPoll: 1, itemCost: 1 });
+  seedFinished(seedSet('集', [SAME_EXEC]), 0.001);
+  const h = home();
+  assert.equal((await md(['test', 'run', '集', '--bot', '179cd443', '--rounds', '3'], h)).code, 0);
+  const task = taskOf('集-草稿');
+  const paused = await md(['test', 'status', task, '--bot', '179cd443', '--wait'], h, { MD_TEST_POLL_MS: '5' });
+  assert.match(paused.stdout, /已暂停任务/);
+  assert.match(paused.stdout, /重新 md test run 会把已经跑完的条目再花一次钱/);
+  assert.match((await md(['spend'], h)).stdout, /今天已花 ¥1\.00/);
+  const again = await md(['test', 'run', '集', '--bot', '179cd443', '--rounds', '3'], h);
+  assert.equal(again.code, 5, again.stdout);
+  assert.match(again.stdout, /预计 ¥3\.00（上次盯着跑时观察到每条 ¥1\.00）/);
+  assert.match(again.stdout, /确认码：/);
+});
+
+test('估价不被空跑稀释：上次跑完的任务按真正执行了的条目算单价；全是空跑（单价 0）就当估不出、要确认（审查 C1）', async () => {
+  reset();
+  const set = seedSet('集', [SAME_EXEC]);
+  fake.state.tasks.push({ testTaskId: '70000097-0000-4000-8000-000000000000', botId: TARGET_BOT, testSetId: set, name: '上次', status: 'finished', totalCostInCny: 0.02, averageCostInCny: 0.01, createdAt: '2026-09-24T00:00:00.000Z' });
+  fake.state.items.set('70000097-0000-4000-8000-000000000000', [
+    { testCaseId: 'x1', status: 'success', passed: true, costInCny: 0.02, canvasExecAvailable: true },
+    { testCaseId: 'x2', status: 'success', passed: false, costInCny: null, canvasExecAvailable: false },
+  ]);
+  const mixed = await md(['test', 'run', '集', '--bot', '179cd443']);
+  assert.equal(mixed.code, 0, mixed.stderr);
+  assert.match(mixed.stdout, /预计 ¥0\.020（上次跑完的任务「上次」真正执行的 1 条平均 ¥0\.020）/);
+  reset();
+  const set2 = seedSet('集', [SAME_EXEC]);
+  fake.state.tasks.push({ testTaskId: '70000096-0000-4000-8000-000000000000', botId: TARGET_BOT, testSetId: set2, name: '全空跑', status: 'finished', totalCostInCny: 0, averageCostInCny: 0, createdAt: '2026-09-24T00:00:00.000Z' });
+  const allNoop = await md(['test', 'run', '集', '--bot', '179cd443']);
+  assert.equal(allNoop.code, 5);
+  assert.match(allNoop.stdout, /预计 估不出/);
+});
+
+test('status 不带 --wait 也判断止损：超额度就暂停；自动放行的任务还看每日上限（审查 I2）', async () => {
+  reset({ perPoll: 1, itemCost: 1 });
+  seedFinished(seedSet('集', [SAME_EXEC]), 0.001);
+  const h = home();
+  await md(['test', 'run', '集', '--bot', '179cd443', '--rounds', '3'], h);
+  const r = await md(['test', 'status', taskOf('集-草稿'), '--bot', '179cd443'], h);
+  assert.match(r.stdout, /⛔ 按已跑完的 1 条平均 ¥1\.00 推算，整个任务要 ¥3\.00，超过额度 ¥2\.00，已暂停任务/);
+  reset({ perPoll: 1, itemCost: 1 });
+  seedFinished(seedSet('集', [SAME_EXEC]), 0.001);
+  const h2 = home();
+  writeLimits(h2, { perCommand: 10, perDay: 2 });
+  await md(['test', 'run', '集', '--bot', '179cd443', '--rounds', '3'], h2);
+  const daily = await md(['test', 'status', taskOf('集-草稿'), '--bot', '179cd443'], h2);
+  assert.match(daily.stdout, /⛔ .*超过每日上限 ¥2\.00，已暂停任务/);
+});
+
+test('status --wait 遇到一次网络错误或 5xx 不放弃，接着查（09-25 真机见过一次 DNS 解析失败就断掉）', async () => {
+  reset({ perPoll: 1 });
+  seedFinished(seedSet('集', [SAME_EXEC, SAME_EXEC]), 0.02);
+  const h = home();
+  await md(['test', 'run', '集', '--bot', '179cd443'], h);
+  const original = fake.server.routes['GET /api/test-center/test-task/detail'];
+  let calls = 0;
+  fake.server.routes['GET /api/test-center/test-task/detail'] = (req) => (++calls === 2 ? { status: 502, body: { message: 'Bad Gateway' } } : original(req));
+  try {
+    const r = await md(['test', 'status', taskOf('集-草稿'), '--bot', '179cd443', '--wait'], h, { MD_TEST_POLL_MS: '5' });
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stderr, /查进度出错/);
+    assert.match(r.stdout, /finished · 2\/2/);
+  } finally {
+    fake.server.routes['GET /api/test-center/test-task/detail'] = original;
+  }
+});
+
+test('run：建任务时身份失效 → 原样报（退出码 3），不说「可能已经建了」；账本这一笔记 0（审查 M3）', async () => {
+  reset();
+  seedFinished(seedSet('集', [SAME_EXEC]), 0.02);
+  const original = fake.server.routes['POST /api/test-center/test-task/create'];
+  fake.server.routes['POST /api/test-center/test-task/create'] = () => ({ status: 401, body: { statusCode: 401, message: 'Authentication failed' } });
+  try {
+    const h = home();
+    const r = await md(['test', 'run', '集', '--bot', '179cd443'], h);
+    assert.equal(r.code, 3, r.stderr);
+    assert.doesNotMatch(r.stderr, /可能已经建了/);
+    assert.equal(spendRows(h)[0].actual, 0);
+  } finally {
+    fake.server.routes['POST /api/test-center/test-task/create'] = original;
   }
 });
