@@ -100,6 +100,10 @@ test('撤回重建一直不落库、给了跳过；期间同事照原样手工�
     assert.equal(server.state.faqs.some((f) => f.id === 6300), true);
     assert.notEqual(stateOf(r).revoke.faqIds['7002'], 6300); // 跳过重建的那条不认晚出现的（同事恢复的不当成撤回重建的）
     assert.equal(faqsAsking(server, '课程怎么退款呀').length, 0);
+    // 和备份里的旧内容一模一样的：它就是旧内容，别让人删；跳过的那条也不用再手工恢复
+    assert.match(third.done.stdout, /#6300「退款多久到账」[^\n]*就是旧内容，留着就行/);
+    assert.doesNotMatch(third.done.stdout, /#6300[^\n]*手动删掉/);
+    assert.match(third.done.stdout, /FAQ #7002「退款多久到账」[^\n]*库里已经有一模一样的 #6300，不用再恢复/);
   });
 });
 

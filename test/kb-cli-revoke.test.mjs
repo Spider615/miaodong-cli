@@ -130,6 +130,7 @@ test('md kb revoke：撤回中途断了——再运行一次接着做，不会�
     const stop = await runCli(['kb', 'revoke', importId, '--confirm', codeOf(p)], { home: h });
     assert.equal(stop.code, 1);
     assert.match(stop.stderr, /停在「删掉这次建的」/);
+    assert.match(stop.stderr, /一直删不掉的，可以请用户在秒懂上手动删掉，再运行一次/);
     const p2 = await runCli(['kb', 'revoke', importId], { home: h });
     assert.match(p2.stdout, /撤回停在「删掉这次建的」/);
     const done = await runCli(['kb', 'revoke', importId, '--confirm', codeOf(p2)], { home: h });

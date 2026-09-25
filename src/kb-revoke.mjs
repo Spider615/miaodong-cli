@@ -250,15 +250,16 @@ const STEPS = {
   },
 };
 
-// 撤回做完之后，还有没有要人看一眼的：导入时认不清的（意图留着）、晚出现没认下的、撤回跳过重建的几条留下的可疑的
+// 撤回做完之后，还有没有要人看一眼的：导入时认不清的（意图留着）、导入时晚出现没认下的、撤回跳过重建的几条留下的可疑的。
+// 撤回重建时晚出现、和备份一模一样的（可能是同事照原样手工恢复的，也可能是撤回重建晚落库的）不算：它就是旧内容，留着就行
 export const tracking = (state) => state.status === 'revoked' && !state.revoke?.leftoversDone
-  && (Boolean(state.open) || TYPES.some((t) => (state.revoke?.skipped?.[t] ?? []).length || (state.orphans?.[t] ?? []).length || (state.revoke?.orphans?.[t] ?? []).length));
+  && (Boolean(state.open) || TYPES.some((t) => (state.revoke?.skipped?.[t] ?? []).length || (state.orphans?.[t] ?? []).length));
 
 // 还在库里的认不清的：[{ type, row }]
 export async function leftovers(ctx) {
   const rows = [];
   if (ctx.state.open) rows.push(...await doubtRows(ctx, ctx.state, itemsByType(ctx.pkg)));
-  rows.push(...await orphanRows(ctx, ctx.state), ...await orphanRows(ctx, ctx.state.revoke));
+  rows.push(...await orphanRows(ctx, ctx.state));
   for (const type of TYPES) rows.push(...await pastRows(ctx, ctx.state.revoke ?? {}, type, ctx.state.revoke?.skipped?.[type] ?? []));
   const seen = new Set();
   return rows.filter(({ type, row }) => {
@@ -267,6 +268,12 @@ export async function leftovers(ctx) {
     seen.add(k);
     return true;
   });
+}
+
+// 撤回重建时晚出现、和备份里的旧内容一模一样、没认下的（可能是同事照原样手工恢复的，也可能是撤回重建晚落库的）：
+// 它们就是旧内容，别让人删（删了就连唯一一份旧内容都没了）
+export async function oldContentRows(ctx) {
+  return orphanRows(ctx, ctx.state.revoke);
 }
 
 // 不再追踪（都不在了，或者用户确认都不是这次建的）：只改本机记录
@@ -307,7 +314,9 @@ export async function runRevoke(ctx, plan) {
       for (const { type, key } of failedItems(error)) state.revoke.failures[type][key] = (state.revoke.failures[type][key] ?? 0) + 1;
       state.revoke.stopped = { step, reason: error.message, at: new Date().toISOString() };
       save(ctx);
-      const again = `查明原因后再运行一次 md kb revoke ${id}，会从这一步接着做；同一条重建失败两次，预演会给出跳过它`;
+      const again = step === 'delete'
+        ? `查明原因后再运行一次 md kb revoke ${id}，会从这一步接着做；秒懂一直删不掉的，可以请用户在秒懂上手动删掉，再运行一次（md 只删还在的）`
+        : `查明原因后再运行一次 md kb revoke ${id}，会从这一步接着做；同一条重建失败两次，预演会给出跳过它`;
       const hint = error.code === 'kb_write_ambiguous'
         ? `库里有不止一条和要重建的一模一样的，分不清哪条是撤回建的：请用户在秒懂上看一眼；再运行一次 md kb revoke ${id}，预演会给出跳过它的重建`
         : error.code === 'kb_write_doubt'

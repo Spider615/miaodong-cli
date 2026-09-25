@@ -8,8 +8,9 @@ import { EXIT, MdError, usage } from '../errors.mjs';
 import { loadIdentities } from '../identity.mjs';
 import { loadRecord, lockKb } from '../kb-import-store.mjs';
 import { STEP_NAMES } from '../kb-import-run.mjs';
-import { REVOKE_NAMES, closeLeftovers, leftovers, revokePlan, runRevoke, tracking } from '../kb-revoke.mjs';
+import { REVOKE_NAMES, closeLeftovers, leftovers, oldContentRows, revokePlan, runRevoke, tracking } from '../kb-revoke.mjs';
 import { describe, label } from '../kb-ops.mjs';
+import { textKey } from '../kb-package.mjs';
 import { out, shortId } from '../output.mjs';
 
 const SHOW = 20;
@@ -160,16 +161,35 @@ export async function revoke(args) {
     }
     if (given !== code) throw new MdError('plan_mismatch', `计划码对不上（给的是 ${given || '空'}，当前是 ${code}）：库里的情况在预演之后变了，或者计划码抄错了`, { exitCode: EXIT.BLOCKED, hint: '重新预演一次，把新的清单给用户看' });
     const left = await runRevoke(ctx, plan);
-    if (skipped.length) out(`没有重建（跳过了）：${skipped.join('、')}；原样在备份里：${rec.dir}/backup`);
+    // 撤回重建时晚出现、和备份里的旧内容一模一样的：它就是旧内容，留着就行；跳过的那几条要是已经有了，就不用再恢复
+    const old = await oldContentRows(ctx);
+    if (old.length) out(`库里有和备份里的旧内容一模一样的：${mixed(old)}——可能是同事照原样手工恢复的，也可能是撤回重建晚落库的；它就是旧内容，留着就行（md 不删它，也不算撤回重建的）`);
+    const sameAsOld = (t, it) => old.find(({ type, row }) => type === t && (t === 'faq'
+      ? textKey(row.question) === textKey(it.question) && textKey(row.answer) === textKey(it.answer)
+      : textKey(row.name) === textKey(it.name)));
+    const notRestored = [];
+    for (const t of ['faq', 'doc']) {
+      for (const it of plan.skip[t].map((k) => (t === 'faq' ? plan.faqItems : plan.docItems).find((x) => x.key === k)).filter(Boolean)) {
+        const name = t === 'faq' ? `FAQ #${it.key}「${it.question}」` : `文件 #${it.key}「${it.full}」`;
+        const hit = sameAsOld(t, it);
+        if (hit) out(`没有重建（跳过了）：${name}——库里已经有一模一样的 #${hit.row.id}，不用再恢复`);
+        else notRestored.push(name);
+      }
+    }
+    if (notRestored.length) out(`没有重建（跳过了）：${notRestored.join('、')}；原样在备份里：${rec.dir}/backup`);
     if (state.revoke.partialKept?.length) out(`跳过重建的那几条，撤回建了一半、又被人改过的，没删：${state.revoke.partialKept.join('、')}`);
     if (plan.goneBefore.length) out(`${plan.goneBefore.join('、')} 在 md 删之前就被人删了，没有重建；原样在备份里：${rec.dir}/backup`);
     if (left.length) {
       reportLeft(left, importId);
       return EXIT.ERROR;
     }
-    if (skipped.length) {
+    if (notRestored.length) {
       out('撤回做完了：这次导入建的都删了；上面跳过的几条没有重建，要在秒懂上手工恢复。');
       return EXIT.ERROR;
+    }
+    if (skipped.length) {
+      out('撤回做完了：这次导入建的都删了；跳过重建的几条，库里已经有一模一样的旧内容。');
+      return EXIT.OK;
     }
     out(plan.goneBefore.length
       ? `撤回完成：这次导入建的都删了；md 删过的 ${state.revoke.scope.faqs.length + state.revoke.scope.docs.length} 条都按备份重建了，上面那几条不是 md 删的，没有重建。`
