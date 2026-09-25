@@ -52,11 +52,12 @@ THIRD_PARTY_NOTICES.md
 ```
 
 - 旧 kit 的文件（`miaodong-kit/bin/`、`lib/`、`PLAYBOOK.md`、`README.md`）不搬，留在老懂里。
+- 例外：`lib/summarize.mjs` md 在用（`shortId`、`describeNode`），带着历史搬过来，挪进 `src/summarize.mjs`，从此归 md 自己管；老懂里旧 kit 的那份不动。
 - 原来 `skill/README.md` 的安装说明挪进根目录的 `README.md`。
 
 ## 4. 老懂的代码
 
-- **原样复制**：19 个文件放进 `vendor/laodong/`，保持老懂里的相对路径（例如 `vendor/laodong/apps/api/lib/miaodong/trial-core.ts`）。这样它们之间的相互引用不用改，md 这边只改 7 处 import。
+- **原样复制**：19 个文件放进 `vendor/laodong/`，保持老懂里的相对路径（例如 `vendor/laodong/apps/api/lib/miaodong/trial-core.ts`）。这样它们之间的相互引用不用改，md 这边只改 10 个文件里的 12 行 import。
 - **不在这里改**：`vendor/` 里的文件不许在本仓库改；要改就去老懂改，再同步过来。
 - **记来源**：`vendor/laodong/SOURCE.json` 记下取自 Agentflow 哪个提交，以及 19 个文件的清单。
 - **同步**：`npm run sync:laodong -- <Agentflow 检出的路径>`
@@ -74,7 +75,7 @@ THIRD_PARTY_NOTICES.md
 ## 5. 历史
 
 - 用 `git filter-repo`（`brew install git-filter-repo`），在一份临时 clone 上处理：
-  - 只留 md 的路径：`miaodong-kit/src`、`miaodong-kit/test`、`miaodong-kit/skill`，以及 `miaodong-kit/` 下的 `build.mjs`、`install.mjs`、`publish.mjs`；
+  - 只留 md 的路径：`miaodong-kit/src`、`miaodong-kit/test`、`miaodong-kit/skill`、`miaodong-kit/lib/summarize.mjs`，以及 `miaodong-kit/` 下的 `build.mjs`、`install.mjs`、`publish.mjs`；
   - 再留 md 的设计文档和计划：`docs/superpowers/specs/2026-09-2*-miaodong-cli*`、`docs/superpowers/plans/2026-09-2*-miaodong-cli*`；
   - `miaodong-kit/` 挪到仓库根目录，`docs/superpowers/specs`、`docs/superpowers/plans` 分别挪到 `docs/specs`、`docs/plans`。
 - 之后的改动（vendor、改路径、改脚本、改文档）作为新提交接在后面。
@@ -90,7 +91,7 @@ THIRD_PARTY_NOTICES.md
   - 建软链：`~/.claude/skills/miaodong`、`~/.codex/skills/miaodong`、`~/.agents/skills/miaodong` 指向 `<仓库>/skill`；`~/.local/bin/md` 指向 `<仓库>/dist/md.mjs`。
   - **认得旧装法**（从 `magic-skills/miaodong` 装过的同事、用户本机的 `npm run md:install`）：
     - 怎么认：那个位置的目录里有 `SKILL.md`，而且写着 `name: miaodong`；或者它是指向这样一个目录（或其中 `scripts/md.mjs`）的软链；
-    - 是这样的目录（旧的 clone 或旧的真身目录）：挪到 `~/.claude/skills/.miaodong-old-<时间>` 备份，再建新链接；
+    - 是这样的目录（旧的 clone 或旧的真身目录）：挪到 `~/.miaodong/old-installs/<时间>/` 备份，再建新链接。备份不放在 skills 目录里：放在那里，里面的 `SKILL.md` 可能被当成第二个 miaodong 加载；
     - 是这样的软链：改指到新位置。
   - 别人的东西照旧不动，只提示（和现在一样）。
   - PATH 的提醒、zsh 里 `alias md` 的提醒照旧；最后打印 `md --version`。
