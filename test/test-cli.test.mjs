@@ -299,3 +299,63 @@ test('stop：暂停正在跑的任务；已经跑完的说不用暂停；找不�
   assert.match((await md(['test', 'stop', '70000099', '--bot', '179cd443'], h)).stdout, /已经是 finished，不用暂停/);
   assert.equal((await md(['test', 'stop', 'ffffffff', '--bot', '179cd443'], h)).code, 4);
 });
+
+const savedRows = (stdout) => readFileSync(stdout.match(/逐条明细：(\S+)/)[1], 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
+
+test('results：一个任务 → 汇总、没通过的（空跑单独说）、逐条明细存本机；线上回复从导入来源取；--out 出 xlsx / csv / jsonl，别的扩展名报错', async () => {
+  reset();
+  const h = home();
+  const file = join(h, 'search.jsonl');
+  writeFileSync(file, execSearchLines({ botId: TARGET_BOT, botName: '【测试测试测试】太极2.0 测试专用版', ids: [SAME_EXEC] }));
+  assert.equal((await md(['test', 'import', '集', '--bot', '179cd443', '--from-execs', file], h)).code, 0);
+  const set = fake.state.sets[0].testSetId;
+  fake.state.cases.push({ ...structuredClone(importable[CROSS_EXEC]), testCaseId: 'b0000001-0000-4000-8000-000000000000', testSetId: set });
+  seedFinished(set, 0.02);
+  assert.equal((await md(['test', 'run', '集', '--bot', '179cd443', '--allow-preflight-errors'], h)).code, 0);
+  const task = taskOf('集-草稿');
+  const xlsx = join(h, 'report.xlsx');
+  const r = await md(['test', 'results', task.slice(0, 8), '--bot', '179cd443', '--out', xlsx], h);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /以下含真实用户对话/);
+  assert.match(r.stdout, /finished · v1\.0\.216 · 2 次 · 通过 1（50%） · 空跑 1 · ¥0\.020/);
+  assert.match(r.stdout, /没有真正执行/);
+  const rows = savedRows(r.stdout);
+  assert.equal(rows.find((x) => x.execId === SAME_EXEC).online, '发出事件「发送4.0」：线上回复 1');
+  assert.ok(readFileSync(xlsx).subarray(0, 2).equals(Buffer.from('PK')));
+  const csv = join(h, 'report.csv');
+  await md(['test', 'results', task.slice(0, 8), '--bot', '179cd443', '--out', csv], h);
+  assert.match(readFileSync(csv, 'utf-8'), /^﻿用例名,调优中心执行ID,场景,用户消息/);
+  const jsonl = join(h, 'report.jsonl');
+  await md(['test', 'results', task.slice(0, 8), '--bot', '179cd443', '--out', jsonl], h);
+  assert.equal(readFileSync(jsonl, 'utf-8').trim().split('\n').length, 2);
+  const bad = await md(['test', 'results', task.slice(0, 8), '--bot', '179cd443', '--out', join(h, 'r.txt')], h);
+  assert.equal(bad.code, 2);
+});
+
+test('results --deep：测试项里没有回复（回复在下游事件里）的，按测试执行 id 取详情补上', async () => {
+  reset();
+  seedFinished(seedSet('集', [SAME_EXEC]), 0.02);
+  const h = home();
+  await md(['test', 'run', '集', '--bot', '179cd443'], h);
+  const task = taskOf('集-草稿');
+  await md(['test', 'status', task, '--bot', '179cd443'], h);
+  for (const i of fake.state.items.get(task)) Object.assign(i, { executedActions: [{ type: 'canvas-event-action', summary: '触发 发送4.0 事件' }], canvasActionOutputAssertionResult: [] });
+  assert.equal(savedRows((await md(['test', 'results', task, '--bot', '179cd443'], h)).stdout)[0].reply, '');
+  const deep = await md(['test', 'results', task, '--bot', '179cd443', '--deep'], h);
+  assert.match(deep.stderr, /--deep：1 条要取执行详情/);
+  assert.equal(savedRows(deep.stdout)[0].reply, '发出事件「发送4.0」：详情里的回复');
+});
+
+test('results 两个任务：按用例对齐，--out csv 每个任务一组「通过 / 回复」列', async () => {
+  reset();
+  seedFinished(seedSet('集', [SAME_EXEC]), 0.02);
+  const h = home();
+  await md(['test', 'run', '集', '--bot', '179cd443', '--name', '改前'], h);
+  await md(['test', 'run', '集', '--bot', '179cd443', '--name', '改后'], h);
+  const out = join(h, 'cmp.csv');
+  const r = await md(['test', 'results', '改前', '改后', '--bot', '179cd443', '--out', out], h);
+  assert.equal(r.code, 0, r.stderr);
+  const csv = readFileSync(out, 'utf-8');
+  assert.match(csv, /用例名,调优中心执行ID,用户消息,线上回复,改前 通过,改前 回复,改后 通过,改后 回复/);
+  assert.match(csv, /1\/1,回复：我想退款,1\/1,回复：我想退款/);
+});
