@@ -50,7 +50,7 @@ export function normalizeFaq(raw) {
 }
 
 // 服务端可能把每页封顶在比 pageSize 小的条数：有 page.total 时按它判断读没读完，没有才看这一页满没满
-async function allPages(fetchPage) {
+export async function allPages(fetchPage) {
   const rows = [];
   for (let current = 1; current <= MAX_PAGES; current++) {
     const { list, total } = await fetchPage(current);
@@ -62,7 +62,7 @@ async function allPages(fetchPage) {
   }
   return rows;
 }
-const pageOf = (payload) => ({ list: asArray(payload?.data), total: Number(payload?.page?.total) });
+export const pageOf = (payload) => ({ list: asArray(payload?.data), total: Number(payload?.page?.total) });
 
 export async function listKbs(identity, orgId) {
   const rows = await allPages(async (current) => pageOf(await request(identity, '/api/knowledge-base/list', { query: { orgId, current, pageSize: PAGE_SIZE } })));
