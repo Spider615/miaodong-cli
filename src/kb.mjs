@@ -10,6 +10,8 @@ export const FAQ_FILTER = Object.freeze({ ALL: 0, REVIEWED: 1, PENDING: 2 });
 // 服务端 pageSize 给到 500 都照给（spec §2.1，09-25）：取 200，2725 条的大库十几次请求读完
 export const PAGE_SIZE = 200;
 export const SEARCH_SIZE = 50;
+// 语义搜索只返回相似度不低于它的条目（spec §2.3，09-25 实测）：重放看不到更低的分数
+export const SEMANTIC_FLOOR = 0.8;
 const MAX_PAGES = 1000;
 
 const str = (v) => (v === null || v === undefined ? '' : String(v));
