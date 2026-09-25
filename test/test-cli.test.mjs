@@ -74,3 +74,77 @@ test('md test 不认识的子命令：用法错误，列出可用的', async () 
   assert.equal(r.code, 2);
   assert.match(r.stderr, /不认识「md test nope」/);
 });
+
+test('import：同一个智能体的执行 id → 新建测试集、导入、给下一步；已有同名集要 --into', async () => {
+  reset();
+  const h = home();
+  const r = await md(['test', 'import', '回归-退款', '--bot', '179cd443', '--from-execs', SAME_EXEC], h);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /新建测试集「回归-退款」/);
+  assert.match(r.stdout, /导入：成功 1 · 失败 0/);
+  assert.match(r.stdout, /下一步：md test run 回归-退款 --bot 179cd443/);
+  assert.equal(fake.state.posts.import[0].includeSessionMemory, true);
+  const again = await md(['test', 'import', '回归-退款', '--bot', '179cd443', '--from-execs', SAME_EXEC], h);
+  assert.equal(again.code, 5);
+  assert.match(again.stderr, /已经有测试集「回归-退款」/);
+  const into = await md(['test', 'import', '回归-退款', '--bot', '179cd443', '--from-execs', SAME_EXEC, '--into'], h);
+  assert.equal(into.code, 0, into.stderr);
+  assert.equal(fake.state.cases.length, 2);
+});
+
+test('import：只给了 id、其实是别的智能体的执行 → 撤回这次导进来的，集里原有的（哪怕同名）不动；新建的集也删掉（审查重点 1、2）', async () => {
+  reset();
+  const set = seedSet('已有的集', [SAME_EXEC]);
+  const before = fake.state.cases.map((c) => c.testCaseId);
+  const r = await md(['test', 'import', '已有的集', '--bot', '179cd443', '--from-execs', `${SAME_EXEC},${CROSS_EXEC}`, '--into']);
+  assert.equal(r.code, 5);
+  assert.match(r.stderr, /1 条用例的事件或会话变量在「【测试测试测试】太极2\.0 测试专用版」里对不上/);
+  assert.match(r.stderr, /--from-bot/);
+  assert.deepEqual(fake.state.cases.map((c) => c.testCaseId), before);
+  assert.ok(fake.state.sets.some((s) => s.testSetId === set));
+  reset();
+  const fresh = await md(['test', 'import', '新集', '--bot', '179cd443', '--from-execs', CROSS_EXEC]);
+  assert.equal(fresh.code, 5);
+  assert.equal(fake.state.sets.length, 0);
+  assert.equal(fake.state.cases.length, 0);
+});
+
+test('import：从 md exec 保存的文件导入（来源是另一个智能体）→ 按名字换 id、全量回写不清掉名字、回读不剩源 id；换不了的列出来；记下线上回复', async () => {
+  reset();
+  const h = home();
+  const file = join(h, 'search.jsonl');
+  writeFileSync(file, execSearchLines({ ids: [CROSS_EXEC, LOST_EXEC] }));
+  const r = await md(['test', 'import', '跨智能体回归', '--bot', '179cd443', '--from-execs', file], h);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /来自「太极2\.0 质检革新版」（跨智能体/);
+  assert.match(r.stdout, /换 id：更新了 2 条/);
+  assert.match(r.stdout, /事件「只在源里有」在目标里没有/);
+  assert.match(r.stdout, /1 条用例对不上这个智能体，md test run 的跑前检查会拦下它们/);
+  const cross = fake.state.cases.find((c) => c.name.includes(CROSS_EXEC));
+  assert.equal(cross.name, `调优中心导入(${CROSS_EXEC})`);
+  assert.equal(cross.triggerInputs.eventId, 'tev-delay');
+  assert.deepEqual(Object.keys(cross.sessionMemoryCustomData).sort(), ['tv-flag', 'tv-hist']);
+  assert.equal(cross.canvasActionOutputAssertions[1].actionContent.payload.eventId, 'tev-send');
+  const sourcesFile = r.stdout.match(/结果报告里对照用：(\S+)/)[1];
+  assert.match(JSON.parse(readFileSync(sourcesFile, 'utf-8'))[CROSS_EXEC].reply, /线上回复 1/);
+});
+
+test('import：给了 --from-bot 的跨智能体 id 列表，也按名字换 id', async () => {
+  reset();
+  const r = await md(['test', 'import', '跨智能体', '--bot', '179cd443', '--from-execs', CROSS_EXEC, '--from-bot', '147bd600']);
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(fake.state.cases[0].triggerInputs.eventId, 'tev-delay');
+});
+
+test('import：--from-bot 和文件里的来源对不上、执行 id 不完整：用法错误', async () => {
+  reset();
+  const h = home();
+  const file = join(h, 'search.jsonl');
+  writeFileSync(file, execSearchLines({ ids: [CROSS_EXEC] }));
+  const conflict = await md(['test', 'import', '集', '--bot', '179cd443', '--from-execs', file, '--from-bot', '179cd443'], h);
+  assert.equal(conflict.code, 2);
+  assert.match(conflict.stderr, /--from-bot 是「【测试测试测试】太极2\.0 测试专用版」，但文件里的执行来自「太极2\.0 质检革新版」/);
+  const short = await md(['test', 'import', '集', '--bot', '179cd443', '--from-execs', 'e0000011']);
+  assert.equal(short.code, 2);
+  assert.match(short.stderr, /不是完整的执行 id：e0000011/);
+});
