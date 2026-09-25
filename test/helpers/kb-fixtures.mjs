@@ -67,9 +67,10 @@ export function kbCanvas() {
   ];
 }
 
-// 一次大模型调知识库工具的记录（spec §2.5 的真实结构）。召回按假相似度现算：只有已审核的、过了门槛的，最多 10 条
-export function toolCall(kb, query, { threshold = 0.6, topK = 3, success = true } = {}) {
-  const result = faqs()
+// 一次大模型调知识库工具的记录（spec §2.5 的真实结构）。召回按假相似度现算：只有已审核的、过了门槛的，最多 10 条。
+// rows 默认是 faqs()；测试用别的 FAQ 起假秒懂时传同一份，记录才和重放一致
+export function toolCall(kb, query, { threshold = 0.6, topK = 3, success = true, rows = faqs() } = {}) {
+  const result = rows
     .filter((f) => f.kb === kb && f.isReviewed)
     .map((f) => ({ f, score: sim(query, f.question) }))
     .filter((x) => x.score >= threshold)

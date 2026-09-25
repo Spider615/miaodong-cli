@@ -3,8 +3,9 @@ import { usage } from '../errors.mjs';
 import { find } from './kb-find.mjs';
 import { list } from './kb-list.mjs';
 import { pull } from './kb-pull.mjs';
+import { why } from './kb-why.mjs';
 
-const SUBS = { list, pull, find };
+const SUBS = { list, pull, find, why };
 
 const USAGE = [
   'md kb list [--bot <智能体> [--version vX]] [--region <区>] [--org <企业>]   知识库列表；--bot 只列这个智能体引用的库、各节点怎么挂的、FAQ 未审核数',

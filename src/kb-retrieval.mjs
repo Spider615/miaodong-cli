@@ -1,5 +1,5 @@
 // 从整理好的执行详情（normalizeDetail 的结果）里取出这次执行的知识库检索（spec 3a §2.5、§3.5 第 2 步）。纯函数。
-// - calls：大模型每调一次知识库工具算一次检索：查询、门槛（模型自己定的）、召回的条目和分数；
+// - calls：大模型每调一次知识库工具算一次检索：查询、门槛（模型自己定的）、召回的条目（类型、分数）；
 // - kbNodes：知识库查询节点的运行。它运行时的输出结构还没核对过（spec §7），原样带着输入输出，只用配置判断；
 // - silent：挂了知识库工具、这次却一次都没调的大模型节点。
 import { asArray } from './api.mjs';
@@ -22,6 +22,8 @@ export function retrievalsOf(norm) {
         question: String(h?.reference?.source?.question ?? ''),
         score: typeof h?.score === 'number' ? h.score : null,
         kbId: String(h?.knowledgeBaseId ?? ''),
+        // 实测的调用全是 FAQ（qa）；库里有文件时会混着段落，比对「知识库改过」时只能拿 FAQ 比（重放只搜得到 FAQ）
+        type: String(h?.reference?.type || h?.sourceType || 'qa'),
       }));
       const failed = t.toolResult?.success === false;
       calls.push({
