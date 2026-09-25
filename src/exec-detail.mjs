@@ -7,7 +7,7 @@ import { asArray } from './api.mjs';
 import { EXIT, MdError, usage } from './errors.mjs';
 import { shortId } from './output.mjs';
 import { actionTexts, clip, formatCost } from './execs.mjs';
-import { buildBranchNameIndex, buildNodeMetaIndex, extractEventTrigger, extractTriggerTextFromSnapshot } from '../../apps/api/lib/miaodong/badcase-normalize.ts';
+import { buildBranchNameIndex, buildNodeMetaIndex, extractEventTrigger, extractTriggerTextFromSnapshot } from '../vendor/laodong/apps/api/lib/miaodong/badcase-normalize.ts';
 
 export const NODE_LINE_LIMIT = 150;
 const INPUT_KEY_LIMIT = 20;

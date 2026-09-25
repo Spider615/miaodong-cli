@@ -7,7 +7,7 @@ import { request } from './http.mjs';
 import { asArray } from './api.mjs';
 import { MdError, usage } from './errors.mjs';
 import { formatTime } from './output.mjs';
-import { extractTriggerTextFromSnapshot } from '../../apps/api/lib/miaodong/badcase-normalize.ts';
+import { extractTriggerTextFromSnapshot } from '../vendor/laodong/apps/api/lib/miaodong/badcase-normalize.ts';
 
 export const PAGE_SIZE = 100;
 

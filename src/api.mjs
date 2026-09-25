@@ -3,7 +3,7 @@
 
 import { request } from './http.mjs';
 import { MdError } from './errors.mjs';
-import { deriveDomainEdges, deriveDomainNodes } from '../../apps/api/lib/miaodong/canvas-derive.ts';
+import { deriveDomainEdges, deriveDomainNodes } from '../vendor/laodong/apps/api/lib/miaodong/canvas-derive.ts';
 
 const str = (value) => (typeof value === 'string' ? value : '');
 

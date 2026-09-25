@@ -1,0 +1,15 @@
+{
+  "name": "miaodong-cli",
+  "version": "0.0.0",
+  "private": true,
+  "description": "md：让 Claude Code / Codex 读写秒懂（JZ Insight）智能体的命令行工具",
+  "type": "module",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "test": "node --no-warnings --experimental-strip-types --loader ./scripts/ts-resolve-loader.mjs --test test/*.test.mjs",
+    "build": "node build.mjs",
+    "install:local": "node install.mjs"
+  },
+  "dependencies": { "jsonrepair": "3.14.0" },
+  "devDependencies": { "esbuild": "0.27.7" }
+}

@@ -17,7 +17,7 @@ import { createTestSet, deleteCases, deleteTestSet, importExecs, listCases, list
 import { buildIdMap, execIdOfCase, idProblems, leftoverIds, remapCase } from '../testcases.mjs';
 import { mergeSources, resolveTestSet, testTarget } from '../test-common.mjs';
 import { importFile } from './test-import-file.mjs';
-import { extractTriggerTextFromSnapshot } from '../../../apps/api/lib/miaodong/badcase-normalize.ts';
+import { extractTriggerTextFromSnapshot } from '../../vendor/laodong/apps/api/lib/miaodong/badcase-normalize.ts';
 
 // --from-execs：md exec 保存的 JSONL（第一行是查询条件，带着源智能体），或者逗号 / 空格隔开的执行 id
 export function readExecSource(value) {

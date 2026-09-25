@@ -1,7 +1,7 @@
 // 跑一次单节点试跑：POST 一次，每 2 秒查一次，最长 5 分钟。
 // POST 结果不明时绝不重发：秒懂没有取消接口，也没有能列出节点执行的接口，重发可能跑两遍（多花钱，插件节点还会多调一次外部系统）。
 
-import { getNodeTrialRun, startNodeTrialRun } from '../../apps/api/lib/miaodong/trial-core.ts';
+import { getNodeTrialRun, startNodeTrialRun } from '../vendor/laodong/apps/api/lib/miaodong/trial-core.ts';
 import { request } from './http.mjs';
 import { MdError } from './errors.mjs';
 

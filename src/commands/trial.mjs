@@ -17,7 +17,7 @@ import { UNKNOWN_RUN_COST, buildTrialInputs, classifyTrialNode, costOf, costSumm
 import { runNodeOnce } from '../trial-run.mjs';
 import { dayKey, loadLimits, readSpends, recordSpend, spendDecision, spentOn, updateSpend, withSpendLock } from '../spend.mjs';
 import { codeFor, givenCode, roundCost, stopForConfirm } from '../confirm.mjs';
-import { buildBranchNameIndex } from '../../../apps/api/lib/miaodong/badcase-normalize.ts';
+import { buildBranchNameIndex } from '../../vendor/laodong/apps/api/lib/miaodong/badcase-normalize.ts';
 
 const safe = (value) => String(value).replace(/[^\w.@-]+/g, '_');
 

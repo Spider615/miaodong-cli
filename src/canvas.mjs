@@ -4,8 +4,8 @@
 // 连线按「源节点#端口→目标节点#端口」识别，不看 edge.id。
 
 import { createHash } from 'node:crypto';
-import { isEdgeCell, isVisualOnlyCell } from '../../apps/api/lib/miaodong/canvas-derive.ts';
-import { stableStringify } from '../../apps/api/lib/miaodong/canvas-content-patch.ts';
+import { isEdgeCell, isVisualOnlyCell } from '../vendor/laodong/apps/api/lib/miaodong/canvas-derive.ts';
+import { stableStringify } from '../vendor/laodong/apps/api/lib/miaodong/canvas-content-patch.ts';
 
 export { isEdgeCell, isVisualOnlyCell, stableStringify };
 

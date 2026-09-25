@@ -8,9 +8,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-export const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+export const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const LOADER_URL = pathToFileURL(join(REPO, 'scripts', 'ts-resolve-loader.mjs')).href;
-const CLI = join(REPO, 'miaodong-kit', 'src', 'cli.mjs');
+const CLI = join(REPO, 'src', 'cli.mjs');
 
 export function tempHome() {
   return mkdtempSync(join(tmpdir(), 'md-test-'));

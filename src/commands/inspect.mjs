@@ -1,6 +1,6 @@
 import { intArg } from '../args.mjs';
 import { EXIT } from '../errors.mjs';
-import { describeNode } from '../../lib/summarize.mjs';
+import { describeNode } from '../summarize.mjs';
 import { buildIndex, nodeName, refsTo, resolveNode, traceLines } from '../graph.mjs';
 import { loadWorkspace, wsLine } from '../workspace.mjs';
 import { out, shortId } from '../output.mjs';

@@ -1,6 +1,6 @@
 // 构建并安装：~/.claude/skills/miaodong（真身）、~/.codex/skills/miaodong（软链）、~/.local/bin/md（软链），
 // 另在桌面放一份完整副本 ~/Desktop/miaodong（用户要求：方便查看、直接转给同事；每次安装刷新，改它不会生效）。
-// 复制而不是软链到仓库：切到没有 miaodong-kit 的分支时，md 不能跟着消失。
+// 复制而不是软链到仓库：切到没有 md 代码的分支时，md 不能跟着消失。
 // 不用 npm link：它会把 md 装进当前 nvm 版本目录，切 Node 版本就找不到了。
 import { cpSync, existsSync, lstatSync, mkdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';

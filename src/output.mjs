@@ -2,7 +2,7 @@
 // 退出前必须等两个流都写完：输出经管道给 AI 读时，裸 process.exit 会在 64KB 处静默截断。
 // kit 旧的 flushExit 只看 write('') 的返回值，Node 22 上照样截断（已实测），这里改等回调。
 
-import { shortId } from '../lib/summarize.mjs';
+import { shortId } from './summarize.mjs';
 
 export { shortId };
 

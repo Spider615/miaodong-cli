@@ -5,8 +5,8 @@
 // - 风险：前后各跑一遍全图（D 组可达性是全图语义），按「code|rule|节点|连线|路径」多重集比对。
 //   key 不含 message：message 里带节点名，改个名就会全变成「新风险」。
 
-import { collectChangedScopeNodeIds, validateWorkflowJsonCandidateWithWarnings } from '../../apps/api/lib/chat-agent/validate-workflow.ts';
-import { analyzeWorkflowRisks } from '../../packages/shared/src/workflow-risk/index.ts';
+import { collectChangedScopeNodeIds, validateWorkflowJsonCandidateWithWarnings } from '../vendor/laodong/apps/api/lib/chat-agent/validate-workflow.ts';
+import { analyzeWorkflowRisks } from '../vendor/laodong/packages/shared/src/workflow-risk/index.ts';
 import { edgeKey, isEdgeCell } from './canvas.mjs';
 import { diffEnvelopes, kindOf } from './diff.mjs';
 import { buildIndex, edgesOf } from './graph.mjs';

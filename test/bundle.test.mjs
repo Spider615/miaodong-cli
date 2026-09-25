@@ -60,7 +60,7 @@ test('产物全流程：取身份 → 找智能体 → 拉 → 改 → diff → 
 
 test('产物不带源码注释和源码路径（打包会把内部注释原样带进对外发布的文件）', () => {
   const text = readFileSync(bundle, 'utf-8');
-  assert.doesNotMatch(text, /\/\/ (apps|packages|miaodong-kit)\//);
+  assert.doesNotMatch(text, /\/\/ (src|vendor|apps|packages)\//);
   assert.doesNotMatch(text, /锘崴|xiaoju-new-pc|ddregion/);
 });
 

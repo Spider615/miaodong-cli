@@ -25,7 +25,7 @@ test('未知命令退出码 2', async () => {
 });
 
 test('finish() 在读端很慢的管道上也不截断大输出', async () => {
-  const outputUrl = pathToFileURL(join(REPO, 'miaodong-kit/src/output.mjs')).href;
+  const outputUrl = pathToFileURL(join(REPO, 'src/output.mjs')).href;
   const script = `import { out, finish } from ${JSON.stringify(outputUrl)};
 for (let i = 0; i < 2000; i++) out('x'.repeat(99));
 await finish(0);`;
@@ -40,10 +40,7 @@ await finish(0);`;
   assert.equal(size, 2000 * 100);
 });
 
-test('lib/credentials.mjs 与 src/args.mjs 共用同一份 parseArgs', async () => {
-  const a = await import('../src/args.mjs');
-  const b = await import('../lib/credentials.mjs');
-  assert.equal(a.parseArgs, b.parseArgs);
-  assert.equal(a.strArg, b.strArg);
-  assert.equal(a.parseArgs(['--confirm', 'false']).confirm, false);
+test('parseArgs：--confirm false 当布尔 false', async () => {
+  const { parseArgs } = await import('../src/args.mjs');
+  assert.equal(parseArgs(['--confirm', 'false']).confirm, false);
 });

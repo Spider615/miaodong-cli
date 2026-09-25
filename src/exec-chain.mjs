@@ -2,7 +2,7 @@
 // 配对靠「上游发出的事件参数 == 下游收到的事件数据」（复算 189/189）；同会话同事件的候选很常见（32/221），必须比载荷。
 // 一次「同会话 ± 时间窗」的列表查询就拿到了整条链要的数据，不用逐条查详情。
 
-import { buildExecutionChain, compareEventPayload, extractEmittedEvents, toChainExec } from '../../apps/api/lib/miaodong/badcase-normalize.ts';
+import { buildExecutionChain, compareEventPayload, extractEmittedEvents, toChainExec } from '../vendor/laodong/apps/api/lib/miaodong/badcase-normalize.ts';
 import { PAGE_SIZE, TRIGGER_LABEL, actionSummary, actionTexts, clip, formatCost, listExecutions } from './execs.mjs';
 import { formatTime, shortId } from './output.mjs';
 

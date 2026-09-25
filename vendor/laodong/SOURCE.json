@@ -1,0 +1,26 @@
+{
+  "from": "句子老懂仓库（Agentflow）",
+  "commit": "4967e1763b2b66a1caa246efff30cfda96d18c9e",
+  "syncedAt": "2026-09-25",
+  "files": [
+    "apps/api/lib/chat-agent/validate-workflow.ts",
+    "apps/api/lib/miaodong/badcase-normalize.ts",
+    "apps/api/lib/miaodong/canvas-content-patch.ts",
+    "apps/api/lib/miaodong/canvas-derive.ts",
+    "apps/api/lib/miaodong/trial-core.ts",
+    "packages/shared/src/miaodong-regions.ts",
+    "packages/shared/src/workflow-risk/analyzer.ts",
+    "packages/shared/src/workflow-risk/context.ts",
+    "packages/shared/src/workflow-risk/index.ts",
+    "packages/shared/src/workflow-risk/rules/broken-ref.ts",
+    "packages/shared/src/workflow-risk/rules/compliance.ts",
+    "packages/shared/src/workflow-risk/rules/content.ts",
+    "packages/shared/src/workflow-risk/rules/js-runtime.ts",
+    "packages/shared/src/workflow-risk/rules/llm-json.ts",
+    "packages/shared/src/workflow-risk/rules/reachability.ts",
+    "packages/shared/src/workflow-risk/rules/rule-center.ts",
+    "packages/shared/src/workflow-risk/rules/session.ts",
+    "packages/shared/src/workflow-risk/types.ts",
+    "packages/shared/src/workflowParser.ts"
+  ]
+}

@@ -1,4 +1,4 @@
-// miaodong-kit/lib/summarize.mjs
+// src/summarize.mjs：画布摘要（从旧 kit 带过来，md 只用 shortId、describeNode）
 //
 // 画布摘要 —— 这个模块存在的唯一理由是保护 AI 的上下文窗口。
 //
@@ -12,7 +12,7 @@
 //   outline 默认，一节点一行（id 短码 + 名称 + 类型 + 出入度）
 //   chain   按边推导执行链路，看流程走向
 
-import { isEdgeCell, isVisualOnlyCell } from '../../apps/api/lib/miaodong/canvas-derive.ts';
+import { isEdgeCell, isVisualOnlyCell } from '../vendor/laodong/apps/api/lib/miaodong/canvas-derive.ts';
 
 /** UUID 太长，摘要里统一用前 8 位短码；--node 查询时支持用短码前缀匹配。 */
 export function shortId(id) {

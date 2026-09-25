@@ -5,7 +5,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
-import { matchRegionFromUrl } from '../../packages/shared/src/miaodong-regions.ts';
+import { matchRegionFromUrl } from '../vendor/laodong/packages/shared/src/miaodong-regions.ts';
 import { EXIT, MdError, usage } from './errors.mjs';
 import { mdHome, readJson, writeJson } from './home.mjs';
 
