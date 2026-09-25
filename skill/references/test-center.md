@@ -8,6 +8,8 @@
 | `md test cases <集> --bot <智能体> [--out <文件.jsonl>]` | 用例汇总（触发类型、未审核、挂场景）；完整用例存本机 |
 | `md test tree --bot <智能体>` | 场景树和各节点的用例数 |
 | `md test import <集> --bot <目标> --from-execs <文件或 id> [--from-bot <源>] [--into]` | 从执行记录导入 |
+| `md test import <集> --bot <目标> --from-file <cases.jsonl> [--into]` | 导入外部用例（格式见 `test-cases.md`） |
+| `md test edit <集> <脚本.mjs> --bot <智能体> [--confirm <计划码>]` | 按脚本批量改用例（见 `test-cases.md`） |
 | `md test run <集> --bot <智能体> [--version vX] [--rounds 1] [--concurrency 5] [--name <任务名>]` | 跑回归 |
 | `md test status [<任务>] --bot <智能体> [--wait] [--timeout 540]` | 进度；不给任务时列最近的任务 |
 | `md test results <任务> [<任务2> …] --bot <智能体> [--out <文件>] [--deep]` | 报告 |
