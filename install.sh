@@ -25,22 +25,34 @@ if [ ! -f "${BIN_SRC}" ]; then
   echo "缺 dist/md.mjs：仓库不完整。重新 git clone 一次；开发者可以先 npm run build"
   exit 1
 fi
-if [ -d "${CLAUDE_SKILLS}/${NAME}" ] && [ "$(cd "${CLAUDE_SKILLS}/${NAME}" && pwd -P)" = "${ROOT}" ]; then
-  echo "不要把仓库 clone 到 ${CLAUDE_SKILLS}/${NAME}：那里要放的是仓库里的 skill/ 目录。"
-  echo "换个地方 clone（例如 ~/tools/miaodong-cli），再在那里运行 ./install.sh"
-  exit 1
-fi
+# 仓库本身不能放在任何一个 skills 位置：那里要放的是仓库里的 skill/ 目录
+for dest in "${CLAUDE_SKILLS}/${NAME}" "${CODEX_SKILLS}/${NAME}" "${AGENTS_SKILLS}/${NAME}"; do
+  if [ -d "${dest}" ] && [ "$(cd "${dest}" && pwd -P)" = "${ROOT}" ]; then
+    echo "仓库不能放在 ${dest}：那里要放的是仓库里的 skill/ 目录，不是整个仓库。"
+    echo "直接挪走就行，不用重新 clone：mv \"${dest}\" ~/tools/miaodong-cli && ~/tools/miaodong-cli/install.sh"
+    exit 1
+  fi
+done
 
 # 这个目录是不是 md 的旧装法：有 .md-cli-skill 标记（旧版 npm run md:install），或者 SKILL.md 写着 name: miaodong
 is_old_md_dir() {
   [ -d "$1" ] && [ ! -L "$1" ] && { [ -f "$1/.md-cli-skill" ] || grep -Eq '^name:[[:space:]]*miaodong[[:space:]]*$' "$1/SKILL.md" 2>/dev/null; }
 }
-# 这个软链是不是指向旧装法（旧 skill 目录，或者其中的 scripts/md.mjs）
+# 这个目录是不是一份 md 仓库（新布局）：有 install.sh，skill/SKILL.md 写着 name: miaodong
+is_md_repo() {
+  [ -d "$1" ] && [ ! -L "$1" ] && [ -f "$1/install.sh" ] && grep -Eq '^name:[[:space:]]*miaodong[[:space:]]*$' "$1/skill/SKILL.md" 2>/dev/null
+}
+# 这个软链是不是指向 md 的旧装法或另一份 md：旧 skill 目录（或其中的 scripts/md.mjs），
+# 另一份仓库的 skill/、dist/md.mjs、build/md.mjs
 points_to_old() {
   local target
   target="$(readlink "$1")"
-  case "${target}" in */scripts/md.mjs) target="${target%/scripts/md.mjs}" ;; esac
-  is_old_md_dir "${target}"
+  case "${target}" in
+    */scripts/md.mjs) target="${target%/scripts/md.mjs}" ;;
+    */dist/md.mjs) target="${target%/dist/md.mjs}" ;;
+    */build/md.mjs) target="${target%/build/md.mjs}" ;;
+  esac
+  is_old_md_dir "${target}" || is_md_repo "${target}"
 }
 # 备份目录里用的名字：.claude/skills/miaodong → claude-skills-miaodong
 label_of() {
@@ -52,12 +64,12 @@ old_links="|"
 for dest in "${CLAUDE_SKILLS}/${NAME}" "${CODEX_SKILLS}/${NAME}" "${AGENTS_SKILLS}/${NAME}" "${BIN_LINK}"; do
   if [ -L "${dest}" ] && points_to_old "${dest}"; then old_links="${old_links}${dest}|"; fi
 done
-# 旧目录挪去备份
+# 旧目录、放错位置的仓库挪去备份
 for dest in "${CLAUDE_SKILLS}/${NAME}" "${CODEX_SKILLS}/${NAME}" "${AGENTS_SKILLS}/${NAME}"; do
-  if is_old_md_dir "${dest}"; then
+  if is_old_md_dir "${dest}" || is_md_repo "${dest}"; then
     mkdir -p "${BACKUP_DIR}"
     mv "${dest}" "${BACKUP_DIR}/$(label_of "${dest}")"
-    echo "  旧版挪到 ${BACKUP_DIR}/$(label_of "${dest}")（备份；确认新版能用后可以删掉）"
+    echo "  旧版（或放错位置的仓库）挪到 ${BACKUP_DIR}/$(label_of "${dest}")（备份；确认新版能用后可以删掉）"
   fi
 done
 
@@ -68,22 +80,25 @@ link() {
     current="$(readlink "${dest}")"
     if [ "${current}" = "${target}" ]; then echo "  已存在 ${dest}"; return; fi
     case "${old_links}" in
-      *"|${dest}|"*) rm "${dest}"; ln -s "${target}" "${dest}"; echo "  改指 ${dest} -> ${target}（原来指向旧版）"; return ;;
+      *"|${dest}|"*) rm "${dest}"; ln -s "${target}" "${dest}"; echo "  改指 ${dest} -> ${target}（原来指向旧版或另一份 md：${current}）"; return ;;
     esac
     if [ ! -e "${dest}" ]; then
       rm "${dest}"; ln -s "${target}" "${dest}"; echo "  改指 ${dest} -> ${target}（原来指向的地方已经不在了）"; return
     fi
     echo "  ⚠️ 跳过 ${dest}：它指向 ${current}，不是 md，没动它"
+    skipped="${skipped} ${dest}"
     return
   fi
   if [ -e "${dest}" ]; then
     echo "  ⚠️ 跳过 ${dest}：那里已有别的文件，没动它"
+    skipped="${skipped} ${dest}"
     return
   fi
   ln -s "${target}" "${dest}"
   echo "  链接 ${dest} -> ${target}"
 }
 
+skipped=""
 chmod +x "${BIN_SRC}"
 echo "安装 md（${ROOT}）"
 link "${SKILL_SRC}" "${CLAUDE_SKILLS}/${NAME}"
@@ -99,6 +114,12 @@ esac
 if command -v zsh >/dev/null 2>&1 && [ -n "$(zsh -ic 'alias md' 2>/dev/null)" ]; then
   echo "⚠️ 你的 zsh 里 md 是个别名（多半是 oh-my-zsh 的 alias md='mkdir -p'），会盖住这个命令。"
   echo "   在 ~/.zshrc 里 oh-my-zsh 那一行之后加一行 unalias md，然后重开终端。"
+fi
+
+# 有位置被别人的东西占着：没装全，不能说「完成」
+if [ -n "${skipped}" ]; then
+  echo "没装全：${skipped# } 这些位置上有别人的东西，没动它们。确认不是你要的，挪走后再跑一次 ./install.sh"
+  exit 1
 fi
 
 echo

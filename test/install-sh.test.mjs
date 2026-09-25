@@ -121,7 +121,7 @@ test('install.sh：把仓库直接 clone 进 ~/.claude/skills/miaodong 的，明
   const repo = repoCopy(join(home, '.claude', 'skills'), 'miaodong');
   const r = runInstall(repo, home);
   assert.notEqual(r.code, 0);
-  assert.match(r.out, /不要把仓库 clone 到/);
+  assert.match(r.out, /不能放在 .*\.claude\/skills\/miaodong/);
 });
 
 test('install.sh：路径里有空格也能装；缺 dist/md.mjs 时说清楚', () => {
@@ -135,4 +135,45 @@ test('install.sh：路径里有空格也能装；缺 dist/md.mjs 时说清楚', 
   const r = runInstall(bare, tempHome());
   assert.notEqual(r.code, 0);
   assert.match(r.out, /缺 dist\/md\.mjs/);
+});
+
+test('install.sh：仓库错放在任何一个 skills 位置都会拦，提示直接挪走（审查 I1）', () => {
+  const home = tempHome();
+  const misplaced = repoCopy(join(home, '.codex', 'skills'), 'miaodong');
+  const r = runInstall(misplaced, home);
+  assert.notEqual(r.code, 0);
+  assert.match(r.out, /不能放在 .*\.codex\/skills\/miaodong/);
+  assert.match(r.out, /mv /);
+});
+
+test('install.sh：错放的仓库还留在 ~/.claude/skills/miaodong、又从别处 clone 了一份来装：错放的挪去备份，四个链接全对（审查 I1）', () => {
+  const home = tempHome();
+  repoCopy(join(home, '.claude', 'skills'), 'miaodong');
+  const repo = repoCopy();
+  const r = runInstall(repo, home);
+  assert.equal(r.code, 0, r.out);
+  assertInstalled(home, repo);
+  assert.ok(existsSync(join(backupOf(home), 'install.sh')));
+});
+
+test('install.sh：有位置被别人的东西占着时不说「完成」，说没装全、列出哪些，退出码非 0（审查 I1）', () => {
+  const repo = repoCopy();
+  const home = tempHome();
+  mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+  writeFileSync(join(home, '.local', 'bin', 'md'), '别人的 md');
+  const r = runInstall(repo, home);
+  assert.notEqual(r.code, 0);
+  assert.doesNotMatch(r.out, /完成/);
+  assert.match(r.out, /没装全.*\.local\/bin\/md/);
+});
+
+test('install.sh：从另一份 md 仓库（新布局）装过，再从这份装：四个链接都改指这份（审查 I2）', () => {
+  const home = tempHome();
+  const a = repoCopy();
+  const b = repoCopy();
+  assert.equal(runInstall(a, home).code, 0);
+  const r = runInstall(b, home);
+  assert.equal(r.code, 0, r.out);
+  assertInstalled(home, b);
+  assert.match(r.out, /另一份 md/);
 });
