@@ -7,7 +7,7 @@ import { EXIT, MdError, usage } from '../errors.mjs';
 import { EXEC_ID, locateExec } from '../exec-locate.mjs';
 import { findExecNode, normalizeDetail } from '../exec-detail.mjs';
 import { clip } from '../execs.mjs';
-import { SEARCH_SIZE, SEMANTIC_FLOOR, checkSimilarity, firstPerFaq, listFaqs, listFiles, listKbs, listParagraphs, searchFaqs } from '../kb.mjs';
+import { PAGE_SIZE, SEARCH_SIZE, SEMANTIC_FLOOR, checkSimilarity, firstPerFaq, listFaqs, listFiles, listKbs, listParagraphs, searchFaqs } from '../kb.mjs';
 import { diagnose, drifted, sameText } from '../kb-diagnose.mjs';
 import { retrievalsOf } from '../kb-retrieval.mjs';
 import { DATA_NOTE, out, shortId, targetLine } from '../output.mjs';
@@ -66,8 +66,8 @@ async function kbsOf(ctx) {
   return ctx.kbs;
 }
 const kbName = (kbs, id) => kbs.get(id)?.name ?? `已不存在的库 ${shortId(id)}`;
-// 企业里还在、而且有 FAQ 的库：只有它们能做语义搜索、相似度检查、列 FAQ
-const hasFaqs = (kbs, id) => kbs.has(id) && kbs.get(id).faqCount > 0;
+// 企业里还在、而且有 FAQ 的库：只有它们能做语义搜索、相似度检查、列 FAQ。平台没给条数（null）时当作可能有（整支审查小问题 4）
+const hasFaqs = (kbs, id) => kbs.has(id) && kbs.get(id).faqCount !== 0;
 
 // 一个库的全部 FAQ，这次命令里只拉一次（一个节点调了好几次、跨库找 id 时会反复用到）
 async function faqsOf(ctx, kbId) {
@@ -112,7 +112,8 @@ function place(rep, faqId, threshold) {
 // --expect：FAQ 的 id，或者一段关键词。关键词先在这次检索的库里找（FAQ 文字搜索、文件段落逐段比对），再到企业的其他库里找 FAQ
 async function resolveExpect(ctx, expect, kbIds) {
   const kbs = await kbsOf(ctx);
-  const ambiguous = (hits, where) => new MdError('kb_expect_ambiguous', `「${expect}」在${where}里匹配到 ${hits.length} 条：\n${hits.slice(0, 10).map((h) => `  - #${h.id} ${clip(h.question ?? h.content, 40)}`).join('\n')}`, {
+  // 关键词一次最多取 PAGE_SIZE 条：取满了就说「以上」，不把取到的当总数（整支审查小问题 6）
+  const ambiguous = (hits, where) => new MdError('kb_expect_ambiguous', `「${expect}」在${where}里匹配到 ${hits.length >= PAGE_SIZE ? `${hits.length} 条以上` : `${hits.length} 条`}：\n${hits.slice(0, 10).map((h) => `  - #${h.id} ${clip(h.question ?? h.content, 40)}`).join('\n')}`, {
     exitCode: EXIT.TARGET,
     hint: '用 --expect <id> 指定',
   });
@@ -133,11 +134,11 @@ async function resolveExpect(ctx, expect, kbIds) {
   for (const kbId of kbIds) {
     const k = kbs.get(kbId);
     if (k && hasFaqs(kbs, kbId)) {
-      const hits = await searchFaqs(ctx.identity, ctx.orgId, kbId, expect, { mode: 'text', size: 20 });
+      const hits = await searchFaqs(ctx.identity, ctx.orgId, kbId, expect, { mode: 'text', size: PAGE_SIZE });
       if (hits.length === 1) return { kind: 'faq', item: hits[0], kbId, inQueriedKb: true };
       if (hits.length > 1) throw ambiguous(hits, `「${kbName(kbs, kbId)}」`);
     }
-    if (k?.fileCount) {
+    if (k && k.fileCount !== 0) {
       const hits = [];
       for (const f of await listFiles(ctx.identity, ctx.orgId, kbId)) {
         for (const p of await listParagraphs(ctx.identity, ctx.orgId, kbId, f.id)) if (p.content.includes(expect)) hits.push(p);
@@ -148,7 +149,7 @@ async function resolveExpect(ctx, expect, kbIds) {
   }
   for (const k of kbs.values()) {
     if (kbIds.includes(k.id) || !hasFaqs(kbs, k.id)) continue;
-    const hits = await searchFaqs(ctx.identity, ctx.orgId, k.id, expect, { mode: 'text', size: 20 });
+    const hits = await searchFaqs(ctx.identity, ctx.orgId, k.id, expect, { mode: 'text', size: PAGE_SIZE });
     if (hits.length === 1) return { kind: 'faq', item: hits[0], kbId: k.id, inQueriedKb: false, otherKbName: k.name };
     if (hits.length > 1) throw ambiguous(hits, `「${k.name}」`);
   }
@@ -157,7 +158,7 @@ async function resolveExpect(ctx, expect, kbIds) {
 
 function targetText(t) {
   if (t.kind === 'paragraph') return `段落 #${t.item.id}「${clip(t.item.content, 60)}」 [${t.item.status}]`;
-  const reviewed = t.item.reviewed === false ? ' [未审核]' : t.item.reviewed ? ' [已审核]' : '';
+  const reviewed = t.item.reviewed === false ? ' [未审核]' : t.item.reviewed === true ? ' [已审核]' : ' [审核状态认不出]';
   const where = t.inQueriedKb ? '' : t.otherKbName ? `（在「${t.otherKbName}」里）` : '（不在这次查的库里）';
   return `FAQ #${t.item.id}${t.item.question ? `「${clip(t.item.question, 60)}」` : ''}${reviewed}${where}`;
 }
@@ -199,7 +200,7 @@ async function candidates(ctx, r, kbIds, rows, userText) {
   for (const kbId of kbIds.filter((id) => hasFaqs(kbs, id))) {
     for (const text of [...new Set([r.query, userText].filter(Boolean))]) {
       for (const f of await checkSimilarity(ctx.identity, ctx.orgId, kbId, text)) {
-        if (!f.reviewed && !pending.some((x) => x.id === f.id)) pending.push(f);
+        if (f.reviewed === false && !pending.some((x) => x.id === f.id)) pending.push(f);
       }
     }
   }

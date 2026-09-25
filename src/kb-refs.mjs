@@ -4,8 +4,8 @@
 import { asArray } from './api.mjs';
 import { isEdgeCell } from './canvas.mjs';
 
-// 执行记录里，工具调用的名字是 q_kb_<知识库 id>（spec §2.5）
-const TOOL_NAME = /^q_kb_([0-9a-z]+)$/i;
+// 执行记录里，工具调用的名字是 q_kb_<知识库 id>（spec §2.5）。id 的写法不限：别的区可能带横杠
+const TOOL_NAME = /^q_kb_(.+)$/i;
 export function toolKbId(name) {
   const m = TOOL_NAME.exec(String(name ?? ''));
   return m ? m[1] : null;

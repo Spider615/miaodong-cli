@@ -319,6 +319,7 @@ test('md kb why：同一条 FAQ 在索引里占好几行（09-25 真机验收）
     // 挂了工具没调：用原话查的前 3 条也按 FAQ 去重
     const silent = await run(['kb', 'why', X(38)]);
     assert.match(silent.stdout, /前 3 条）：#7001 课程怎么退款 1\.000；#8001 课程怎么退款1 0\.909；#8002 课程怎么退款2 0\.909/);
+    assert.deepEqual(s.unexpected(), []);
   } finally {
     await s.close();
   }
@@ -379,4 +380,32 @@ test('md kb why：模型按标签过滤过——重放不带标签、不可比�
   assert.match(r.stdout, /模型这次按标签（售后）过滤了，重放不带标签，结果不可比/);
   assert.match(r.stdout, /结论：查不出 —— 模型这次按标签（售后）过滤了/);
   assert.doesNotMatch(r.stdout, /知识库在这次执行之后改过/);
+});
+
+test('md kb why：认不出审没审核时不说成「未审核」，先照实说再推分数（整支审查小问题 4）', async () => {
+  const s = await startKbServer({ omitFaqFields: ['isReviewed'], details: { [X(74)]: kbExec(74, '课程怎么退', [toolCall(KB_FAQ, '课程怎么退', { threshold: 0.6 })]) } });
+  try {
+    const r = await runCli(['kb', 'why', X(74), '--expect', '7002'], { home: home(s.origin) });
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout, /目标：FAQ #7002「退款多久到账」 \[审核状态认不出\]/);
+    assert.match(r.stdout, /结论：审核状态认不出 —— 接口里认不出这一条审没审核/);
+    assert.match(r.stdout, /补充：分数偏低/);
+    assert.deepEqual(s.unexpected(), []);
+  } finally {
+    await s.close();
+  }
+});
+
+test('md kb why：关键词匹配到的超过 20 条时照实报条数（整支审查小问题 6）', async () => {
+  const many = Array.from({ length: 25 }, (_, i) => ({ id: 7200 + i, kb: KB_FAQ, question: `退款问题${i + 1}`, answer: '看订单页。', isReviewed: true }));
+  const rows = [...faqs(), ...many];
+  const s = await startKbServer({ faqRows: rows, details: { [X(73)]: kbExec(73, '退款', [toolCall(KB_FAQ, '退款', { threshold: 0.6, rows })]) } });
+  try {
+    const r = await runCli(['kb', 'why', X(73), '--expect', '退款问题'], { home: home(s.origin) });
+    assert.equal(r.code, 4);
+    assert.match(r.stderr, /「退款问题」在「售后 FAQ」里匹配到 25 条/);
+    assert.deepEqual(s.unexpected(), []);
+  } finally {
+    await s.close();
+  }
 });

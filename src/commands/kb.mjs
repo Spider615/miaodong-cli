@@ -10,7 +10,7 @@ const SUBS = { list, pull, find, why };
 const USAGE = [
   'md kb list [--bot <智能体> [--version vX]] [--region <区>] [--org <企业>]   知识库列表；--bot 只列这个智能体引用的库、各节点怎么挂的、FAQ 未审核数',
   'md kb pull <知识库> [--region <区>] [--org <企业>]           把全部 FAQ、文件、段落拉到本机；条数和平台对不上就报错',
-  'md kb find <知识库> "<一句话>" [--local]                    文字命中 + 语义最像 + 问题相似（含未审核），带分数和状态',
+  'md kb find <知识库> "<一句话>" [--local] [--region <区>] [--org <企业>]   文字命中 + 语义最像 + 问题相似（含未审核），带分数和状态',
   'md kb why <执行id> [--node <节点|#序号>] [--expect <FAQ id|"关键词">]   这次为什么没召回：重放当时的检索，给出原因和证据',
   '全部只读、不花钱；知识库全文只存本机 ~/.miaodong/md/kb/，终端里答案和段落只显示前 60 个字',
 ];

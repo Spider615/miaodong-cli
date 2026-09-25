@@ -46,6 +46,7 @@ test('md kb pull：拉到的条数和平台显示的对不上就报错、不留�
     assert.equal(r.code, 1);
     assert.match(r.stderr, /FAQ 拉到 4 条，平台显示 5 条/);
     assert.equal(existsSync(join(h, 'md', 'kb')), false);
+    assert.deepEqual(drifted.unexpected(), []);
   } finally {
     await drifted.close();
   }
@@ -56,4 +57,42 @@ test('md kb pull：名字有歧义时列候选（退出码 4）；只调读接�
   assert.equal(r.code, 4);
   assert.match(r.stderr, /「FAQ」匹配到 2 个知识库/);
   assert.deepEqual(server.unexpected(), []);
+});
+
+test('md kb pull：翻页不稳（有重复、有漏的）时条数对得上也报错、不留副本（整支审查小问题 3）', async () => {
+  const s = await startKbServer({ pageCap: 2, overlap: 1 });
+  try {
+    const h = home(s.origin);
+    const r = await runCli(['kb', 'pull', '售后 FAQ'], { home: h });
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /FAQ 拉到 4 条，其中有重复（不重复的 3 条）/);
+    assert.equal(existsSync(join(h, 'md', 'kb')), false);
+    assert.deepEqual(s.unexpected(), []);
+  } finally {
+    await s.close();
+  }
+});
+
+test('md kb pull：认不出审没审核时单独报出来，不算进未审核（整支审查小问题 4）', async () => {
+  const s = await startKbServer({ omitFaqFields: ['isReviewed'] });
+  try {
+    const r = await runCli(['kb', 'pull', '售后 FAQ'], { home: home(s.origin) });
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout, /FAQ 4（未审核 0 · 审核状态认不出 4 · 疑似重复 0）/);
+    assert.match(r.stdout, /⚠️ 4 条 FAQ 认不出审没审核（接口字段可能改了），先在秒懂页面上看一眼/);
+    assert.doesNotMatch(r.stdout, /未审核的 \d+ 条 FAQ 检索不到/);
+  } finally {
+    await s.close();
+  }
+});
+
+test('md kb pull：平台没给条数时照样拉，但说明这份副本没核对条数（整支审查小问题 4）', async () => {
+  const s = await startKbServer({ kbs: kbList().map(({ qaCount, ...k }) => k) });
+  try {
+    const r = await runCli(['kb', 'pull', '售后 FAQ'], { home: home(s.origin) });
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout, /⚠️ 平台没给这几类的条数（接口字段可能改了），没核对：FAQ/);
+  } finally {
+    await s.close();
+  }
 });

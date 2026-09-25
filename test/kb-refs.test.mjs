@@ -17,6 +17,8 @@ test('kb refs：大模型节点挂的知识库工具、知识库查询节点都�
 test('kb refs：执行记录里的工具名 q_kb_<知识库 id> 换回知识库 id', () => {
   assert.equal(toolKbId(`q_kb_${KB_FAQ}`), KB_FAQ);
   assert.equal(toolKbId('search_web'), null);
+  // 别的区的库 id 带横杠也认（整支审查小问题 4）
+  assert.equal(toolKbId('q_kb_ab-12_x'), 'ab-12_x');
 });
 
 test('kb target：知识库按 id > 4 位以上 id 前缀 > 名字 > 名字包含 找；同一档多个就都返回', () => {

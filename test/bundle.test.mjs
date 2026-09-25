@@ -142,6 +142,7 @@ test('产物能跑 md kb（知识库读接口、画布引用、why 的重放一�
     assert.equal(why.code, 0, why.stderr);
     assert.match(why.stdout, /结论：未审核/);
     assert.doesNotMatch(`${listed.stderr}${why.stderr}`, /ExperimentalWarning/);
+    assert.deepEqual(server.unexpected(), []);
   } finally {
     await server.close();
   }

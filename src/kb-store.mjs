@@ -27,29 +27,29 @@ export function savePull(org, kb, data) {
   return dir;
 }
 
-// 目录名是 stamp()（YYYYMMDD-HHMMSS，同一秒再加 -2、-3），按名字排序就是时间顺序
+// 最近一次写完的副本。目录名是 stamp()（YYYYMMDD-HHMMSS，同一秒再加 -2、-3），按名字排序就是时间顺序；
+// meta.json 最后写：没有它就是那次 pull 没写完，跳过、用之前完整的那份（整支审查小问题 8）
 function latestIn(root) {
   let names;
   try {
-    names = readdirSync(root).filter((n) => /^\d{8}-\d{6}/.test(n)).sort();
+    names = readdirSync(root).filter((n) => /^\d{8}-\d{6}/.test(n)).sort().reverse();
   } catch {
     return null;
   }
-  const last = names.at(-1);
-  if (!last) return null;
-  const dir = join(root, last);
-  const read = (name) => {
-    try {
-      return readFileSync(join(dir, `${name}.jsonl`), 'utf-8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
-    } catch {
-      return [];
-    }
-  };
-  return { dir, meta: readJson(join(dir, 'meta.json'), null), faqs: read('faqs'), files: read('files'), paragraphs: read('paragraphs'), webs: read('webs') };
-}
-
-export function latestPull(org, kbId) {
-  return latestIn(kbRoot(org, kbId));
+  for (const name of names) {
+    const dir = join(root, name);
+    const meta = readJson(join(dir, 'meta.json'), null);
+    if (!meta?.counts) continue;
+    const read = (file) => {
+      try {
+        return readFileSync(join(dir, `${file}.jsonl`), 'utf-8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+      } catch {
+        return [];
+      }
+    };
+    return { dir, meta, faqs: read('faqs'), files: read('files'), paragraphs: read('paragraphs'), webs: read('webs') };
+  }
+  return null;
 }
 
 // 这个企业每个知识库最近一次的副本（md kb find --local 用，不发请求）

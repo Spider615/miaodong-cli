@@ -18,7 +18,8 @@ export function retrievalsOf(norm) {
   const silent = [];
   for (const n of norm.nodes) {
     const ref = refs.get(n.id);
-    const toolCalls = asArray(n.metadata?.toolCallResults).filter((t) => t?.toolType === 'query_kb');
+    // toolType 或工具名 q_kb_<库 id> 任一对得上就算：只认一个的话，它改名时会把检索误判成「模型没调」（整支审查小问题 4）
+    const toolCalls = asArray(n.metadata?.toolCallResults).filter((t) => t?.toolType === 'query_kb' || toolKbId(t?.name) !== null);
     toolCalls.forEach((t, k) => {
       const args = t.toolCallArguments ?? {};
       const res = t.toolResult;

@@ -9,7 +9,9 @@ import { resolveOrg } from '../kb-target.mjs';
 import { resolveVersion } from '../target.mjs';
 import { out, shortId, targetLine } from '../output.mjs';
 
-const counts = (k) => `FAQ ${k.faqCount} · 文件 ${k.fileCount} · 网页 ${k.webCount} · 视频 ${k.videoCount}`;
+// 平台没给的条数显示成 ?（整支审查小问题 4）
+const n = (v) => v ?? '?';
+const counts = (k) => `FAQ ${n(k.faqCount)} · 文件 ${n(k.fileCount)} · 网页 ${n(k.webCount)} · 视频 ${n(k.videoCount)}`;
 
 export async function list(args) {
   const org = await resolveOrg(args);
@@ -47,7 +49,7 @@ export async function list(args) {
       out(`  ❌ ${shortId(id)}：企业里没有这个库（被删了？），引用它的节点永远召回不到`);
       continue;
     }
-    const m = k.faqCount ? await faqMetrics(org.identity, org.orgId, id) : null;
+    const m = k.faqCount !== 0 ? await faqMetrics(org.identity, org.orgId, id) : null;
     out(`  ${k.name} (${shortId(k.id)})  ${counts(k)}${m?.unreviewed ? ` · ⚠️ 未审核 ${m.unreviewed} 条：这些 FAQ 检索不到` : ''}`);
   }
   return EXIT.OK;

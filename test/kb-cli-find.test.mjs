@@ -1,10 +1,12 @@
 // md kb find（spec 3a §3.4）：文字命中（含未审核）、语义最像（不含未审核、只回 0.8 以上的、带分数）、问题相似（含未审核）；文件库查段落；--local 不发请求
 import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { runCli, tempHome } from './helpers/run-cli.mjs';
 import { seedIdentity } from './helpers/seed.mjs';
 import { startKbServer } from './helpers/kb-server.mjs';
-import { KB_FAQ, faqs } from './helpers/kb-fixtures.mjs';
+import { KB_FAQ, faqs, kbList } from './helpers/kb-fixtures.mjs';
 
 let server;
 before(async () => { server = await startKbServer(); });
@@ -41,6 +43,7 @@ test('md kb find：答案只显示前 60 个字', async () => {
     assert.equal(r.code, 0, r.stderr);
     assert.ok(r.stdout.includes(`答：${long.slice(0, 60)}…`));
     assert.ok(!r.stdout.includes(long.slice(0, 61)));
+    assert.deepEqual(s.unexpected(), []);
   } finally {
     await s.close();
   }
@@ -74,7 +77,67 @@ test('md kb find：同一条 FAQ 在语义索引里占好几行时，语义最�
     const r = await runCli(['kb', 'find', '售后 FAQ', '课程怎么退款'], { home: home(s.origin) });
     assert.equal(r.code, 0, r.stderr);
     assert.match(semanticPart(r.stdout), /^（前 1 条；.*）：\n  #7001 课程怎么退款 \[已审核\] 1\.000\n/);
+    assert.deepEqual(s.unexpected(), []);
   } finally {
     await s.close();
   }
+});
+
+test('md kb find：平台没给各类条数时不当成 0——照样查 FAQ，列表里显示 ?（整支审查小问题 4）', async () => {
+  const s = await startKbServer({ kbs: kbList().map(({ qaCount, fileCount, pageCount, videoCount, ...k }) => k) });
+  try {
+    const r = await runCli(['kb', 'find', '售后 FAQ', '课程怎么退'], { home: home(s.origin) });
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(semanticPart(r.stdout), /#7001 课程怎么退款 \[已审核\] 0\.889/);
+    const l = await runCli(['kb', 'list'], { home: home(s.origin) });
+    assert.match(l.stdout, /售后 FAQ \(aaaa0001\)\s+FAQ \? · 文件 \? · 网页 \? · 视频 \?/);
+    assert.deepEqual(s.unexpected(), []);
+  } finally {
+    await s.close();
+  }
+});
+
+test('md kb find：认不出审没审核的 FAQ 标成「审核状态认不出」，不标成未审核（整支审查小问题 4）', async () => {
+  const s = await startKbServer({ omitFaqFields: ['isReviewed'] });
+  try {
+    const r = await runCli(['kb', 'find', '售后 FAQ', '课程可以退吗'], { home: home(s.origin) });
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout, /#7004 课程可以退吗 \[审核状态认不出\]/);
+    assert.doesNotMatch(r.stdout, /未审核\]/);
+  } finally {
+    await s.close();
+  }
+});
+
+test('md kb find：文字命中超过 20 条时照实报条数，只列前 20 条（整支审查小问题 6）', async () => {
+  const many = Array.from({ length: 25 }, (_, i) => ({ id: 7200 + i, kb: KB_FAQ, question: `退款问题${i + 1}`, answer: '看订单页。', isReviewed: true }));
+  const s = await startKbServer({ faqRows: [...faqs(), ...many] });
+  try {
+    const r = await runCli(['kb', 'find', '售后 FAQ', '退款问题'], { home: home(s.origin) });
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout, /文字命中：FAQ 25 条、段落 0 条（只列前 20 条）/);
+    const textPart = r.stdout.split('文字命中')[1].split('语义最像')[0];
+    assert.equal((textPart.match(/^  #\d+ /gm) ?? []).length, 20);
+    assert.deepEqual(s.unexpected(), []);
+  } finally {
+    await s.close();
+  }
+});
+
+test('md kb find --local：最近一次 pull 写了一半（没有 meta.json）时，用之前完整的那份（整支审查小问题 8）', async () => {
+  const h = home();
+  const pulled = await md(['kb', 'pull', '售后 FAQ'], h);
+  const dir = pulled.stdout.match(/已存：(\S+)/)[1];
+  const partial = join(dirname(dir), '29991231-235959');
+  mkdirSync(partial);
+  writeFileSync(join(partial, 'faqs.jsonl'), '');
+  const r = await md(['kb', 'find', '售后 FAQ', '退款', '--local'], h);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /本机副本（.+）文字命中：FAQ 2 条、段落 0 条/);
+});
+
+test('md kb find：用法里写着 --region / --org（整支审查小问题 9）', async () => {
+  const r = await md(['kb', 'find']);
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /md kb find <知识库> "<一句话>" \[--local\] \[--region <区>\] \[--org <企业>\]/);
 });

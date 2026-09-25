@@ -51,3 +51,10 @@ test('kb retrieval：返回认不出（没有 success=true 和召回列表）不
   assert.deepEqual(calls.slice(0, 3).map((x) => [x.ok, x.failed, x.error]), Array(3).fill([false, false, '这次调用的返回认不出（没有 success=true 和召回列表）']));
   assert.deepEqual([calls[3].ok, calls[3].tags], [true, ['售后']]);
 });
+
+test('kb retrieval：toolType 没写或改名时，按工具名 q_kb_<库 id> 也认得，不误判成「没调」（整支审查小问题 4）', () => {
+  const c = toolCall(KB_FAQ, '怎么退款', { threshold: 0.6 });
+  const { calls, silent } = retrievalsOf(normalizeDetail(kbExec(16, '怎么退款', [{ ...c, toolType: undefined }, { ...c, toolType: 'kb_query', name: 'q_kb_ab-12' }])));
+  assert.deepEqual(calls.map((x) => x.kbId), [KB_FAQ, 'ab-12']);
+  assert.deepEqual(silent, []);
+});

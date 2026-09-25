@@ -168,3 +168,10 @@ test('drifted：没记录门槛时，拿记录里最低的分数当线（门槛�
   assert.equal(drifted(rec([hit(1, 0.9), hit(2, 0.85)], { threshold: null }), [row(1, 0.9), row(3, 0.87), row(2, 0.85)]), true);
   assert.equal(drifted(rec([], { threshold: null }), [row(1, 0.9)]), false);
 });
+
+test('diagnose：认不出审没审核时先照实说，再接着推分数（整支审查小问题 4）', () => {
+  const r = diagnose({ retrieval: call({ recorded: 3 }), target: { inQueriedKb: true, reviewed: null }, replay: { query: { floor: 0.85, count: 3, passing: 3, truncated: false } } });
+  assert.deepEqual(codes(r), ['review_unknown', 'low_score']);
+  assert.equal(r[0].title, '审核状态认不出');
+  assert.equal(r[0].detail, '接口里认不出这一条审没审核（字段可能改了）；没审核的 FAQ 检索不到，先在秒懂页面上看一眼');
+});

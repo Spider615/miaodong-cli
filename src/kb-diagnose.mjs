@@ -3,7 +3,7 @@
 //   retrieval：{ kind: 'call' | 'node', query, threshold（0～1）, limit, recorded, ok, failed, error, noReplay, estimated }
 //              recorded 是这次记录的召回条数；知识库查询节点没有运行记录，为 null。
 //              noReplay：重放不了的原因（查询取不到、带了标签、库已删、只有文件），有它就不拿重放推原因
-//   target：{ inQueriedKb, otherKbName, reviewed, status }——期望召回的那一条；没给 --expect 时为 null
+//   target：{ inQueriedKb, otherKbName, reviewed, status }——期望召回的那一条；没给 --expect 时为 null。reviewed 为 null 是认不出
 //   replay：{ query, user }——这一条在「用记录里的查询重放」「用用户原话重放」里的位置：
 //            { score, rank, passing } 找到了；{ floor, count, passing, truncated } 没找到（重放结果共 count 行、最低分 floor，
 //            没有结果时 floor 为 null；truncated：结果取满了、后面可能还有 0.8 以上的）。passing 是过了门槛的行数（门槛没记录时为 null）。
@@ -65,6 +65,7 @@ export function diagnose({ retrieval, target = null, replay = {}, silent = false
     add('wrong_kb', '不在查询的库里', target.otherKbName ? `这一条在「${target.otherKbName}」里，这次查的不是这个库` : '这次查的库里没有这一条');
   }
   if (target?.reviewed === false) add('unreviewed', '未审核', '未审核的 FAQ 不进语义索引，检索不到');
+  if (target?.reviewed === null) add('review_unknown', '审核状态认不出', '接口里认不出这一条审没审核（字段可能改了）；没审核的 FAQ 检索不到，先在秒懂页面上看一眼');
   if (target?.status && target.status !== 'ready') add('processing', '还在处理', `状态是 ${target.status}，处理完之前检索不到`);
   const scorable = Boolean(retrieval) && !silent && Boolean(target) && target.inQueriedKb !== false && target.reviewed !== false && (!target.status || target.status === 'ready');
   if (scorable && retrieval.noReplay) {

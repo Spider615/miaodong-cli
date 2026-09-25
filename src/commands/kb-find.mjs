@@ -6,13 +6,17 @@
 import { boolArg } from '../args.mjs';
 import { EXIT, usage } from '../errors.mjs';
 import { clip } from '../execs.mjs';
-import { SEMANTIC_FLOOR, checkSimilarity, firstPerFaq, listFiles, listParagraphs, searchFaqs } from '../kb.mjs';
+import { PAGE_SIZE, SEMANTIC_FLOOR, checkSimilarity, firstPerFaq, listFiles, listParagraphs, searchFaqs } from '../kb.mjs';
 import { localCopies } from '../kb-store.mjs';
 import { kbLine, pickKb, resolveKb, resolveOrg } from '../kb-target.mjs';
 import { out } from '../output.mjs';
 
 export const SNIPPET = 60;
-const status = (f) => `${f.reviewed ? '已审核' : '未审核'}${f.duplicateStatus && f.duplicateStatus !== 'normal' ? ` · ${f.duplicateStatus}` : ''}`;
+const LIST = 20; // 终端里每类只列前 20 条，条数照实报
+export const USAGE_FIND = 'md kb find <知识库> "<一句话>" [--local] [--region <区>] [--org <企业>]';
+const reviewText = (f) => (f.reviewed === true ? '已审核' : f.reviewed === false ? '未审核' : '审核状态认不出');
+const status = (f) => `${reviewText(f)}${f.duplicateStatus && f.duplicateStatus !== 'normal' ? ` · ${f.duplicateStatus}` : ''}`;
+const moreNote = (...lists) => (lists.some((l) => l.length > LIST) ? `（只列前 ${LIST} 条）` : '');
 export const faqLine = (f) => `  #${f.id} ${f.question} [${status(f)}]${typeof f.similarity === 'number' ? ` ${f.similarity.toFixed(3)}` : ''}\n      答：${clip(f.answer, SNIPPET)}`;
 const paraLine = (p) => `  段落 #${p.id}（${p.fileName ?? p.fileId}）[${p.status}] ${clip(p.content, SNIPPET)}`;
 
@@ -30,31 +34,34 @@ async function findLocal(org, query, text) {
   const faqHits = copy.faqs.filter((f) => f.question.includes(text) || f.answer.includes(text));
   const paraHits = copy.paragraphs.filter((p) => p.content.includes(text));
   out(kbLine(org, kb));
-  out(`本机副本（${copy.meta.pulledAt}）文字命中：FAQ ${faqHits.length} 条、段落 ${paraHits.length} 条`);
-  for (const f of faqHits.slice(0, 20)) out(faqLine(f));
-  for (const p of paraHits.slice(0, 20)) out(paraLine(p));
+  out(`本机副本（${copy.meta.pulledAt}）文字命中：FAQ ${faqHits.length} 条、段落 ${paraHits.length} 条${moreNote(faqHits, paraHits)}`);
+  for (const f of faqHits.slice(0, LIST)) out(faqLine(f));
+  for (const p of paraHits.slice(0, LIST)) out(paraLine(p));
   return EXIT.OK;
 }
 
 export async function find(args) {
   const [query, text] = args._;
-  if (!query || !text) throw usage('用法：md kb find <知识库> "<一句话>" [--local]');
+  if (!query || !text) throw usage(`用法：${USAGE_FIND}`);
   const org = await resolveOrg(args);
   if (boolArg(args, 'local')) return findLocal(org, query, text);
   const kb = await resolveKb(org, query);
   const { identity, orgId } = org;
   out(kbLine(org, kb));
-  const textHits = kb.faqCount ? await searchFaqs(identity, orgId, kb.id, text, { mode: 'text', size: 20 }) : [];
+  // 条数是 null（平台没给）时照样查：只有明确是 0 才跳过（整支审查小问题 4）
+  const textHits = kb.faqCount !== 0 ? await searchFaqs(identity, orgId, kb.id, text, { mode: 'text', size: PAGE_SIZE }) : [];
   const paraHits = [];
-  if (kb.fileCount) {
+  if (kb.fileCount !== 0) {
     for (const f of await listFiles(identity, orgId, kb.id)) {
       for (const p of await listParagraphs(identity, orgId, kb.id, f.id)) if (p.content.includes(text)) paraHits.push({ ...p, fileName: f.name });
     }
   }
-  out(`文字命中：FAQ ${textHits.length} 条、段落 ${paraHits.length} 条`);
-  for (const f of textHits) out(faqLine(f));
-  for (const p of paraHits.slice(0, 20)) out(paraLine(p));
-  if (!kb.faqCount) {
+  // FAQ 一次最多取 PAGE_SIZE 条：取满了就说「以上」，不把取到的当总数（整支审查小问题 6）
+  const faqCount = textHits.length >= PAGE_SIZE ? `${textHits.length} 条以上` : `${textHits.length} 条`;
+  out(`文字命中：FAQ ${faqCount}、段落 ${paraHits.length} 条${moreNote(textHits, paraHits)}`);
+  for (const f of textHits.slice(0, LIST)) out(faqLine(f));
+  for (const p of paraHits.slice(0, LIST)) out(paraLine(p));
+  if (kb.faqCount === 0) {
     out('语义最像、问题相似：这个库没有 FAQ。文件段落没有语义搜索接口，分数要用 md trial 看');
     return EXIT.OK;
   }
