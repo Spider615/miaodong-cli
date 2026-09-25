@@ -123,3 +123,7 @@ test('buildCases：name 在文件里重复、和集里已有的重复都报出�
   assert.deepEqual(errors.map((e) => [e.line, e.reason]), [[1, 'name「a」在第 1、2 行重复'], [2, 'name「a」在第 1、2 行重复'], [3, 'name「旧的」集里已经有了']]);
   assert.deepEqual(built[0].warnings, ['没写 expect：没有断言，跑了只能看实际回复']);
 });
+
+test('buildCase：vars 不能写「消息历史」，要用 history（md 会核对格式，审查 I3）', () => {
+  assert.match(buildCase(row({ name: 'h-1', text: 'x', vars: { 消息历史: ['裸字符串', 123] } }), ctx).errors.join(), /用 history 写/);
+});

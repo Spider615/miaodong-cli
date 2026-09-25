@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { MdError, usage } from './errors.mjs';
 import { stableStringify } from './canvas.mjs';
 import { WRITABLE_FIELDS } from './testcenter.mjs';
-import { HISTORY_VAR, TRIGGER_TYPES, buildExpect, byName, historyValue, isObject } from './casefile.mjs';
+import { HISTORY_VAR, TRIGGER_TYPES, buildExpect, byName, historyProblem, historyValue, isObject } from './casefile.mjs';
 
 const scriptError = (message) => new MdError('edit_script', message);
 
@@ -22,7 +22,11 @@ export function createEditHelpers(cases, { events, vars }, log) {
   return {
     pick(query) {
       if (typeof query === 'function') return cases.filter(query);
-      if (query instanceof RegExp) return cases.filter((c) => query.test(String(c?.name ?? '')));
+      if (query instanceof RegExp) {
+        // 去掉 g、y：带这两个标志的正则 test 会记住上次的位置，挑出来隔一条漏一条（审查 M9）
+        const re = new RegExp(query.source, query.flags.replace(/[gy]/g, ''));
+        return cases.filter((c) => re.test(String(c?.name ?? '')));
+      }
       return (Array.isArray(query) ? query : [query]).map((name) => {
         const hits = cases.filter((c) => c?.name === name);
         if (hits.length !== 1) throw scriptError(hits.length ? `用例「${name}」有 ${hits.length} 条同名` : `没有用例「${name}」`);
@@ -67,8 +71,9 @@ export async function runEditScript(file, cases, ctx) {
 
 const SHAPES = [['triggerInputs', isObject, '对象'], ['sessionMemoryCustomData', isObject, '对象'], ['testNodeOutputAssertions', Array.isArray, '数组'], ['canvasActionOutputAssertions', Array.isArray, '数组']];
 
-// 改前改后逐条比：只看 update 会写的字段。别的字段变了、条数或 id 变了、name 空或重名、形状不对都算错（spec §6.4）
-export function editChanges(before, after) {
+// 改前改后逐条比：只看 update 会写的字段。别的字段变了、条数或 id 变了、name 改空或改出重名、形状不对都算错（spec §6.4）。
+// historyVarId 是这个智能体「消息历史」的 id：改过的历史要核对格式
+export function editChanges(before, after, { historyVarId = null } = {}) {
   const errors = [];
   if (after.length !== before.length) errors.push(`用例从 ${before.length} 条变成了 ${after.length} 条：edit 不能增删用例（加用 md test import，删用 md test drop）`);
   const byId = new Map(after.map((c) => [c?.testCaseId, c]));
@@ -84,20 +89,25 @@ export function editChanges(before, after) {
     const fields = WRITABLE_FIELDS.filter((k) => stableStringify(a[k]) !== stableStringify(b[k]));
     if (fields.length) changed.push({ before: b, after: a, fields });
   }
-  // name 不能空、不能重名：秒懂按 name 找用例，结果报告也靠它
-  const names = new Map();
-  for (const c of after) {
-    const name = typeof c?.name === 'string' ? c.name.trim() : '';
-    if (!name) errors.push(`用例 ${String(c?.testCaseId ?? '?').slice(0, 8)} 的 name 被改成空的`);
-    else names.set(name, (names.get(name) ?? 0) + 1);
-  }
-  for (const [name, count] of names) if (count > 1) errors.push(`name「${name}」有 ${count} 条重名`);
-  for (const { after: a } of changed) {
+  // name 不能改成空的、不能改出重名：秒懂按 name 找用例，结果报告也靠它。
+  // 集里原来就有的重名不算（从执行记录重复导同一条执行就会这样），只看这次改了 name 的（审查 I2）
+  const renamed = new Set(changed.filter((c) => c.fields.includes('name')).map((c) => c.after.testCaseId));
+  const trimmed = (c) => (typeof c?.name === 'string' ? c.name.trim() : '');
+  const sameName = new Map();
+  for (const c of after) sameName.set(trimmed(c), [...(sameName.get(trimmed(c)) ?? []), c]);
+  for (const c of after) if (renamed.has(c?.testCaseId) && !trimmed(c)) errors.push(`用例 ${String(c?.testCaseId ?? '?').slice(0, 8)} 的 name 被改成空的`);
+  for (const [name, list] of sameName) if (name && list.length > 1 && list.some((c) => renamed.has(c?.testCaseId))) errors.push(`name「${name}」有 ${list.length} 条重名`);
+  for (const { before: b, after: a } of changed) {
     if (!TRIGGER_TYPES.includes(a.triggerType)) errors.push(`用例「${a.name}」的触发类型「${a.triggerType}」不是秒懂的触发类型`);
     for (const [key, check, word] of SHAPES) if (!check(a[key])) errors.push(`用例「${a.name}」的 ${key} 要是${word}`);
     const assertions = Array.isArray(a.canvasActionOutputAssertions) ? a.canvasActionOutputAssertions : [];
     if (assertions.some((x) => typeof x?.verifyPayload?.type !== 'string' || x?.actionContent?.type !== x.verifyPayload.type)) {
       errors.push(`用例「${a.name}」有断言的 verifyPayload 和 actionContent 类型不一致`);
+    }
+    const history = historyVarId ? a.sessionMemoryCustomData?.[historyVarId] : undefined;
+    if (history !== undefined && stableStringify(history) !== stableStringify(b.sessionMemoryCustomData?.[historyVarId])) {
+      const problem = historyProblem(history);
+      if (problem) errors.push(`用例「${a.name}」的「${HISTORY_VAR}」${problem}`);
     }
   }
   return { changed, errors };

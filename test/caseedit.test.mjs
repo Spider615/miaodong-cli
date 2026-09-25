@@ -57,3 +57,20 @@ test('editChanges：只列 update 会写的字段；改了别的字段、增删�
   assert.match(editChanges(before, [stored(1, { triggerType: 'x' }), stored(2)]).errors.join(), /不是秒懂的触发类型/);
   assert.match(editChanges(before, [stored(1, { canvasActionOutputAssertions: [{ verifyPayload: { type: 'handover' }, actionContent: { type: 'tag-user' } }] }), stored(2)]).errors.join(), /类型不一致/);
 });
+
+test('editChanges：集里原来就有的重名不拦，只拦这次改名改出来的重名（审查 I2）', () => {
+  const before = [stored(1, { name: '乙' }), stored(2, { name: '乙' })];
+  assert.deepEqual(editChanges(before, [stored(1, { name: '乙', dimension: '改了' }), stored(2, { name: '乙' })]).errors, []);
+  assert.match(editChanges(before, [stored(1, { name: '甲' }), stored(2, { name: '甲' })]).errors.join(), /name「甲」有 2 条重名/);
+});
+
+test('editChanges：改出来的「消息历史」格式不对要拦（审查 I3）', () => {
+  const before = [stored(1)];
+  assert.match(editChanges(before, [stored(1, { sessionMemoryCustomData: { 'tv-hist': ['裸字符串'] } })], { historyVarId: 'tv-hist' }).errors.join(), /消息历史/);
+  assert.deepEqual(editChanges(before, [stored(1, { sessionMemoryCustomData: { 'tv-hist': [{ role: 'user', content: 'a' }] } })], { historyVarId: 'tv-hist' }).errors, []);
+});
+
+test('h.pick：带 g 标志的正则也不漏（审查 M9）', () => {
+  const h = createEditHelpers([stored(1), stored(2), stored(3)], ctx, []);
+  assert.equal(h.pick(/退款/g).length, 3);
+});

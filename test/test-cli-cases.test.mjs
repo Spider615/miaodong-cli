@@ -200,3 +200,15 @@ test('edit：脚本改了不能改的字段或把 name 改成重名，什么都�
   assert.match(r.stdout, /有 2 条重名/);
   assert.equal(fake.state.posts.update, undefined);
 });
+
+test('edit --confirm：update 把没改的字段冲掉了（这个区不保存 dimension）也要提醒（审查 I1）', async () => {
+  reset();
+  const h = home();
+  await seedExternal(h);
+  casesIn('外部回归').find((c) => c.name === '退款-01').dimension = '退款'; // 页面上建的，带着分类
+  const file = editFile(h);
+  const code = planCode((await md(['test', 'edit', '外部回归', file, '--bot', '179cd443'], h)).stdout);
+  const r = await md(['test', 'edit', '外部回归', file, '--bot', '179cd443', '--confirm', code], h);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /dimension：1 条读回来和改的不一样/);
+});

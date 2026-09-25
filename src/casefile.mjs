@@ -51,6 +51,13 @@ export function historyValue(items) {
   return { value };
 }
 
+// 「消息历史」存进去的值要是 [{role: user 或 assistant, content: 字符串}]；批量改时脚本直接赋值也要核对（审查 I3）
+export function historyProblem(value) {
+  if (!Array.isArray(value)) return '要是数组（用 h.history 生成）';
+  const i = value.findIndex((x) => !isObject(x) || !['user', 'assistant'].includes(x.role) || typeof x.content !== 'string');
+  return i < 0 ? null : `第 ${i + 1} 项要是 {role: user 或 assistant, content: 字符串}（用 h.history 生成）`;
+}
+
 // 判定写法（reply 和事件变量共用）：字符串 = LLM 判定；或者 {llm} / {similar, threshold} / {equal} 三选一。
 // 事件变量的 LLM 判定带 value: ''，和真实用例里的一样（核对 8）
 function verifyOf(spec, { param = false } = {}) {
@@ -251,6 +258,11 @@ function sessionOf(v, vars, errors) {
         }
         if (hit.id in session) {
           errors.push(`「${varName}」写了两遍（history 就是写进「${HISTORY_VAR}」的）`);
+          continue;
+        }
+        // 历史只能走 history：那里会核对每一项的格式，vars 原样写会绕过去（审查 I3）
+        if (hit.name === HISTORY_VAR) {
+          errors.push(`「${HISTORY_VAR}」用 history 写（md 会核对格式）`);
           continue;
         }
         const problem = typeProblem(value, hit.type);

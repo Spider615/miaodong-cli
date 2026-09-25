@@ -156,8 +156,16 @@ export const CRITICAL_FIELDS = ['name', 'triggerType', 'triggerInputs', 'session
 const LABELS = { name: 'name', dimension: 'dimension', triggerType: '触发类型', triggerInputs: '触发输入', sessionMemoryCustomData: '会话数据', pluginMockOutputs: '插件 mock', sqlDbMockOutputs: '数据库 mock', testNodeOutputAssertions: '节点断言', canvasActionOutputAssertions: '断言', isStrictVerify: '严格校验' };
 export const fieldLabel = (field) => LABELS[field] ?? field;
 
+// 非关键字段里 null、空串、空数组、空对象都算「没有」：服务端常把没传的存成其中一种，逐字比会满屏误报
+const blank = (value) => value === null || value === undefined || value === '' || (typeof value === 'object' && !Object.keys(value).length);
+
 export function caseDiffs(sent, got, fields = Object.keys(sent ?? {})) {
   return fields
-    .filter((field) => WRITABLE_FIELDS.includes(field) && stableStringify(sent?.[field]) !== stableStringify(got?.[field]))
+    .filter((field) => WRITABLE_FIELDS.includes(field))
+    .filter((field) => {
+      const [a, b] = [sent?.[field], got?.[field]];
+      if (!CRITICAL_FIELDS.includes(field) && blank(a) && blank(b)) return false;
+      return stableStringify(a) !== stableStringify(b);
+    })
     .map((field) => ({ field, critical: CRITICAL_FIELDS.includes(field) }));
 }

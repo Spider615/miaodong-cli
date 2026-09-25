@@ -10,9 +10,10 @@ import { stamp } from '../workspace.mjs';
 import { hashOf } from '../canvas.mjs';
 import { confirmCode, givenCode } from '../confirm.mjs';
 import { listEvents, listSessions } from '../api.mjs';
-import { listCases, updateCase } from '../testcenter.mjs';
-import { CRITICAL_FIELDS, caseDiffs, fieldLabel, idProblems } from '../testcases.mjs';
+import { WRITABLE_FIELDS, listCases, updateCase } from '../testcenter.mjs';
+import { caseDiffs, fieldLabel, idProblems } from '../testcases.mjs';
 import { editChanges, runEditScript } from '../caseedit.mjs';
+import { HISTORY_VAR, byName } from '../casefile.mjs';
 import { resolveTestSet, testTarget, testsDir } from '../test-common.mjs';
 
 export async function edit(args) {
@@ -23,7 +24,8 @@ export async function edit(args) {
   const given = givenCode(args);
   const [before, events, vars] = await Promise.all([listCases(t, set.testSetId), listEvents(t.identity, t.orgId, t.botId), listSessions(t.identity, t.orgId, t.botId)]);
   const { cases: after, log } = await runEditScript(file, before, { events, vars });
-  const { changed, errors } = editChanges(before, after);
+  const history = vars ? byName(vars, HISTORY_VAR, '会话变量').hit : null;
+  const { changed, errors } = editChanges(before, after, { historyVarId: history?.id ?? null });
   // 改出来的事件、会话变量要在这个智能体里有；列表取不到时这里不查，md test run 的跑前检查会拦
   if (events && vars) for (const p of idProblems(changed.map((c) => c.after), { events, vars })) errors.push(`用例「${p.name}」：${p.reason}`);
   out(targetLine(t));
@@ -64,12 +66,13 @@ export async function edit(args) {
       hint: `改之前的全部用例备份在 ${backup}；md test cases ${set.testSetId} --bot ${shortId(t.botId)} 看现在的样子`,
     });
   }
-  // 回读：改了的字段和关键字段逐条比；这个区不保存的非关键字段（dimension）只提醒
+  // 回读：update 会写的字段全部比。没改的字段也要比：update 是全量覆盖，这个区不保存的字段（dimension）会被冲掉（审查 I1）；
+  // 关键字段不一致算错，非关键字段只提醒
   const back = new Map((await listCases(t, set.testSetId)).map((c) => [c.testCaseId, c]));
   const soft = new Map();
   const hard = [];
   for (const c of changed) {
-    for (const d of caseDiffs(c.after, back.get(c.after.testCaseId), [...new Set([...c.fields, ...CRITICAL_FIELDS])])) {
+    for (const d of caseDiffs(c.after, back.get(c.after.testCaseId), WRITABLE_FIELDS)) {
       if (d.critical) hard.push(`${c.after.name}：${fieldLabel(d.field)}`);
       else soft.set(d.field, (soft.get(d.field) ?? 0) + 1);
     }
