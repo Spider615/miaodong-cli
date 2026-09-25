@@ -23,7 +23,17 @@ if [ "${major}" -lt 18 ]; then
   exit 1
 fi
 if [ ! -f "${BIN_SRC}" ]; then
-  echo "缺 ${BIN_SRC#"${ROOT}"/}：仓库不完整。重新 git clone 一次；开发者可以先 npm run build"
+  # 按原因给办法（审查 M4）：原来一律让人重新 clone，可要是这一版仓库里本来就没有它（比如 .gitignore 误忽略了 dist/），
+  # 重新 clone 拿到的还是这样
+  if [ -n "${MD_BIN_SRC:-}" ]; then
+    echo "MD_BIN_SRC 指向的 ${BIN_SRC} 不存在：开发者用 npm run install:local，它会先构建再装"
+  elif git -C "${ROOT}" ls-files --error-unmatch dist/md.mjs >/dev/null 2>&1; then
+    echo "缺 dist/md.mjs：它被删了。先恢复再装：git -C \"${ROOT}\" checkout -- dist/md.mjs"
+  elif git -C "${ROOT}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "缺 dist/md.mjs：这一版仓库里本来就没有它，是发版漏了，重新 clone 也没用。先 git -C \"${ROOT}\" pull 看看补上没有，还没有就找维护者（Spider615）"
+  else
+    echo "缺 dist/md.mjs：这份副本不完整。重新拿一份完整的，或者照 README 从 GitHub clone"
+  fi
   exit 1
 fi
 # 仓库本身不能放在任何一个 skills 位置：那里要放的是仓库里的 skill/ 目录

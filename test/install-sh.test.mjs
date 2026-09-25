@@ -6,7 +6,10 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync,
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildBundle } from '../build.mjs';
+import { gitCommitAll, gitInit, useSigningGitConfig } from './helpers/git.mjs';
 import { tempHome } from './helpers/run-cli.mjs';
+
+useSigningGitConfig();
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 let bundle;
@@ -23,8 +26,8 @@ function repoCopy(parent = tempHome(), name = 'miaodong-cli') {
 }
 // 跑在 UTF-8 locale 下：同事的终端都是（这台机器是 zh_CN.UTF-8）。bash 3.2 在 UTF-8 下会把紧跟在变量后面的中文标点
 // 读进变量名，C locale 下却没事——只在 C 下测会漏掉「一装就报 unbound variable」
-function runInstall(repo, home) {
-  const r = spawnSync('bash', [join(repo, 'install.sh')], { env: { PATH: process.env.PATH ?? '', HOME: home, LANG: 'zh_CN.UTF-8', LC_ALL: 'zh_CN.UTF-8' }, encoding: 'utf-8' });
+function runInstall(repo, home, env = {}) {
+  const r = spawnSync('bash', [join(repo, 'install.sh')], { env: { PATH: process.env.PATH ?? '', HOME: home, LANG: 'zh_CN.UTF-8', LC_ALL: 'zh_CN.UTF-8', ...env }, encoding: 'utf-8' });
   return { code: r.status, out: `${r.stdout}${r.stderr}` };
 }
 const SKILL_ROOTS = ['.claude/skills', '.codex/skills', '.agents/skills'];
@@ -176,4 +179,35 @@ test('install.sh：从另一份 md 仓库（新布局）装过，再从这份装
   assert.equal(r.code, 0, r.out);
   assertInstalled(home, b);
   assert.match(r.out, /另一份 md/);
+});
+
+test('install.sh：缺 dist/md.mjs 时按原因给办法；这一版仓库里本来没有它时，别让人重新 clone（审查 M4）', () => {
+  // 副本（不是 git 仓库）缺它
+  const copy = repoCopy();
+  rmSync(join(copy, 'dist', 'md.mjs'));
+  let r = runInstall(copy, tempHome());
+  assert.notEqual(r.code, 0);
+  assert.match(r.out, /缺 dist\/md\.mjs：这份副本不完整/);
+  // git 仓库里有它，只是本地被删了：给恢复命令
+  const repo = repoCopy();
+  gitInit(repo);
+  gitCommitAll(repo);
+  rmSync(join(repo, 'dist', 'md.mjs'));
+  r = runInstall(repo, tempHome());
+  assert.notEqual(r.code, 0);
+  assert.match(r.out, /checkout -- dist\/md\.mjs/);
+  // 这一版仓库里本来就没有它（比如 .gitignore 误忽略了 dist/，发版时没提交进去）：重新 clone 拿到的还是这样
+  const broken = repoCopy();
+  writeFileSync(join(broken, '.gitignore'), 'dist/\n');
+  gitInit(broken);
+  gitCommitAll(broken);
+  rmSync(join(broken, 'dist', 'md.mjs'));
+  r = runInstall(broken, tempHome());
+  assert.notEqual(r.code, 0);
+  assert.match(r.out, /发版漏了/);
+  assert.doesNotMatch(r.out, /重新 git clone/);
+  // 开发者用 MD_BIN_SRC 指了一个不存在的构建
+  r = runInstall(repoCopy(), tempHome(), { MD_BIN_SRC: '/nonexistent/md.mjs' });
+  assert.notEqual(r.code, 0);
+  assert.match(r.out, /MD_BIN_SRC 指向的 \/nonexistent\/md\.mjs 不存在/);
 });

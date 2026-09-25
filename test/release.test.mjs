@@ -1,6 +1,7 @@
 // npm run release 的扫描：dist/ 和 skill/ 里不能带本机路径、身份串、token（spec §6、§8 第 8 条）
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -89,4 +90,28 @@ test('release：扫到的 token 不整段打出来，只给位置和开头几个
 
 test('release：仓库自己扫出来是干净的，测试和文档里的假 token 都是拼出来的（审查 M2）', () => {
   assert.deepEqual(scanForLeaks(ROOT), []);
+});
+
+// dist/md.mjs 是同事装的那份：必须进了仓库，而且没被 .gitignore 忽略（审查 M4）。被忽略时，它已经跟踪着还看不出来，
+// 一旦被移出索引（比如有人 git rm -r --cached . 让 .gitignore 生效），发版就提交不进去，同事 clone 下来就缺它。
+// 只认仓库自己的 .gitignore：开发者本机的全局忽略规则不算（core.excludesFile 置空）
+function distProblem(root) {
+  const git = (args) => spawnSync('git', ['-C', root, '-c', 'core.excludesFile=/dev/null', ...args], { encoding: 'utf-8' }).status;
+  if (git(['check-ignore', '--no-index', '-q', 'dist/md.mjs']) === 0) return '被 .gitignore 忽略了';
+  if (git(['ls-files', '--error-unmatch', 'dist/md.mjs']) !== 0) return '没进仓库';
+  return null;
+}
+
+test('发版：dist/md.mjs 进了仓库、没被 .gitignore 忽略（审查 M4）', () => {
+  assert.equal(distProblem(ROOT), null);
+  // 反向核对这条检查真能红：dist/ 写进了 .gitignore 的仓库、没提交 dist/md.mjs 的仓库
+  const ignored = tempHome();
+  gitInit(ignored);
+  write(ignored, { '.gitignore': 'dist/\n', 'dist/md.mjs': 'x' });
+  assert.equal(distProblem(ignored), '被 .gitignore 忽略了');
+  const missing = tempHome();
+  gitInit(missing);
+  write(missing, { 'a.txt': 'x' });
+  gitCommitAll(missing);
+  assert.equal(distProblem(missing), '没进仓库');
 });
