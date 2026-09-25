@@ -71,7 +71,7 @@ test('md kb why：门槛是模型定的 0.9 时，候选里列出差一点过门
   assert.doesNotMatch(r.stdout, /看不到/);
 });
 
-test('md kb why：候选里列出过了门槛、但排在 10 条之后的（spec §3.5 第 4 步）', async () => {
+test('md kb why：候选里列出过了门槛、但排在前 10 名之后的（spec §3.5 第 4 步）', async () => {
   const rows = [...faqs(), ...Array.from({ length: 12 }, (_, i) => ({ id: 8001 + i, kb: KB_FAQ, question: `课程怎么退款${i + 1}`, answer: '同上。', isReviewed: true }))];
   const call = toolCall(KB_FAQ, '课程怎么退款', { threshold: 0.6, rows });
   // 前 10 条里有一段 0.95 的段落时，FAQ 只占 9 个名额（第 10 名的 #8009 被挤掉了）
@@ -84,7 +84,7 @@ test('md kb why：候选里列出过了门槛、但排在 10 条之后的（spec
     assert.equal(r.code, 0, r.stderr);
     assert.match(r.stdout, /召回 10 条/);
     assert.doesNotMatch(r.stdout, /知识库在这次执行之后改过/);
-    assert.match(r.stdout, /过了门槛、但排在 10 条之后的（前 3 条）：\n    #8010 课程怎么退款10 0\.833（第 11）\n    #8011 课程怎么退款11 0\.833（第 12）\n    #8012 课程怎么退款12 0\.833（第 13）\n/);
+    assert.match(r.stdout, /过了门槛、但排在前 10 名之后的（前 3 条）：\n    #8010 课程怎么退款10 0\.833（第 11 名）\n    #8011 课程怎么退款11 0\.833（第 12 名）\n    #8012 课程怎么退款12 0\.833（第 13 名）\n/);
     const m = await runCli(['kb', 'why', X(34)], { home: home(s.origin) });
     assert.equal(m.code, 0, m.stderr);
     assert.match(m.stdout, /记录的召回：#7001 1\.000、#9001（doc）0\.950、#8001/);
@@ -94,11 +94,11 @@ test('md kb why：候选里列出过了门槛、但排在 10 条之后的（spec
   }
 });
 
-test('md kb why：查询被改写；补充里按召回条数推断分数不够门槛（重放看不到 0.8 以下的分数）', async () => {
+test('md kb why：查询被改写；补充里推断分数不够门槛（重放看不到 0.8 以下的分数，这次一条都没召回）', async () => {
   const r = await md(['kb', 'why', X(22), '--expect', '7001']);
   assert.equal(r.code, 0, r.stderr);
   assert.match(r.stdout, /结论：查询被改写 —— 拿去查的是「退款流程」，不是用户原话；用原话查，这一条排第 1（1\.000）/);
-  assert.match(r.stdout, /补充：分数不够门槛 —— 重放结果里没有这一条（语义搜索只返回 0\.8 以上的），它的分数低于 0\.8；这次只召回了 0 条（不满 10 条），过了门槛的都召回了，所以它没过门槛 0\.600/);
+  assert.match(r.stdout, /补充：分数不够门槛 —— 重放结果里没有这一条（语义搜索只返回 0\.8 以上的），它的分数低于 0\.8；这次一条都没召回，说明没有过门槛 0\.600 的，它也没过/);
 });
 
 test('md kb why：门槛是模型自己定的 0.9，说出用 0.6 就能过', async () => {
@@ -187,4 +187,41 @@ test('md kb why：知识库查询节点 + 文件库：按关键词找到段落�
   assert.match(r.stdout, /目标：段落 #9002「发票在订单完成后可以申请。」 \[processing\]/);
   assert.match(r.stdout, /结论：还在处理 —— 状态是 processing，处理完之前检索不到/);
   assert.deepEqual(server.unexpected(), []);
+});
+
+test('md kb why：同一条 FAQ 在索引里占好几行（09-25 真机验收）——按行排名次、按 FAQ 去重，不误报改过', async () => {
+  const more = Array.from({ length: 12 }, (_, i) => ({ id: 8001 + i, kb: KB_FAQ, question: `课程怎么退款${i + 1}`, answer: '同上。', isReviewed: true }));
+  // #7001 多一行 0.909，#8001 多一行 0.833：按行排，第 2 名是 #7001 的第二行，#8009 排到第 11 名
+  const rows = [...faqs().map((f) => (f.id === 7001 ? { ...f, vectors: ['课程怎么退款呢'] } : f)), ...more.map((f) => (f.id === 8001 ? { ...f, vectors: ['课程怎么退款1吧'] } : f))];
+  const s = await startKbServer({
+    faqRows: rows,
+    details: {
+      [X(36)]: kbExec(36, '课程怎么退款', [toolCall(KB_FAQ, '课程怎么退款', { threshold: 0.6, rows })]),
+      [X(37)]: kbExec(37, '课程怎么退款', [toolCall(KB_FAQ, '课程怎么退款', { threshold: 0.95, rows })]),
+      [X(38)]: kbExec(38, '课程怎么退款', []),
+    },
+  });
+  const run = (args) => runCli(args, { home: home(s.origin) });
+  try {
+    // 前 10 行里 #7001 占两行，去重后召回 9 条；重放照样取前 10 行再去重，对得上
+    const r = await run(['kb', 'why', X(36)]);
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout, /召回 9 条/);
+    assert.doesNotMatch(r.stdout, /知识库在这次执行之后改过/);
+    // #8001 的第二行排第 12 名，但 #8001 已经召回了，不算被挤出
+    assert.match(r.stdout, /过了门槛、但排在前 10 名之后的（前 4 条）：\n    #8009 课程怎么退款9 0\.909（第 11 名）\n    #8010 课程怎么退款10 0\.833（第 13 名）\n/);
+    // #8009 按 FAQ 数是第 10 条，按行是第 11 名：被挤出
+    const e = await run(['kb', 'why', X(36), '--expect', '8009']);
+    assert.match(e.stdout, /结论：被挤出前 10 名 —— 分数 0\.909 过了门槛，但排第 11 名/);
+    // 门槛 0.95：#7001 召回了，它 0.909 的第二行不算「差一点的」
+    const high = await run(['kb', 'why', X(37)]);
+    assert.equal(high.code, 0, high.stderr);
+    assert.match(high.stdout, /差一点的（重放时没过门槛 0\.950，前 5 条）：\n    #8001 课程怎么退款1 0\.909\n/);
+    assert.doesNotMatch(high.stdout.split('差一点的')[1], /#7001/);
+    // 挂了工具没调：用原话查的前 3 条也按 FAQ 去重
+    const silent = await run(['kb', 'why', X(38)]);
+    assert.match(silent.stdout, /前 3 条）：#7001 课程怎么退款 1\.000；#8001 课程怎么退款1 0\.909；#8002 课程怎么退款2 0\.909/);
+  } finally {
+    await s.close();
+  }
 });

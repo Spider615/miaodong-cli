@@ -5,7 +5,8 @@
 import { asArray } from './api.mjs';
 import { kbRefs, toolKbId } from './kb-refs.mjs';
 
-export const TOOL_LIMIT = 10; // 工具调用最多返回 10 条，topK 基本不起作用（§2.5）
+// 工具取过了门槛、分数最高的 10 行，再按 FAQ 去重（同一条 FAQ 可能占好几行，所以常常不满 10 条）；topK 基本不起作用（§2.5，09-25 真机验收）
+export const TOOL_LIMIT = 10;
 
 export function retrievalsOf(norm) {
   const refs = new Map(kbRefs(norm.snapshot).map((r) => [r.nodeId, r]));

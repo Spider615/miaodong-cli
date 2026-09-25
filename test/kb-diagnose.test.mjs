@@ -1,7 +1,7 @@
 // 「为什么没召回这一条」的判定（spec 3a §3.5 第 6 步）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { COMMON_THRESHOLD, diagnose } from '../src/kb-diagnose.mjs';
+import { COMMON_THRESHOLD, diagnose, drifted } from '../src/kb-diagnose.mjs';
 
 const call = (extra = {}) => ({ kind: 'call', query: '怎么退款', threshold: 0.6, limit: 10, ok: true, error: '', replayable: true, estimated: false, ...extra });
 const reviewed = { inQueriedKb: true, reviewed: true };
@@ -30,7 +30,7 @@ test('diagnose：查询被改写——原话能召回、模型的查询不能；
   const r = diagnose({ retrieval: call({ query: '退款流程', recorded: 0 }), target: reviewed, userText: '课程怎么退款', replay: { query: { floor: null, count: 0 }, user: { score: 1, rank: 1 } } });
   assert.deepEqual(codes(r), ['rewritten', 'below_threshold']);
   assert.equal(r[0].detail, '拿去查的是「退款流程」，不是用户原话；用原话查，这一条排第 1（1.000）');
-  assert.equal(r[1].detail, '重放结果里没有这一条（语义搜索只返回 0.8 以上的），它的分数低于 0.8；这次只召回了 0 条（不满 10 条），过了门槛的都召回了，所以它没过门槛 0.600');
+  assert.equal(r[1].detail, '重放结果里没有这一条（语义搜索只返回 0.8 以上的），它的分数低于 0.8；这次一条都没召回，说明没有过门槛 0.600 的，它也没过');
 });
 
 test('diagnose：取不到用户原话时不判「查询被改写」（Review Focus 4）', () => {
@@ -47,7 +47,8 @@ test('diagnose：门槛是模型自己定的、比常见的 0.6 高时，说出�
 test('diagnose：分数过了门槛但排在 10 条之外是被挤出', () => {
   const r = diagnose({ retrieval: call(), target: reviewed, replay: { query: { score: 0.9, rank: 12 } } });
   assert.deepEqual(codes(r), ['crowded_out']);
-  assert.equal(r[0].detail, '分数 0.900 过了门槛，但排第 12');
+  assert.equal(r[0].title, '被挤出前 10 名');
+  assert.equal(r[0].detail, '分数 0.900 过了门槛，但排第 12 名（同一条 FAQ 在索引里可能占好几个名次）');
 });
 
 test('diagnose：重放里没有这一条（分数低于 0.8，控制台看不到）时按门槛和召回条数推断（spec §3.5 判定表）', () => {
@@ -56,20 +57,19 @@ test('diagnose：重放里没有这一条（分数低于 0.8，控制台看不�
   const high = missing(call({ threshold: 0.85, recorded: 0 }), 3);
   assert.deepEqual(codes(high), ['below_threshold']);
   assert.equal(high[0].detail, '重放结果里没有这一条（语义搜索只返回 0.8 以上的），它的分数低于门槛 0.850');
-  // 0.8 以上的都过了门槛，已经有 12 条：被挤出前 10 条（门槛低于 0.8、等于 0.8 都一样）
+  // 0.8 以上的行都过了门槛，已经占了 12 个名次：被挤出前 10 名（门槛低于 0.8、等于 0.8 都一样）
   const crowded = missing(call({ recorded: 10 }), 12);
   assert.deepEqual(codes(crowded), ['crowded_out']);
-  assert.equal(crowded[0].detail, '重放结果里没有这一条（语义搜索只返回 0.8 以上的）；过了门槛、分数比它高的已经有 12 条');
+  assert.equal(crowded[0].detail, '重放结果里没有这一条（语义搜索只返回 0.8 以上的）；过了门槛、分数比它高的已经占了 12 个名次（同一条 FAQ 在索引里可能占好几个名次）');
   assert.deepEqual(codes(missing(call({ threshold: 0.8, recorded: 10 }), 12)), ['crowded_out']);
-  // 这次只召回了 3 条，不满 10 条：过了门槛的都召回了，它没过门槛
+  // 这次一条都没召回：没有过门槛的，它也没过
+  assert.deepEqual(codes(missing(call({ recorded: 0 }), 0)), ['below_threshold']);
+  // 召回了 3 条、不满 10 条也推不出：同一条 FAQ 占好几行时，前 10 行去重后本来就不满 10 条（09-25 真机：20 次不满 10 条全是这样）
   const few = missing(call({ recorded: 3 }), 3);
-  assert.deepEqual(codes(few), ['below_threshold']);
-  assert.match(few[0].detail, /这次只召回了 3 条（不满 10 条）/);
-  // 召回满了 10 条、0.8 以上的只有 3 条（或者一条都没有）：推不出是没过门槛还是被挤出
-  const low = missing(call({ recorded: 10 }), 3);
-  assert.deepEqual(codes(low), ['low_score']);
-  assert.equal(low[0].title, '分数偏低');
-  assert.equal(low[0].detail, '重放结果里没有这一条（语义搜索只返回 0.8 以上的），它的分数低于 0.8，更低的分数控制台看不到；这次召回满了 10 条，推不出是没过门槛 0.600 还是被挤出前 10 条，用 md trial 换问法试');
+  assert.deepEqual(codes(few), ['low_score']);
+  assert.equal(few[0].title, '分数偏低');
+  assert.equal(few[0].detail, '重放结果里没有这一条（语义搜索只返回 0.8 以上的），它的分数低于 0.8，更低的分数控制台看不到；推不出是没过门槛 0.600 还是被挤出前 10 名，用 md trial 换问法试');
+  assert.deepEqual(codes(missing(call({ recorded: 10 }), 3)), ['low_score']);
   assert.deepEqual(codes(missing(call({ recorded: 10 }), 0)), ['low_score']);
 });
 
@@ -86,4 +86,35 @@ test('diagnose：知识库查询节点的结论注明是估计；没有运行记
 
 test('diagnose：都不成立就是查不出', () => {
   assert.deepEqual(codes(diagnose({ retrieval: call(), target: reviewed, replay: { query: { score: 0.9, rank: 1 } } })), ['unknown']);
+});
+
+const row = (id, similarity) => ({ id, similarity });
+const hit = (faqId, score, type = 'qa') => ({ faqId, score, type });
+const rec = (hits, extra = {}) => ({ kind: 'call', threshold: 0.6, limit: 10, hits, ...extra });
+const ids = (from, to) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
+
+test('drifted：只比分数不低于门槛和 0.8 里较大那个的部分；门槛和 0.8 之间的召回重放看不到，不算改过', () => {
+  assert.equal(drifted(rec([hit(1, 0.9), hit(2, 0.75)]), [row(1, 0.9)]), false);
+  assert.equal(drifted(rec([hit(1, 0.9)]), [row(3, 0.95), row(1, 0.9)]), true);
+  assert.equal(drifted(rec([hit(1, 0.9), hit(2, 0.85)]), [row(1, 0.9)]), true);
+  assert.equal(drifted(rec([hit(1, 0.9)], { threshold: 0.92 }), [row(3, 0.91), row(1, 0.9)]), false);
+});
+
+test('drifted：同一条 FAQ 在重放里占好几行时，按工具的做法取前 10 行再去重（09-25 真机验收）', () => {
+  const rows = [row(1, 0.99), row(1, 0.95), ...ids(2, 9).map((id) => row(id, 0.9)), row(10, 0.85)];
+  assert.equal(drifted(rec([hit(1, 0.99), ...ids(2, 9).map((id) => hit(id, 0.9))]), rows), false);
+  assert.equal(drifted(rec([hit(1, 0.99), ...ids(2, 10).map((id) => hit(id, id === 10 ? 0.85 : 0.9))]), rows), true);
+});
+
+test('drifted：边界上分数只差一点点的一进一出不算改过（两边分数实测最多差 0.0007）', () => {
+  // 第 10 名和第 11 名只差 0.0001：记录里是 #11，重放里是 #10
+  const rows = [...ids(1, 9).map((id) => row(id, 0.95)), row(10, 0.8569), row(11, 0.8568)];
+  assert.equal(drifted(rec([...ids(1, 9).map((id) => hit(id, 0.95)), hit(11, 0.8569)]), rows), false);
+  // 记录的 0.8003 过了 0.8，重放的那一行是 0.7998、看不到
+  assert.equal(drifted(rec([hit(1, 0.95), hit(2, 0.8003)]), [row(1, 0.95)]), false);
+});
+
+test('drifted：召回里的段落占掉名额，段落本身不和重放比', () => {
+  const rows = ids(1, 10).map((id) => row(id, 0.9));
+  assert.equal(drifted(rec([hit(900, 0.95, 'doc'), ...ids(1, 9).map((id) => hit(id, 0.9))]), rows), false);
 });

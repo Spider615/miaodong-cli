@@ -7,8 +7,8 @@ import { EXIT, MdError, usage } from '../errors.mjs';
 import { EXEC_ID, locateExec } from '../exec-locate.mjs';
 import { findExecNode, normalizeDetail } from '../exec-detail.mjs';
 import { clip } from '../execs.mjs';
-import { SEARCH_SIZE, SEMANTIC_FLOOR, checkSimilarity, listFaqs, listFiles, listKbs, listParagraphs, searchFaqs } from '../kb.mjs';
-import { diagnose, sameText } from '../kb-diagnose.mjs';
+import { SEARCH_SIZE, SEMANTIC_FLOOR, checkSimilarity, firstPerFaq, listFaqs, listFiles, listKbs, listParagraphs, searchFaqs } from '../kb.mjs';
+import { diagnose, drifted, sameText } from '../kb-diagnose.mjs';
 import { retrievalsOf } from '../kb-retrieval.mjs';
 import { DATA_NOTE, out, shortId, targetLine } from '../output.mjs';
 
@@ -57,7 +57,8 @@ async function kbsOf(ctx) {
 }
 const kbName = (kbs, id) => kbs.get(id)?.name ?? `已不存在的库 ${shortId(id)}`;
 
-// 用一段话在这些库里重做语义搜索，合在一起按分数排（库已经被删时当作没有结果）
+// 用一段话在这些库里重做语义搜索，合在一起按分数排（库已经被删时当作没有结果）。
+// 保留原样的行：同一条 FAQ 可能占好几行，名次按行算才和工具一致（工具取前 10 行再按 FAQ 去重，09-25 真机验收）
 async function replay(ctx, kbIds, text) {
   if (!text) return [];
   const lists = await Promise.all(kbIds.map(async (kbId) => {
@@ -71,22 +72,12 @@ async function replay(ctx, kbIds, text) {
   return lists.flat().sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0));
 }
 
+// 这一条在重放里的位置：名次按行算（它自己分数最高的那一行）
 function place(list, faqId) {
   const i = list.findIndex((f) => f.id === faqId);
   if (i >= 0) return { score: list[i].similarity, rank: i + 1 };
   const scores = list.map((f) => f.similarity).filter((s) => typeof s === 'number');
   return { floor: scores.length ? Math.min(...scores) : null, count: list.length };
-}
-
-// 重放和记录对不上，说明知识库在执行之后改过。只比 FAQ（重放只搜得到 FAQ），只比分数不低于「门槛和 0.8 里较大的那个」的部分：
-// 更低的分数重放看不到（spec §3.5 第 5 步）。记录的前 limit 条里还混着段落时，FAQ 只占剩下的名额
-function drifted(r, byQuery) {
-  const floor = Math.max(r.threshold ?? 0, SEMANTIC_FLOOR);
-  const high = r.hits.filter((h) => typeof h.score === 'number' && h.score >= floor);
-  const recorded = high.filter(isFaqHit).map((h) => h.faqId);
-  const slots = r.limit - (high.length - recorded.length);
-  const replayed = byQuery.filter((f) => typeof f.similarity === 'number' && f.similarity >= floor).slice(0, slots).map((f) => f.id);
-  return replayed.length !== recorded.length || replayed.some((id) => !recorded.includes(id));
 }
 
 // --expect：FAQ 的 id，或者一段关键词。关键词先在这次检索的库里找（FAQ 文字搜索、文件段落逐段比对），再到企业的其他库里找 FAQ
@@ -136,7 +127,8 @@ function targetText(t) {
   return `FAQ #${t.item.id}${t.item.question ? `「${clip(t.item.question, 60)}」` : ''}${reviewed}${where}`;
 }
 
-// 没给 --expect：列候选（spec §3.5 第 4 步）——差一点过门槛的、过了门槛但没进前 limit 条的、问题很像但没审核的
+// 没给 --expect：列候选（spec §3.5 第 4 步）——差一点过门槛的、过了门槛但没进前 limit 名的、问题很像但没审核的。
+// 都按 FAQ 列（每条取它分数最高的那一行）；名次按行算，已经进了前 limit 名的 FAQ，它排在后面的其他行不算被挤出
 async function candidates(ctx, r, kbIds, byQuery, userText) {
   if (!r.replayable) {
     out('  这个库只有文件段落，没有语义搜索接口，候选和分数要用 md trial 看');
@@ -144,8 +136,15 @@ async function candidates(ctx, r, kbIds, byQuery, userText) {
     return;
   }
   const scored = byQuery.filter((f) => typeof f.similarity === 'number');
-  const near = scored.filter((f) => f.similarity < r.threshold).slice(0, 5);
-  const crowded = scored.filter((f) => f.similarity >= r.threshold).slice(r.limit, r.limit + 5);
+  const near = firstPerFaq(scored).filter((f) => f.similarity < r.threshold).slice(0, 5);
+  const passed = scored.filter((f) => f.similarity >= r.threshold);
+  const seen = new Set(passed.slice(0, r.limit).map((f) => f.id));
+  const crowded = [];
+  passed.forEach((f, i) => {
+    if (i < r.limit || seen.has(f.id)) return;
+    seen.add(f.id);
+    crowded.push({ ...f, rank: i + 1 });
+  });
   if (near.length) {
     out(`  差一点的（重放时没过门槛 ${fmt(r.threshold)}，前 ${near.length} 条）：`);
     for (const f of near) out(`    #${f.id} ${clip(f.question, 60)} ${fmt(f.similarity)}`);
@@ -153,8 +152,9 @@ async function candidates(ctx, r, kbIds, byQuery, userText) {
     out(`  没过门槛 ${fmt(r.threshold)} 的看不到：语义搜索只返回 ${SEMANTIC_FLOOR} 以上的`);
   }
   if (crowded.length) {
-    out(`  过了门槛、但排在 ${r.limit} 条之后的（前 ${crowded.length} 条）：`);
-    crowded.forEach((f, i) => out(`    #${f.id} ${clip(f.question, 60)} ${fmt(f.similarity)}（第 ${r.limit + i + 1}）`));
+    const shown = crowded.slice(0, 5);
+    out(`  过了门槛、但排在前 ${r.limit} 名之后的（前 ${shown.length} 条）：`);
+    for (const f of shown) out(`    #${f.id} ${clip(f.question, 60)} ${fmt(f.similarity)}（第 ${f.rank} 名）`);
   }
   const pending = [];
   for (const kbId of kbIds) {
@@ -224,7 +224,7 @@ async function reportSilent(ctx, s, userText) {
   const [first] = diagnose({ retrieval: null, silent: true });
   out(`结论：${first.title} —— ${first.detail}`);
   if (!userText) return;
-  const list = await replay(ctx, s.kbIds, userText);
+  const list = firstPerFaq(await replay(ctx, s.kbIds, userText));
   const top = list.slice(0, 3).map((f) => `#${f.id} ${clip(f.question, 40)} ${fmt(f.similarity)}`).join('；');
   out(`  如果用用户原话去查（语义搜索只返回 ${SEMANTIC_FLOOR} 以上的，前 ${Math.min(3, list.length)} 条）：${top || '一条都没有'}`);
 }

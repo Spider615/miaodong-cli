@@ -67,3 +67,14 @@ test('md kb find --local：只在最近一次 pull 的副本里找、不发任�
   assert.equal(server.requests.length, before);
   assert.deepEqual(server.unexpected(), []);
 });
+
+test('md kb find：同一条 FAQ 在语义索引里占好几行时，语义最像里只列一次（分数取最高的那行）', async () => {
+  const s = await startKbServer({ faqRows: faqs().map((f) => (f.id === 7001 ? { ...f, vectors: ['课程怎么退款呢'] } : f)) });
+  try {
+    const r = await runCli(['kb', 'find', '售后 FAQ', '课程怎么退款'], { home: home(s.origin) });
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(semanticPart(r.stdout), /^（前 1 条；.*）：\n  #7001 课程怎么退款 \[已审核\] 1\.000\n/);
+  } finally {
+    await s.close();
+  }
+});

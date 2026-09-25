@@ -1,11 +1,12 @@
 // 带知识库的假秒懂（spec 3a §2.1、§2.2、§2.3）。读接口按真实行为返回，并复现 §2.2 的坑：
 //   /qa/list 的 filterType 传字符串时只回未审核的（不报错）；段落列表缺 knowledgeBaseId 回 400；
-//   相似度检查回 qaId；语义搜索不含未审核的，而且只返回相似度 0.8 以上的（§2.3，09-25 实测）。
+//   相似度检查回 qaId；语义搜索不含未审核的，而且只返回相似度 0.8 以上的（§2.3，09-25 实测）；
+//   语义搜索一行一个向量，同一条 FAQ 可能占好几行（09-25 真机验收）。
 // 读接口清单之外的请求都走 404，unexpected() 把它们列出来：测试断言它为空，保证 md kb 只读。
 // state.faqs 可以在测试中途改（模拟「执行之后知识库改过」）。
 import { ok, startFakeMiaodong } from './fake-miaodong.mjs';
 import { EXEC_BOT } from './exec-fixtures.mjs';
-import { faqs, files, kbCanvas, kbList, paragraphs, sim } from './kb-fixtures.mjs';
+import { faqs, files, kbCanvas, kbList, paragraphs, semanticRows, sim } from './kb-fixtures.mjs';
 
 const SEMANTIC_FLOOR = 0.8;
 const bad = (message) => ({ status: 400, body: { statusCode: 400, message, error: 'Bad Request' } });
@@ -51,10 +52,7 @@ export async function startKbServer({ details = {}, pageCap = Infinity, kbs = kb
       if (body.sortType === 'SIMILARITY' && body.keyword) {
         out = body.searchMode === 'text'
           ? rows.filter((f) => f.question.includes(body.keyword) || f.answer.includes(body.keyword)).map((f) => faqOut(f))
-          : rows.filter((f) => f.isReviewed)
-            .map((f) => faqOut(f, { similarity: sim(body.keyword, f.question) }))
-            .filter((f) => f.similarity >= SEMANTIC_FLOOR)
-            .sort((a, b) => b.similarity - a.similarity);
+          : semanticRows(rows, body.knowledgeBaseId, body.keyword, SEMANTIC_FLOOR).map(({ f, score }) => faqOut(f, { similarity: score }));
       }
       return page(out, body.current, body.pageSize);
     },

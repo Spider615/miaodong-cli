@@ -12,6 +12,8 @@ export const PAGE_SIZE = 200;
 export const SEARCH_SIZE = 50;
 // 语义搜索只返回相似度不低于它的条目（spec §2.3，09-25 实测）：重放看不到更低的分数
 export const SEMANTIC_FLOOR = 0.8;
+// 控制台语义搜索和大模型知识库工具的分数不是分毫不差：09-25 真机 71 次调用，同一条最多差 0.0007
+export const SCORE_EPS = 0.001;
 const MAX_PAGES = 1000;
 
 const str = (v) => (v === null || v === undefined ? '' : String(v));
@@ -90,6 +92,9 @@ export async function searchFaqs(identity, orgId, kbId, text, { mode = 'semantic
   });
   return asArray(payload?.data).map(normalizeFaq);
 }
+
+// 语义搜索一行一个向量，同一条 FAQ 可能占好几行、只有分数不同（09-25 真机验收）。结果按分数从高到低排，每条 FAQ 只留第一行
+export const firstPerFaq = (rows) => rows.filter((f, i) => rows.findIndex((x) => x.id === f.id) === i);
 
 // 问题对问题的相似度：未审核的也查得到（spec §2.3）
 export async function checkSimilarity(identity, orgId, kbId, question) {

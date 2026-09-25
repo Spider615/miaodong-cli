@@ -67,15 +67,23 @@ export function kbCanvas() {
   ];
 }
 
-// 一次大模型调知识库工具的记录（spec §2.5 的真实结构）。召回按假相似度现算：只有已审核的、过了门槛的，最多 10 条。
+// 语义索引里的行：一条 FAQ 可能占好几行（09-25 真机：同一条 FAQ 返回两行，只有分数不同），vectors 是问题之外那几行的文字。
+// 只有已审核的进索引；按分数从高到低，同分保持原来的顺序
+export function semanticRows(rows, kb, query, floor) {
+  return rows
+    .filter((f) => f.kb === kb && f.isReviewed)
+    .flatMap((f) => [f.question, ...(f.vectors ?? [])].map((text) => ({ f, score: sim(query, text) })))
+    .filter((x) => x.score >= floor)
+    .sort((a, b) => b.score - a.score);
+}
+
+// 一次大模型调知识库工具的记录（spec §2.5 的真实结构）。召回照 09-25 真机核对的做法现算：
+// 过了门槛的行取分数最高的 10 行，再按 FAQ 去重（所以有重复时不满 10 条）。
 // rows 默认是 faqs()；测试用别的 FAQ 起假秒懂时传同一份，记录才和重放一致
 export function toolCall(kb, query, { threshold = 0.6, topK = 3, success = true, rows = faqs() } = {}) {
-  const result = rows
-    .filter((f) => f.kb === kb && f.isReviewed)
-    .map((f) => ({ f, score: sim(query, f.question) }))
-    .filter((x) => x.score >= threshold)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 10)
+  const top = semanticRows(rows, kb, query, threshold).slice(0, 10);
+  const result = top
+    .filter((x, i) => top.findIndex((y) => y.f.id === x.f.id) === i)
     .map(({ f, score }) => ({
       knowledgeBaseId: kb, score, content: `${f.question} ${f.answer}`, sourceType: 'qa',
       reference: { type: 'qa', source: { id: f.id, question: f.question, answer: f.answer, reviewed: true, duplicateStatus: 'normal' } },

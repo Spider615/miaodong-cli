@@ -4,34 +4,35 @@
 //              recorded 是这次记录的召回条数；知识库查询节点没有运行记录，为 null
 //   target：{ inQueriedKb, otherKbName, reviewed, status }——期望召回的那一条；没给 --expect 时为 null
 //   replay：{ query, user }——这一条在「用记录里的查询重放」「用用户原话重放」里的位置：
-//            { score, rank } 找到了；{ floor, count } 没找到（重放结果共 count 条、最低分 floor，没有结果时 floor 为 null）
+//            { score, rank } 找到了；{ floor, count } 没找到（重放结果共 count 行、最低分 floor，没有结果时 floor 为 null）。
+//            名次和行数都按行算，和工具一样：同一条 FAQ 在语义索引里可能占好几行，工具取前 limit 行再按 FAQ 去重（09-25 真机验收）
 //   silent：节点挂了知识库工具、这次一次都没调
-import { SEMANTIC_FLOOR } from './kb.mjs';
+import { SCORE_EPS, SEMANTIC_FLOOR } from './kb.mjs';
 
 export const COMMON_THRESHOLD = 0.6; // 76 次真实调用里最常见的门槛（§2.5），用来回答「换个门槛能不能召回」
 
 const fmt = (n) => (typeof n === 'number' ? n.toFixed(3) : '?');
 export const sameText = (a, b) => String(a ?? '').replace(/\s+/g, '') === String(b ?? '').replace(/\s+/g, '');
 const passes = (r, threshold, limit) => Boolean(r && typeof r.score === 'number' && r.score >= threshold && r.rank <= limit);
+const RANKS = '（同一条 FAQ 在索引里可能占好几个名次）';
 
 // 重放里没有这一条：语义搜索只返回 0.8 以上的（§2.3），它的分数低于 0.8（结果被截断时不高于最低分），具体多少看不到。按判定表推断：
-// - 重放结果的最低分过了门槛：这些结果全都过了门槛、分数都比它高，已经有 limit 条就是被挤出，它自己多少分都一样；
+// - 重放结果的最低分过了门槛：这些行全都过了门槛、分数都比它高，已经占了 limit 个名次就是被挤出，它自己多少分都一样；
 // - 门槛不低于 0.8：它的分数低于门槛（结果被截断时最低分又没过门槛，同样低于门槛）；
-// - 这次记录的召回不满 limit 条：过了门槛的都召回了，它没过门槛；
-// - 都推不出：分数偏低，交给 md trial。
+// - 这次一条都没召回：没有过门槛的，它也没过；
+// - 都推不出：分数偏低，交给 md trial。召回了几条但不满 limit 条也推不出：同一条 FAQ 占好几行时，前 limit 行去重后本来就不满
+//   （09-25 真机：20 次不满 10 条的调用，前 10 行里全都有重复），不能说明过了门槛的都召回了。
 function inferMissing(q, retrieval, note) {
   const { threshold, limit } = retrieval;
-  const recorded = typeof retrieval.recorded === 'number' ? retrieval.recorded : null;
   const seen = `重放结果里没有这一条（语义搜索只返回 ${SEMANTIC_FLOOR} 以上的）`;
   if (q.floor !== null && q.floor >= threshold && q.count >= limit) {
-    return ['crowded_out', `被挤出前 ${limit} 条`, `${seen}；过了门槛、分数比它高的已经有 ${q.count} 条${note}`];
+    return ['crowded_out', `被挤出前 ${limit} 名`, `${seen}；过了门槛、分数比它高的已经占了 ${q.count} 个名次${RANKS}${note}`];
   }
   if (threshold >= SEMANTIC_FLOOR) return ['below_threshold', '分数不够门槛', `${seen}，它的分数低于门槛 ${fmt(threshold)}${note}`];
-  if (recorded !== null && recorded < limit) {
-    return ['below_threshold', '分数不够门槛', `${seen}，它的分数低于 ${SEMANTIC_FLOOR}；这次只召回了 ${recorded} 条（不满 ${limit} 条），过了门槛的都召回了，所以它没过门槛 ${fmt(threshold)}${note}`];
+  if (retrieval.recorded === 0) {
+    return ['below_threshold', '分数不够门槛', `${seen}，它的分数低于 ${SEMANTIC_FLOOR}；这次一条都没召回，说明没有过门槛 ${fmt(threshold)} 的，它也没过${note}`];
   }
-  const full = recorded !== null ? `这次召回满了 ${limit} 条，` : '';
-  return ['low_score', '分数偏低', `${seen}，它的分数低于 ${SEMANTIC_FLOOR}，更低的分数控制台看不到；${full}推不出是没过门槛 ${fmt(threshold)} 还是被挤出前 ${limit} 条，用 md trial 换问法试${note}`];
+  return ['low_score', '分数偏低', `${seen}，它的分数低于 ${SEMANTIC_FLOOR}，更低的分数控制台看不到；推不出是没过门槛 ${fmt(threshold)} 还是被挤出前 ${limit} 名，用 md trial 换问法试${note}`];
 }
 
 export function diagnose({ retrieval, target = null, replay = {}, silent = false, userText = '' }) {
@@ -67,7 +68,7 @@ export function diagnose({ retrieval, target = null, replay = {}, silent = false
           : '';
         add('below_threshold', '分数不够门槛', `分数 ${fmt(q.score)} 低于门槛 ${fmt(threshold)}${relax}${note}`);
       } else if (q.rank > limit) {
-        add('crowded_out', `被挤出前 ${limit} 条`, `分数 ${fmt(q.score)} 过了门槛，但排第 ${q.rank}${note}`);
+        add('crowded_out', `被挤出前 ${limit} 名`, `分数 ${fmt(q.score)} 过了门槛，但排第 ${q.rank} 名${RANKS}${note}`);
       }
     } else if (q) {
       add(...inferMissing(q, retrieval, note));
@@ -75,4 +76,21 @@ export function diagnose({ retrieval, target = null, replay = {}, silent = false
   }
   if (!reasons.length) add('unknown', '查不出', '以上原因都不成立，用 md trial 复验');
   return reasons;
+}
+
+// 用记录里的查询重放，结果和记录对不上，说明知识库在这次执行之后改过（spec §3.5 第 5 步）。rows 是重放的行（按分数从高到低）。
+// - 只比分数不低于「门槛和 0.8 里较大的那个」的部分：更低的分数重放看不到；
+// - 按工具的做法取前 limit 行再按 FAQ 去重；只比 FAQ（重放只搜得到 FAQ），记录的前 limit 名里混着段落时，段落占掉名额；
+// - 边界上（这个分数线、第 limit 行）分数只差一点点的一进一出不算：两边分数本来就差一点（SCORE_EPS）。
+export function drifted(retrieval, rows) {
+  const line = Math.max(retrieval.threshold ?? 0, SEMANTIC_FLOOR);
+  const high = retrieval.hits.filter((h) => typeof h.score === 'number' && h.score >= line);
+  const faqHits = high.filter((h) => h.type === 'qa');
+  const slots = retrieval.limit - (high.length - faqHits.length);
+  const top = rows.filter((f) => typeof f.similarity === 'number' && f.similarity >= line).slice(0, Math.max(slots, 0));
+  const cut = top.length === slots ? top.at(-1)?.similarity : null;
+  const onEdge = (score) => [line, cut].some((e) => typeof e === 'number' && Math.abs(score - e) <= SCORE_EPS);
+  const recorded = new Set(faqHits.map((h) => h.faqId));
+  const replayed = new Set(top.map((f) => f.id));
+  return faqHits.some((h) => !replayed.has(h.faqId) && !onEdge(h.score)) || top.some((f) => !recorded.has(f.id) && !onEdge(f.similarity));
 }
