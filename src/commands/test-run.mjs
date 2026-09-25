@@ -296,7 +296,11 @@ export async function stop(args) {
     return EXIT.OK;
   }
   await pauseTask(t, task.testTaskId);
+  // 暂停了也是停下来：账本按已跑完的条目记实际（同 status 的 observe，审查 C1）
   const detail = await taskDetail(t, task.testTaskId);
-  out(`已暂停任务 ${detail?.name ?? task.name}（${shortId(task.testTaskId)}）：${detail?.status}。秒懂没有取消，只能暂停；暂停后秒懂不给任务花费，账本保留预估`);
+  const p = progressOf(detail, await taskItems(t, task.testTaskId));
+  observe(t, detail, p);
+  out(`已暂停任务 ${detail?.name ?? task.name}（${shortId(task.testTaskId)}）：${detail?.status}。秒懂没有取消，只能暂停；账本按已跑完的条目记实际花费（正在跑的按单价算进去）`);
+  out(statusLine(detail, p));
   return EXIT.OK;
 }

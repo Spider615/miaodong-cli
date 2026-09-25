@@ -306,6 +306,21 @@ test('stop：暂停正在跑的任务；已经跑完的说不用暂停；找不�
   assert.equal((await md(['test', 'stop', 'ffffffff', '--bot', '179cd443'], h)).code, 4);
 });
 
+test('stop：暂停后账本按已跑完的条目记实际，不再挂着预估（审查 C1：任务停下来就记实际）', async () => {
+  reset({ perPoll: 1, itemCost: 0.02 });
+  seedFinished(seedSet('集', [SAME_EXEC, SAME_EXEC, SAME_EXEC]), 0.02);
+  const h = home();
+  await md(['test', 'run', '集', '--bot', '179cd443'], h);
+  const task = taskOf('集-草稿');
+  await md(['test', 'status', task, '--bot', '179cd443'], h);
+  const r = await md(['test', 'stop', task, '--bot', '179cd443'], h);
+  assert.equal(r.code, 0, r.stderr);
+  assert.doesNotMatch(r.stdout, /账本保留预估/);
+  assert.match(r.stdout, /paused · 1\/3/);
+  const [row] = spendRows(h);
+  assert.deepEqual([row.actual, row.runs], [0.02, 1]);
+});
+
 const savedRows = (stdout) => readFileSync(stdout.match(/逐条明细：(\S+)/)[1], 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
 
 test('results：一个任务 → 汇总、没通过的（空跑单独说）、逐条明细存本机；线上回复从导入来源取；--out 出 xlsx / csv / jsonl，别的扩展名报错', async () => {
