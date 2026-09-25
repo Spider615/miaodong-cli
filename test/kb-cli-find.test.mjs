@@ -104,6 +104,7 @@ test('md kb find：认不出审没审核的 FAQ 标成「审核状态认不出�
     assert.equal(r.code, 0, r.stderr);
     assert.match(r.stdout, /#7004 课程可以退吗 \[审核状态认不出\]/);
     assert.doesNotMatch(r.stdout, /未审核\]/);
+    assert.deepEqual(s.unexpected(), []);
   } finally {
     await s.close();
   }

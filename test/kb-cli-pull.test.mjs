@@ -81,6 +81,7 @@ test('md kb pull：认不出审没审核时单独报出来，不算进未审核�
     assert.match(r.stdout, /FAQ 4（未审核 0 · 审核状态认不出 4 · 疑似重复 0）/);
     assert.match(r.stdout, /⚠️ 4 条 FAQ 认不出审没审核（接口字段可能改了），先在秒懂页面上看一眼/);
     assert.doesNotMatch(r.stdout, /未审核的 \d+ 条 FAQ 检索不到/);
+    assert.deepEqual(s.unexpected(), []);
   } finally {
     await s.close();
   }
@@ -92,6 +93,7 @@ test('md kb pull：平台没给条数时照样拉，但说明这份副本没核�
     const r = await runCli(['kb', 'pull', '售后 FAQ'], { home: home(s.origin) });
     assert.equal(r.code, 0, r.stderr);
     assert.match(r.stdout, /⚠️ 平台没给这几类的条数（接口字段可能改了），没核对：FAQ/);
+    assert.deepEqual(s.unexpected(), []);
   } finally {
     await s.close();
   }
