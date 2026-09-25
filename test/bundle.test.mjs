@@ -11,6 +11,8 @@ import { PROMPT_FIX, planCodeOf, startBotServer } from './helpers/bot-server.mjs
 import { seedIdentity } from './helpers/seed.mjs';
 import { startExecServer } from './helpers/exec-server.mjs';
 import { startTrialServer } from './helpers/trial-server.mjs';
+import { startTestCenterServer } from './helpers/testcenter-server.mjs';
+import { SAME_EXEC } from './helpers/testcenter-fixtures.mjs';
 import { X } from './helpers/exec-fixtures.mjs';
 
 let bundle;
@@ -84,6 +86,20 @@ test('产物能试跑（把老懂的试跑纯函数一起打进去，且不带�
     const r = await runCli(['trial', '回答生成', '--bot', '147bd600', '--from-exec', X(2)], { home, bundle });
     assert.equal(r.code, 0, r.stderr);
     assert.match(r.stdout, /#1 ✅ success/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('产物能跑 md test（测试中心接口、换 id、xlsx 一起打进去，且不带数据库依赖）', async () => {
+  const { server } = await startTestCenterServer();
+  try {
+    const home = tempHome();
+    seedIdentity(home, { key: 'k1', label: '测试区', origin: server.origin, token: 't', orgs: [{ id: 'org-1', name: '兴趣岛平台' }], currentOrgId: 'org-1' });
+    const imported = await runCli(['test', 'import', '回归', '--bot', '179cd443', '--from-execs', SAME_EXEC], { home, bundle });
+    assert.equal(imported.code, 0, imported.stderr);
+    const sets = await runCli(['test', 'sets', '--bot', '179cd443'], { home, bundle });
+    assert.match(sets.stdout, /回归/);
   } finally {
     await server.close();
   }
