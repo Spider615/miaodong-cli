@@ -1,14 +1,16 @@
 // 同步老懂的代码（spec §4）：按 SOURCE.json 的清单原样拷贝，报出变了哪些、缺了哪些，记下老懂的提交号。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { syncReport, syncVendor } from '../scripts/sync-laodong.mjs';
 import { tempHome } from './helpers/run-cli.mjs';
 import { gitCommitAll, gitInit, useSigningGitConfig } from './helpers/git.mjs';
 
 useSigningGitConfig();
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 function write(dir, files) {
   for (const [path, text] of Object.entries(files)) {
@@ -87,4 +89,10 @@ test('sync：清单里的文件没变、只是老懂往前提交了，SOURCE.jso
   const report = syncReport(r).join('\n');
   assert.match(report, /SOURCE\.json/);
   assert.doesNotMatch(report, /没有变化/);
+});
+
+test('sync：Node 不够跑测试时先说清楚，什么都不动（审查 M3）', { skip: !process.env.MD_E2E_NODE && '没设 MD_E2E_NODE（指向 Node 18 的 node）' }, () => {
+  const r = spawnSync(process.env.MD_E2E_NODE, [join(ROOT, 'scripts', 'sync-laodong.mjs'), tempHome()], { encoding: 'utf-8' });
+  assert.equal(r.status, 2, `${r.stdout}${r.stderr}`);
+  assert.match(r.stderr, /Node 22\.6/);
 });

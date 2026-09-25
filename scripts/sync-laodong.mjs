@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { testNodeProblem } from './check-node.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -60,6 +61,12 @@ export function syncReport(r) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  // 同步完要跑测试：Node 不够新就先说清楚，什么都不动（审查 M3）
+  const node = testNodeProblem();
+  if (node) {
+    console.error(node);
+    process.exit(2);
+  }
   const args = process.argv.slice(2);
   const from = args.find((a) => !a.startsWith('--'));
   if (!from) {
