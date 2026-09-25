@@ -7,12 +7,13 @@ import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, normalize, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { importSpecifiers } from './helpers/imports.mjs';
 
 const SELF = fileURLToPath(import.meta.url);
 const ROOT = join(dirname(SELF), '..');
 const VENDOR = join(ROOT, 'vendor', 'laodong');
 const source = JSON.parse(readFileSync(join(VENDOR, 'SOURCE.json'), 'utf-8'));
-const specsOf = (text) => [...text.matchAll(/(?:^|\n)\s*(?:import|export)[^'"\n]*?from\s*['"]([^'"]+)['"]/g)].map((m) => m[1]);
+const specsOf = importSpecifiers;
 
 function resolveInVendor(fromFile, spec) {
   const base = normalize(join(dirname(fromFile), spec));
@@ -59,4 +60,19 @@ test('独立：vendor 以外的代码和脚本不再指向老懂仓库（spec §
     .filter((file) => /Agentflow|miaodong-kit|apps\/api|packages\/shared/.test(readFileSync(file, 'utf-8').replace(/vendor\/laodong\/[\w./-]+/g, '')))
     .map((file) => relative(ROOT, file));
   assert.deepEqual(offenders, []);
+});
+
+test('vendor：跨行写的 import、只为副作用的 import、动态 import 都认得；注释和模板字符串里的不算（审查 M1）', () => {
+  const text = [
+    'import {',
+    '  a,',
+    '  b,',
+    "} from './x';",
+    "import './side';",
+    "export * from './y';",
+    "const m = await import('./lazy');",
+    "// 注释里的 from './not-this' 不算",
+    "export const s = `copied from './not-this-either'`;",
+  ].join('\n');
+  assert.deepEqual(importSpecifiers(text).sort(), ['./lazy', './side', './x', './y']);
 });
