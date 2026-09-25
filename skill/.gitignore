@@ -1,6 +1,0 @@
-# macOS / 编辑器
-.DS_Store
-*.swp
-.idea/
-.vscode/
-*.log

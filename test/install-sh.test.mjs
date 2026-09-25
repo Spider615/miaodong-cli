@@ -21,8 +21,10 @@ function repoCopy(parent = tempHome(), name = 'miaodong-cli') {
   cpSync(bundle, join(dir, 'dist', 'md.mjs'));
   return realpathSync(dir);
 }
+// 跑在 UTF-8 locale 下：同事的终端都是（这台机器是 zh_CN.UTF-8）。bash 3.2 在 UTF-8 下会把紧跟在变量后面的中文标点
+// 读进变量名，C locale 下却没事——只在 C 下测会漏掉「一装就报 unbound variable」
 function runInstall(repo, home) {
-  const r = spawnSync('bash', [join(repo, 'install.sh')], { env: { PATH: process.env.PATH ?? '', HOME: home }, encoding: 'utf-8' });
+  const r = spawnSync('bash', [join(repo, 'install.sh')], { env: { PATH: process.env.PATH ?? '', HOME: home, LANG: 'zh_CN.UTF-8', LC_ALL: 'zh_CN.UTF-8' }, encoding: 'utf-8' });
   return { code: r.status, out: `${r.stdout}${r.stderr}` };
 }
 const SKILL_ROOTS = ['.claude/skills', '.codex/skills', '.agents/skills'];

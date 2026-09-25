@@ -1,6 +1,6 @@
 # 第三方软件声明
 
-`scripts/md.mjs` 是打包产物，内含以下第三方软件：
+`dist/md.mjs` 是打包产物，内含以下第三方软件：
 
 ## jsonrepair 3.14.0
 

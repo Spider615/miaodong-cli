@@ -1,6 +1,6 @@
-# miaodong（秒懂 md）
+# miaodong-cli（秒懂 md）
 
-一个 **Agent Skill**。装上以后，Claude Code 或 Codex 会用 `md` 命令直接读写**秒懂智能体画布**，
+一个命令行工具 `md`，外加一份给 AI 看的使用说明。装上以后，Claude Code 或 Codex 会用 `md` 直接读写**秒懂智能体画布**，
 完成修 bot 的整个流程：
 
 - 按名字找智能体和版本
@@ -23,23 +23,24 @@
 
 前提：
 - **Node.js 18 或更高版本**（用 `node -v` 查看）。
-- 能访问这个仓库：它目前是私有仓库，要先找管理员把你的 GitHub 账号加进 magic-skills，并在本机登录 GitHub（`gh auth login`，或者配好 SSH 后把下面的地址换成 `git@github.com:magic-skills/miaodong.git`）。没有权限时 GitHub 只会报 `Repository not found`。
+- 能访问这个仓库：它是私有仓库，找 Spider615 把你的 GitHub 账号加成协作者，并在本机登录 GitHub（`gh auth login`，或者配好 SSH 后把下面的地址换成 `git@github.com:Spider615/miaodong-cli.git`）。没有权限时 GitHub 只会报 `Repository not found`。
 - **macOS**：取身份时读剪贴板。Linux 也能用，只是导入身份要在自己的终端运行 `md auth import --stdin` 再粘贴；Windows 请在 WSL 里用。
 
 ```bash
-git clone https://github.com/magic-skills/miaodong.git ~/.claude/skills/miaodong
-bash ~/.claude/skills/miaodong/scripts/install.sh
+git clone https://github.com/Spider615/miaodong-cli.git ~/tools/miaodong-cli
+~/tools/miaodong-cli/install.sh
 ```
 
-`install.sh` 做两件事：
-- 把这个 skill 接到 Codex（`~/.codex/skills`）和通用位置（`~/.agents/skills`）；Claude Code 直接读 clone 下来的目录。
-- 把 `md` 命令放到 `~/.local/bin`。
+clone 到哪都行，就是**不要 clone 到 `~/.claude/skills/` 下面**（`install.sh` 会拦）。`install.sh` 做三件事：
+- 把使用说明（仓库里的 `skill/`）接到 Claude Code（`~/.claude/skills`）、Codex（`~/.codex/skills`）和通用位置（`~/.agents/skills`）；
+- 把 `md` 命令放到 `~/.local/bin`；
+- 以前从 `magic-skills/miaodong` 装过的，它会把旧的挪到 `~/.miaodong/old-installs/` 备份，换成新的。
 
-它可以反复运行；如果那些位置已经有不属于本 skill 的东西，它不会动，只会提示。
+它可以反复运行；那些位置上如果有不属于 md 的东西，它不会动，只会提示。
 
 如果它提示 `~/.local/bin 不在 PATH 里`（macOS 默认就不在），在 `~/.zshrc` 里加一行 `export PATH="$HOME/.local/bin:$PATH"`。**装完重开终端，并重启 Claude Code / Codex**，它们才能找到 `md`。
 
-**更新**：`git -C ~/.claude/skills/miaodong pull`。因为是软链，拉完就生效，不用重装。
+**更新**：`git -C ~/tools/miaodong-cli pull`，然后再跑一次 `install.sh`。
 
 ## 第一次用
 
@@ -70,17 +71,15 @@ bash ~/.claude/skills/miaodong/scripts/install.sh
   这是 oh-my-zsh 自带 `alias md='mkdir -p'`，把 `md` 占用了。解决办法：在 `~/.zshrc` 里 oh-my-zsh 那一行之后加一行 `unalias md`，然后重开终端。`install.sh` 检测到这种情况会提醒你。
 - **提示找不到 `md`**
   确认 `~/.local/bin` 在 PATH 里，并且改完 PATH 之后重开过终端、重启过 Claude Code / Codex。
-- **clone 时报 `destination path already exists`，或 install.sh 提示「跳过……不是本 skill」**
-  那个位置已经有旧版本（比如以前复制过去的目录或旧软链）。先把它删掉，再重新 clone、运行 install.sh。
+- **以前从 magic-skills/miaodong 装过**：直接按上面的步骤装新版，install.sh 会把旧版挪去备份。
 - **提示身份失效（退出码 3）**
   重新取一次身份即可。
 
-## 维护
+## 开发
 
-`scripts/md.mjs` 是构建产物，**不要直接改**。源码在句子老懂仓库的 `miaodong-kit/` 目录（目前在 `feat/miaodong-cli` 分支），在那边改好、测完后，这样重新生成：
+源码在 `src/`，测试在 `test/`，开发说明见 `CLAUDE.md`。
+- 测试：Node 22 下 `npm test`（`.nvmrc` 写着 22）。
+- 发版：`MD_E2E_NODE=<Node 18 的 node 路径> npm run release`，看过 diff 后把 `dist/md.mjs` 一起提交、推送。同事 `git pull` 拿到的就是这一版。
+- `vendor/laodong/` 是句子老懂仓库的代码，原样拷贝，不在这里改：`npm run sync:laodong -- <老懂仓库路径>` 同步。
 
-```bash
-npm run md:publish -- <本仓库的本地目录>
-```
-
-生成后提交到这里。第三方软件声明见 `THIRD_PARTY_NOTICES.md`。
+第三方软件声明见 `THIRD_PARTY_NOTICES.md`。

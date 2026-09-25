@@ -1,70 +1,39 @@
-// 构建并安装：~/.claude/skills/miaodong（真身）、~/.codex/skills/miaodong（软链）、~/.local/bin/md（软链），
-// 另在桌面放一份完整副本 ~/Desktop/miaodong（用户要求：方便查看、直接转给同事；每次安装刷新，改它不会生效）。
-// 复制而不是软链到仓库：切到没有 md 代码的分支时，md 不能跟着消失。
-// 不用 npm link：它会把 md 装进当前 nvm 版本目录，切 Node 版本就找不到了。
-import { cpSync, existsSync, lstatSync, mkdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+// npm run install:local（开发者）：构建 dist/md.mjs，跑 install.sh（和同事一样的软链装法），再放一份桌面副本。
+// 桌面副本（MD_EXPORT_DIR，默认 ~/Desktop/miaodong）是给人看、转给同事用的：布局和仓库一样（install.sh、skill/、dist/md.mjs），
+// 拿到的人在里面跑 ./install.sh 就能装。设 MD_EXPORT_DIR='' 就不放。
+import { spawnSync } from 'node:child_process';
+import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildBundle } from './build.mjs';
 
-const KIT = dirname(fileURLToPath(import.meta.url));
-const MARKER = '.md-cli-skill';
+const REPO = dirname(fileURLToPath(import.meta.url));
+// 桌面副本的标记。旧版 install 放的副本带 .md-cli-skill，也认
+const MARKERS = ['.md-cli-export', '.md-cli-skill'];
 
-function isSymlink(path) {
-  try {
-    return lstatSync(path).isSymbolicLink();
-  } catch {
-    return false;
+export async function installLocal({ root = REPO, home = homedir(), exportDir = process.env.MD_EXPORT_DIR ?? join(home, 'Desktop', 'miaodong') } = {}) {
+  if (exportDir && existsSync(exportDir) && !MARKERS.some((m) => existsSync(join(exportDir, m)))) {
+    throw new Error(`${exportDir} 已存在，而且不是 md 放的，没敢覆盖`);
   }
-}
-
-function linkTo(linkPath, targetPath, logs) {
-  mkdirSync(dirname(linkPath), { recursive: true });
-  if (isSymlink(linkPath)) {
-    if (readlinkSync(linkPath) === targetPath) {
-      logs.push(`已存在：${linkPath}`);
-      return;
-    }
-    rmSync(linkPath);
-  } else if (existsSync(linkPath)) {
-    logs.push(`⚠️ 跳过 ${linkPath}：那里已有别的文件，没动它`);
-    return;
-  }
-  symlinkSync(targetPath, linkPath);
-  logs.push(`已链接：${linkPath} → ${targetPath}`);
-}
-
-export async function install({
-  skillDir = process.env.MD_SKILL_DIR ?? join(homedir(), '.claude', 'skills', 'miaodong'),
-  codexSkillsDir = process.env.MD_CODEX_SKILLS_DIR ?? join(homedir(), '.codex', 'skills'),
-  binDir = process.env.MD_BIN_DIR ?? join(homedir(), '.local', 'bin'),
-  exportDir = process.env.MD_EXPORT_DIR ?? join(homedir(), 'Desktop', 'miaodong'),
-} = {}) {
-  const logs = [];
-  for (const dir of [skillDir, exportDir].filter(Boolean)) {
-    if (existsSync(dir) && !existsSync(join(dir, MARKER))) throw new Error(`${dir} 已存在且不是 md 装的，没敢覆盖`);
-  }
-  rmSync(skillDir, { recursive: true, force: true });
-  mkdirSync(join(skillDir, 'scripts'), { recursive: true });
-  cpSync(join(KIT, 'skill'), skillDir, { recursive: true });
-  const { tag } = await buildBundle({ outfile: join(skillDir, 'scripts', 'md.mjs') });
-  writeFileSync(join(skillDir, MARKER), `${tag}\n`);
-  logs.push(`已安装 skill：${skillDir}（${tag}）`);
-  if (existsSync(dirname(codexSkillsDir))) linkTo(join(codexSkillsDir, 'miaodong'), skillDir, logs);
-  else logs.push(`（没有 ${dirname(codexSkillsDir)}，跳过 Codex）`);
-  linkTo(join(binDir, 'md'), join(skillDir, 'scripts', 'md.mjs'), logs);
-  // MD_EXPORT_DIR='' 时不放桌面副本
+  const { tag } = await buildBundle({ outfile: join(root, 'dist', 'md.mjs') });
+  const r = spawnSync('bash', [join(root, 'install.sh')], { env: { ...process.env, HOME: home }, encoding: 'utf-8' });
+  if (r.status !== 0) throw new Error(`install.sh 失败：\n${r.stdout}${r.stderr}`);
+  const logs = [r.stdout.trimEnd()];
   if (exportDir) {
     rmSync(exportDir, { recursive: true, force: true });
-    cpSync(skillDir, exportDir, { recursive: true });
-    logs.push(`已放一份到 ${exportDir}（给你看、转给同事用；真正生效的是 ${skillDir}，改桌面这份不会生效）`);
+    mkdirSync(join(exportDir, 'dist'), { recursive: true });
+    for (const name of ['install.sh', 'README.md', 'THIRD_PARTY_NOTICES.md']) cpSync(join(root, name), join(exportDir, name));
+    cpSync(join(root, 'skill'), join(exportDir, 'skill'), { recursive: true });
+    cpSync(join(root, 'dist', 'md.mjs'), join(exportDir, 'dist', 'md.mjs'));
+    writeFileSync(join(exportDir, MARKERS[0]), `${tag}\n`);
+    logs.push(`已放一份到 ${exportDir}（给人看、转给同事用：在里面跑 ./install.sh 就能装）`);
   }
   return { tag, logs };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const { logs } = await install();
+  const { logs } = await installLocal();
   for (const line of logs) console.log(line);
   console.log('验证：新开一个终端运行 md --version');
 }

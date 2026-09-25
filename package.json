@@ -11,7 +11,8 @@
     "test": "node --no-warnings --experimental-strip-types --loader ./scripts/ts-resolve-loader.mjs --test test/*.test.mjs",
     "build": "node build.mjs",
     "install:local": "node install.mjs",
-    "sync:laodong": "node scripts/sync-laodong.mjs"
+    "sync:laodong": "node scripts/sync-laodong.mjs",
+    "release": "node release.mjs"
   },
   "dependencies": {
     "jsonrepair": "3.14.0"

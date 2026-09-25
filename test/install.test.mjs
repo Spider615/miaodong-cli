@@ -1,37 +1,42 @@
+// npm run install:local（开发者）：构建、跑 install.sh、放一份桌面副本（spec §6）。只在临时目录里装。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, readlinkSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { install } from '../install.mjs';
-import { runCli, tempHome } from './helpers/run-cli.mjs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { installLocal } from '../install.mjs';
+import { tempHome } from './helpers/run-cli.mjs';
 
-function dirs() {
-  const root = tempHome();
-  // exportDir 必须指向临时目录：测试绝不能碰真实桌面
-  return { skillDir: join(root, 'claude', 'skills', 'miaodong'), codexSkillsDir: join(root, 'codex', 'skills'), binDir: join(root, 'bin'), exportDir: join(root, 'desktop', 'miaodong') };
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+// 一份仓库副本：构建产物写进副本，不碰真仓库的 dist/
+function repoCopy() {
+  const dir = join(tempHome(), 'miaodong-cli');
+  mkdirSync(dir, { recursive: true });
+  for (const name of ['install.sh', 'README.md', 'THIRD_PARTY_NOTICES.md']) cpSync(join(ROOT, name), join(dir, name));
+  cpSync(join(ROOT, 'skill'), join(dir, 'skill'), { recursive: true });
+  return realpathSync(dir);
 }
 
-test('安装：skill 真身 + codex 软链 + bin 软链 + 桌面副本，装完能跑；重复安装不出错', async () => {
-  const d = dirs();
-  mkdirSync(join(d.codexSkillsDir, '..'), { recursive: true });
-  await install(d);
-  assert.ok(existsSync(join(d.skillDir, 'SKILL.md')));
-  assert.ok(existsSync(join(d.skillDir, 'references', 'transforms.md')));
-  assert.ok(statSync(join(d.skillDir, 'scripts', 'md.mjs')).mode & 0o100);
-  assert.equal(readlinkSync(join(d.codexSkillsDir, 'miaodong')), d.skillDir);
-  assert.equal(readlinkSync(join(d.binDir, 'md')), join(d.skillDir, 'scripts', 'md.mjs'));
-  assert.ok(existsSync(join(d.exportDir, 'SKILL.md')), '桌面副本要有 SKILL.md');
-  assert.ok(existsSync(join(d.exportDir, 'scripts', 'md.mjs')), '桌面副本要带可执行的 md');
-  const r = await runCli(['--version'], { home: tempHome(), bundle: join(d.binDir, 'md') });
-  assert.equal(r.code, 0, r.stderr);
-  await install(d);
+test('install:local：构建进仓库的 dist/、用 install.sh 装、放一份桌面副本（布局同仓库，拿到的人跑 ./install.sh 就能装）；重复安装不出错', async () => {
+  const root = repoCopy();
+  const home = tempHome();
+  const exportDir = join(home, 'Desktop', 'miaodong');
+  const { logs } = await installLocal({ root, home, exportDir });
+  assert.equal(readlinkSync(join(home, '.claude', 'skills', 'miaodong')), join(root, 'skill'));
+  assert.equal(readlinkSync(join(home, '.local', 'bin', 'md')), join(root, 'dist', 'md.mjs'));
+  for (const file of ['install.sh', 'README.md', 'skill/SKILL.md', 'dist/md.mjs']) assert.ok(existsSync(join(exportDir, file)), `桌面副本缺 ${file}`);
+  assert.match(logs.join('\n'), /已放一份到/);
+  await installLocal({ root, home, exportDir });
 });
 
-test('目标目录已有别人的东西时拒绝覆盖', async () => {
-  const d = dirs();
-  mkdirSync(d.skillDir, { recursive: true });
-  writeFileSync(join(d.skillDir, 'SKILL.md'), '别人的 skill');
-  await assert.rejects(install(d), /不是 md 装的/);
+test('install:local：桌面那个位置已有别人的东西时不覆盖', async () => {
+  const home = tempHome();
+  const exportDir = join(home, 'Desktop', 'miaodong');
+  mkdirSync(exportDir, { recursive: true });
+  writeFileSync(join(exportDir, '别人的.txt'), '别动');
+  await assert.rejects(installLocal({ root: repoCopy(), home, exportDir }), /不是 md 放的/);
+  assert.equal(readFileSync(join(exportDir, '别人的.txt'), 'utf-8'), '别动');
 });
 
 test('SKILL.md 头部合规：name 为 miaodong，description 不超过 1024 字', () => {
