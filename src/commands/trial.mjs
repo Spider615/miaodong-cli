@@ -16,7 +16,7 @@ import { normalizeDetail, promptText } from '../exec-detail.mjs';
 import { UNKNOWN_RUN_COST, buildTrialInputs, classifyTrialNode, costOf, costSummary, draftVsLocal, inputDefs, nextRunCheck, parseInputPairs } from '../trial.mjs';
 import { runNodeOnce } from '../trial-run.mjs';
 import { dayKey, loadLimits, readSpends, recordSpend, spendDecision, spentOn, updateSpend, withSpendLock } from '../spend.mjs';
-import { codeFor, givenCode } from '../confirm.mjs';
+import { codeFor, givenCode, roundCost, stopForConfirm } from '../confirm.mjs';
 import { buildBranchNameIndex } from '../../../apps/api/lib/miaodong/badcase-normalize.ts';
 
 const safe = (value) => String(value).replace(/[^\w.@-]+/g, '_');
@@ -75,21 +75,6 @@ function readInputsFile(file) {
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw usage('--inputs 的文件要是一个 JSON 对象：{"键": 值}');
   return parsed;
-}
-
-const roundCost = (value) => (value === null ? null : Math.round(value * 10000) / 10000);
-
-// 需要用户确认：把原因和确认码打出来，什么都不跑（退出码 5）。remaining 有值时是「跑到一半停下，其余几次要确认」
-function stopForConfirm({ code, previous, given, reasons, remaining = null }) {
-  const what = remaining ? `其余 ${remaining} 次` : '';
-  out(`⛔ 要用户确认才能跑${what}：${reasons.join('；')}`);
-  out(`确认码：${code}（只对这一笔有效：次数、输入、预估任何一样变了就作废，用过一次也作废）`);
-  const hint = remaining
-    ? `把已跑的实际花费和其余 ${remaining} 次的预估单独告诉用户（不要夹在别的问题里）；用户明确同意后，同一条命令把 --times 改成 ${remaining}，再加 --confirm ${code}`
-    : `把上面的预估和原因单独告诉用户（不要夹在别的问题里）；用户明确同意这一笔后，同一条命令加 --confirm ${code}`;
-  if (given !== null && given === previous) throw new MdError('confirm_used', `确认码 ${given} 已经用过了：每个码只能用一次`, { exitCode: EXIT.BLOCKED, hint });
-  if (given !== null) throw new MdError('confirm_mismatch', `确认码对不上（给的是 ${given || '空'}，当前是 ${code}）：次数、输入或预估和上次不一样了`, { exitCode: EXIT.BLOCKED, hint });
-  throw new MdError('confirm_needed', `需要用户确认${what}：${reasons.join('；')}`, { exitCode: EXIT.BLOCKED, hint });
 }
 
 export const trial = {

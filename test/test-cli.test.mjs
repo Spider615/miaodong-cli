@@ -148,3 +148,99 @@ test('import：--from-bot 和文件里的来源对不上、执行 id 不完整�
   assert.equal(short.code, 2);
   assert.match(short.stderr, /不是完整的执行 id：e0000011/);
 });
+
+function spendRows(h) {
+  const file = join(h, 'md', 'spend.jsonl');
+  if (!existsSync(file)) return [];
+  const byId = new Map();
+  for (const line of readFileSync(file, 'utf-8').trim().split('\n')) {
+    const row = JSON.parse(line);
+    byId.set(row.id, { ...(byId.get(row.id) ?? {}), ...row });
+  }
+  return [...byId.values()];
+}
+// 这个集上次跑完的任务：平均每条 avg 元（md test run 按它估花费）
+const seedFinished = (testSetId, avg) => fake.state.tasks.push({ testTaskId: '70000099-0000-4000-8000-000000000000', botId: TARGET_BOT, testSetId, name: '上次', status: 'finished', averageCostInCny: avg, createdAt: '2026-09-24T00:00:00.000Z' });
+const codeIn = (stdout) => stdout.match(/确认码：([0-9a-f]{8})/)?.[1];
+
+test('run：跑前检查不过（跨智能体没换 id 的用例）→ 不建任务、不记账，退出码 5（审查重点 1）', async () => {
+  reset();
+  seedSet('集', [SAME_EXEC, CROSS_EXEC]);
+  const h = home();
+  const r = await md(['test', 'run', '集', '--bot', '179cd443'], h);
+  assert.equal(r.code, 5);
+  assert.match(r.stdout, /❌ 跑前检查：2 处对不上/);
+  assert.match(r.stderr, /跑前检查有 2 处对不上，没有建任务/);
+  assert.equal(fake.state.posts.taskCreate, undefined);
+  assert.deepEqual(spendRows(h), []);
+});
+
+test('run：估不出花费一律要确认；带码才建任务（testRound、草稿的 canvasId、默认任务名）；账本记预留和码；本机记下任务', async () => {
+  reset();
+  seedSet('集', [SAME_EXEC]);
+  const h = home();
+  const first = await md(['test', 'run', '集', '--bot', '179cd443', '--rounds', '2'], h);
+  assert.equal(first.code, 5);
+  assert.match(first.stdout, /1 条 × 2 轮 = 2 次/);
+  assert.match(first.stdout, /预计 估不出（参考：单条 ¥0–0\.3）/);
+  assert.match(first.stderr, /估不出花费/);
+  assert.equal(fake.state.posts.taskCreate, undefined);
+  const code = codeIn(first.stdout);
+  const r = await md(['test', 'run', '集', '--bot', '179cd443', '--rounds', '2', '--confirm', code], h);
+  assert.equal(r.code, 0, r.stderr);
+  const body = fake.state.posts.taskCreate[0];
+  assert.deepEqual([body.testRound, body.canvasId, body.concurrency], [2, 'main-179c', 5]);
+  assert.match(body.name, /^集-草稿-\d{4}-\d{4}$/);
+  const [row] = spendRows(h);
+  assert.deepEqual([row.kind, row.approved, row.code, row.reserve, row.count], ['test', 'confirm', code, 0.6, 2]);
+  const taskId = fake.state.tasks[0].testTaskId;
+  assert.match(r.stdout, new RegExp(`已建任务 .*（${taskId}）`));
+  const rec = JSON.parse(readFileSync(join(h, 'md', 'tests', 'k1', '179cd443', 'tasks', `${taskId}.json`), 'utf-8'));
+  assert.equal(rec.spendId, row.id);
+});
+
+test('run：这个集上次跑完的任务有平均花费 → 按它估；不超门槛、不调插件就直接建任务；有别的任务在跑会说排队', async () => {
+  reset();
+  const set = seedSet('集', [SAME_EXEC]);
+  seedFinished(set, 0.02);
+  fake.state.tasks.push({ testTaskId: '70000098-0000-4000-8000-000000000000', botId: TARGET_BOT, testSetId: set, name: '别人的任务', status: 'processing', createdAt: '2026-09-24T01:00:00.000Z' });
+  const r = await md(['test', 'run', '集', '--bot', '179cd443']);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /预计 ¥0\.020（上次跑完的任务「上次」平均每条 ¥0\.020）/);
+  assert.match(r.stdout, /排队：这个智能体上还有 1 个任务没跑完/);
+  assert.equal(fake.state.posts.taskCreate.length, 1);
+});
+
+test('run：画布上有插件就要确认，哪怕很便宜；--version 跑那个版本的 canvasId', async () => {
+  reset({ canvas: pluginCanvas() });
+  seedFinished(seedSet('集', [SAME_EXEC]), 0.02);
+  const h = home();
+  const first = await md(['test', 'run', '集', '--bot', '179cd443', '--version', 'v1.0.215'], h);
+  assert.equal(first.code, 5);
+  assert.match(first.stdout, /v1\.0\.215/);
+  assert.match(first.stdout, /会真实调用的外部系统：查用户详情/);
+  assert.match(first.stderr, /会真的调用外部系统：查用户详情/);
+  const r = await md(['test', 'run', '集', '--bot', '179cd443', '--version', 'v1.0.215', '--confirm', codeIn(first.stdout)], h);
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(fake.state.posts.taskCreate[0].canvasId, 'ver-215');
+});
+
+test('run：建任务明确被拒（4xx）→ 这一笔记 0；结果不明（5xx）→ 保留预留，提示别重跑（审查重点 3）', async () => {
+  reset();
+  seedFinished(seedSet('集', [SAME_EXEC]), 0.02);
+  const original = fake.server.routes['POST /api/test-center/test-task/create'];
+  try {
+    fake.server.routes['POST /api/test-center/test-task/create'] = () => ({ status: 400, body: { statusCode: 400, message: 'bad request' } });
+    const h = home();
+    assert.equal((await md(['test', 'run', '集', '--bot', '179cd443'], h)).code, 1);
+    assert.deepEqual([spendRows(h)[0].actual, spendRows(h)[0].runs], [0, 0]);
+    fake.server.routes['POST /api/test-center/test-task/create'] = () => ({ status: 502, body: { message: 'Bad Gateway' } });
+    const h2 = home();
+    const unknown = await md(['test', 'run', '集', '--bot', '179cd443'], h2);
+    assert.equal(unknown.code, 1);
+    assert.match(unknown.stderr, /任务可能已经建了.*不要重跑/);
+    assert.deepEqual([spendRows(h2)[0].actual, spendRows(h2)[0].reserve], [null, 0.02]);
+  } finally {
+    fake.server.routes['POST /api/test-center/test-task/create'] = original;
+  }
+});

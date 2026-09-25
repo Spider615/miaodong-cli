@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { codeFor, confirmCode, givenCode } from '../src/confirm.mjs';
+import { codeFor, confirmCode, givenCode, roundCost, stopForConfirm } from '../src/confirm.mjs';
 
 const op = { kind: 'trial', botId: 'b', nodeId: 'n', times: 2, inputs: { text: '你好', n: 1 }, estimate: 0.6, external: [], day: '2026-9-25' };
 
@@ -29,4 +29,13 @@ test('codeFor：同一笔操作每确认过一次，码就换一个——用过�
   assert.notEqual(second.code, first.code);
   assert.equal(second.previous, first.code);
   assert.equal(codeFor({ ...op, times: 3 }, used).previous, null);
+});
+
+test('stopForConfirm：打出原因和码后抛退出码 5；没给码、给错码、给用过的码分开报；roundCost 取到 0.0001 元', () => {
+  assert.throws(() => stopForConfirm({ code: 'c1', previous: null, given: null, reasons: ['估不出花费'] }), (e) => e.code === 'confirm_needed' && e.exitCode === 5 && /估不出花费/.test(e.message) && /--confirm c1/.test(e.hint));
+  assert.throws(() => stopForConfirm({ code: 'c2', previous: 'c1', given: 'c1', reasons: ['x'] }), (e) => e.code === 'confirm_used');
+  assert.throws(() => stopForConfirm({ code: 'c2', previous: 'c1', given: 'zz', reasons: ['x'] }), (e) => e.code === 'confirm_mismatch');
+  assert.throws(() => stopForConfirm({ code: 'c3', previous: null, given: null, reasons: ['x'], remaining: 2 }), (e) => /其余 2 次/.test(e.message) && /--times 改成 2/.test(e.hint));
+  assert.equal(roundCost(0.123456), 0.1235);
+  assert.equal(roundCost(null), null);
 });
