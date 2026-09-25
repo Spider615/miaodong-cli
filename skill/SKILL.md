@@ -65,8 +65,8 @@ description: 用 md 命令读写句子秒懂（JZ Insight，控制台域名形�
 1. 按客户资料生成导入包：要加的 FAQ、文件和段落，要删的旧 FAQ、旧文件（精确 id + 名字），来源资料的文件名和 sha256。格式见 `references/kb-import.md`。
 2. `md kb import <包目录>`：预演。闸门没过就按提示改包；全过了，把预演（目标库、增删条数、引用这个库的智能体、很像的 FAQ）和计划码交给用户。
 3. **用户明确同意后**，才运行 `md kb import <包目录> --confirm <计划码>`。不能替用户确认。
-4. 中途停了：把「停在「…」」那一行告诉用户；`md kb import --resume <导入id>` 预演还剩什么，用户同意后 `--confirm`。
-5. 要撤回：`md kb revoke <导入id>` 预演，用户同意后 `--confirm`。本机的导入记录：`md kb imports`。
+4. 中途停了：把「停在「…」」那一行告诉用户；`md kb import --resume <导入id>` 预演还剩什么，用户同意后 `--confirm`。输出里列出了「写的时候库里多出来、对不上的」#id：先请用户在秒懂上看一眼它们是不是这次写进去的，再决定续跑还是撤回（确认续跑就是认定它们不是）。
+5. 要撤回：`md kb revoke <导入id>` 预演，用户同意后 `--confirm`。撤回退出码 1、说「还有 N 条分不清……没删」时，不要说撤回完成了，按 `references/kb-import.md` 的撤回一节处理。本机的导入记录：`md kb imports`。
 
 ## 回归（测试中心）
 
