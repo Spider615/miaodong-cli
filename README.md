@@ -23,7 +23,7 @@
 
 前提：
 - **Node.js 18 或更高版本**（用 `node -v` 查看）。
-- 能访问这个仓库：它是私有仓库，找 Spider615 把你的 GitHub 账号加成协作者，并在本机登录 GitHub（`gh auth login`，或者配好 SSH 后把下面的地址换成 `git@github.com:Spider615/miaodong-cli.git`）。没有权限时 GitHub 只会报 `Repository not found`。
+- 能访问这个仓库：它是私有仓库，找 Spider615 把你的 GitHub 账号加成协作者。加上以后 GitHub 会发一封邀请，**要先点接受**：在邀请邮件里点，或者打开 https://github.com/Spider615/miaodong-cli/invitations。然后在本机登录 GitHub（`gh auth login`，或者配好 SSH 后把下面的地址换成 `git@github.com:Spider615/miaodong-cli.git`）。没接受邀请、没登录时，GitHub 只会报 `Repository not found`。
 - **macOS**：取身份时读剪贴板。Linux 也能用，只是导入身份要在自己的终端运行 `md auth import --stdin` 再粘贴；Windows 请在 WSL 里用。
 
 ```bash
@@ -37,6 +37,8 @@ clone 到哪都行，就是**不要 clone 到 `~/.claude/skills/` 下面**（`in
 - 以前从 `magic-skills/miaodong` 装过的，它会把旧的挪到 `~/.miaodong/old-installs/` 备份，换成新的。
 
 它可以反复运行；那些位置上如果有不属于 md 的东西，它不会动，只会提示。
+
+装好的是指向这个仓库的链接，所以仓库要一直留着。挪了位置的话，在新位置再跑一次 `install.sh`。
 
 如果它提示 `~/.local/bin 不在 PATH 里`（macOS 默认就不在），在 `~/.zshrc` 里加一行 `export PATH="$HOME/.local/bin:$PATH"`。**装完重开终端，并重启 Claude Code / Codex**，它们才能找到 `md`。
 
