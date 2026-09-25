@@ -14,6 +14,8 @@ import { startTrialServer } from './helpers/trial-server.mjs';
 import { startTestCenterServer } from './helpers/testcenter-server.mjs';
 import { SAME_EXEC } from './helpers/testcenter-fixtures.mjs';
 import { X } from './helpers/exec-fixtures.mjs';
+import { startKbServer } from './helpers/kb-server.mjs';
+import { KB_FAQ, kbExec, toolCall } from './helpers/kb-fixtures.mjs';
 
 let bundle;
 before(async () => {
@@ -123,6 +125,23 @@ test('产物能导外部用例、批量改用例（Node 18 上跑改动脚本、
     const done = await runCli(['test', 'edit', '外部', script, '--bot', '179cd443', '--confirm', code], { home, bundle });
     assert.equal(done.code, 0, done.stderr);
     assert.match(done.stdout, /已改 1 条/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('产物能跑 md kb（知识库读接口、画布引用、why 的重放一起打进去，且不带数据库依赖）', async () => {
+  const server = await startKbServer({ details: { [X(41)]: kbExec(41, '课程可以退吗', [toolCall(KB_FAQ, '课程可以退吗', { threshold: 0.6 })]) } });
+  try {
+    const home = tempHome();
+    seedIdentity(home, { key: 'k1', label: '测试区', origin: server.origin, token: 't', orgs: [{ id: 'org-1', name: '兴趣岛平台' }], currentOrgId: 'org-1' });
+    const listed = await runCli(['kb', 'list', '--bot', '147bd600'], { home, bundle });
+    assert.equal(listed.code, 0, listed.stderr);
+    assert.match(listed.stdout, /⚠️ 未审核 1 条/);
+    const why = await runCli(['kb', 'why', X(41), '--expect', '7004'], { home, bundle });
+    assert.equal(why.code, 0, why.stderr);
+    assert.match(why.stdout, /结论：未审核/);
+    assert.doesNotMatch(`${listed.stderr}${why.stderr}`, /ExperimentalWarning/);
   } finally {
     await server.close();
   }
