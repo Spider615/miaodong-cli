@@ -67,7 +67,7 @@ test('md kb revoke：预演只读；确认后先从备份重建删掉的（审�
     assert.ok(rebuildAt >= firstCall && rebuildAt < deleteAt);
     const state = JSON.parse(readFileSync(join(recDir, 'state.json'), 'utf-8'));
     assert.equal(state.status, 'revoked');
-    assert.deepEqual(state.revoke.rebuiltFaqIds, { 7002: rebuilt[0].id });
+    assert.deepEqual(state.revoke.faqIds, { 7002: rebuilt[0].id });
 
     const again = await runCli(['kb', 'revoke', importId], { home: h });
     assert.equal(again.code, 0);
@@ -147,19 +147,19 @@ test('md kb revoke：删旧的重建了同一个问题——撤回后只剩旧�
   });
 });
 
-test('md kb revoke：删旧的时请求生效了、回复丢了（导入停在删旧的）——撤回照样把它重建回来', async () => {
+test('md kb revoke：删旧的时请求生效了、回复丢了——删之后一列认得出是这次删的（导入照样做完），撤回照样把它重建回来', async () => {
   await withServer({ failOn: { 'POST /api/qa/batch-delete': [{ n: 1, applied: true }] } }, async (server, h) => {
     const r = await importPackage(goodPackage(), h);
-    assert.equal(r.code, 1);
-    assert.match(r.stderr, /停在「删旧的」/);
+    assert.equal(r.code, 0, r.stderr);
     assert.equal(server.state.faqs.some((f) => f.id === 7002), false);
     const importId = recordOf(r)[1];
+    assert.deepEqual(JSON.parse(readFileSync(join(recordOf(r)[2], 'state.json'), 'utf-8')).deleted, { faq: [7002], doc: [601] });
     const p = await runCli(['kb', 'revoke', importId], { home: h });
     assert.match(p.stdout, /要重建（这次删的，从备份）：FAQ 1 条/);
     const done = await runCli(['kb', 'revoke', importId, '--confirm', codeOf(p)], { home: h });
     assert.equal(done.code, 0, done.stderr);
     assert.equal(server.state.faqs.filter((f) => f.question === '退款多久到账').length, 1);
-    assert.equal(server.state.files.some((f) => f.id === 601), true);
+    assert.equal(server.state.files.filter((f) => f.name === '旧价格表').length, 1);
     assert.equal(server.state.files.some((f) => f.name === '新价格表'), false);
   });
 });

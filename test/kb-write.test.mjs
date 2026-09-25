@@ -61,3 +61,17 @@ test('kb write：下载原文件不带身份（原文件在对象存储上，不
 test('kb write：秒懂报错时照实抛出（不吞）', async () => {
   await assert.rejects(() => reviewFaqs(who(), 'org-1', KB_FAQ, [123456]), (e) => e.code === 'upstream' && /batch-review/.test(e.message));
 });
+
+test('kb write：写流程用的列表必须完整——翻页不稳（有重复、有漏的）就报 kb_list_unstable，不拿半截列表去认 id', async () => {
+  const flaky = await startKbServer({ writable: true, pageCap: 2, overlap: 1 });
+  try {
+    const me = { ...who(), origin: flaky.origin };
+    await assert.rejects(listFaqRows(me, 'org-1', KB_FAQ), (e) => e.code === 'kb_list_unstable' && /翻页不稳/.test(e.message));
+    const { listFaqs, listFiles } = await import('../src/kb.mjs');
+    await assert.rejects(listFaqs(me, 'org-1', KB_FAQ, { checked: true }), (e) => e.code === 'kb_list_unstable');
+    assert.ok((await listFaqs(me, 'org-1', KB_FAQ)).length > 0); // 查 case 的读命令不受影响
+    assert.ok(Array.isArray(await listFiles(me, 'org-1', KB_FILE, { checked: true })));
+  } finally {
+    await flaky.close();
+  }
+});

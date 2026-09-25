@@ -49,12 +49,15 @@ test('md kb import 执行：备份在第一个写请求之前；试写一条；�
     assert.deepEqual(server.state.paragraphs.filter((p) => p.fileId === doc.id).map((p) => [p.content, p.status]), [['瑜伽月卡 399 元', 'ready'], ['瑜伽年卡 2999 元', 'ready']]);
     assert.equal(server.state.files.some((f) => f.id === 601), false);
 
-    // 顺序：原文件下载（备份）在第一个写请求之前；删旧的在审核之后
+    // 顺序：原文件下载（备份）在第一个写请求之前；删旧的在审核之后（每个位置都要真的找得到：找不到是 -1，比大小会误过，审查 I6）
     const firstWrite = at(server, (q) => q.method === 'POST' && q.path !== '/api/qa/list' && q.path !== '/api/qa/check-similarity');
     const download = at(server, (q) => q.path.startsWith('/files/601/'));
-    assert.ok(download >= 0 && download < firstWrite);
-    assert.ok(at(server, (q) => q.path === '/api/qa/batch-review') < at(server, (q) => q.path === '/api/qa/batch-delete'));
-    assert.ok(at(server, (q) => q.path === '/api/qa/batch-review') < at(server, (q) => q.path === '/api/knowledge-base/file/delete'));
+    const review = at(server, (q) => q.path === '/api/qa/batch-review');
+    const delFaq = at(server, (q) => q.path === '/api/qa/batch-delete');
+    const delDoc = at(server, (q) => q.path === '/api/knowledge-base/file/delete');
+    for (const i of [firstWrite, download, review, delFaq, delDoc]) assert.ok(i >= 0);
+    assert.ok(download < firstWrite);
+    assert.ok(review < delFaq && review < delDoc);
     assert.equal(server.requests.find((q) => q.path.startsWith('/files/601/')).auth, null);
 
     // 备份原样：要删的 FAQ 原始行、旧文件的详情、全部段落、原文件
@@ -69,26 +72,50 @@ test('md kb import 执行：备份在第一个写请求之前；试写一条；�
   });
 });
 
-test('md kb import 执行：试写的那条读回来和包里不一样——把它删掉，停下，别的一条都不写', async () => {
-  await withServer({ mangle: (s) => `${s}（改）` }, async (server, h) => {
+test('md kb import 执行：试写的 FAQ 按问题认得出、答案被秒懂改了——它是自己建的，删掉，停下，别的一条都不写', async () => {
+  await withServer({ mangle: (s) => (s.endsWith('。') ? `${s}（改）` : s) }, async (server, h) => {
     const dir = writePackage(goodPackage());
     const code = await preview(['kb', 'import', dir], h);
     const r = await runCli(['kb', 'import', dir, '--confirm', code], { home: h });
     assert.equal(r.code, 1);
     assert.match(r.stderr, /停在「试写一条」：试写的 FAQ 读回来和包里的不一样.*已经把它删了/);
-    assert.equal(server.state.faqs.some((f) => f.question.startsWith('课程怎么退款呀')), false);
+    assert.equal(server.state.faqs.some((f) => f.question === '课程怎么退款呀'), false);
     assert.equal(server.state.files.some((f) => f.name === '新价格表'), false);
     assert.equal(server.writes().filter((q) => q.path === '/api/qa/batch-create').length, 1);
     assert.equal(server.state.faqs.some((f) => f.id === 7002), true);
   });
 });
 
+test('md kb import 执行：试写的 FAQ 连问题都被改了——认不出是不是自己建的：不删它，停下并列出来，别的一条都不写', async () => {
+  await withServer({ mangle: (s) => `${s}（改）` }, async (server, h) => {
+    const dir = writePackage(goodPackage());
+    const code = await preview(['kb', 'import', dir], h);
+    const r = await runCli(['kb', 'import', dir, '--confirm', code], { home: h });
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /停在「试写一条」：1 条 FAQ 发出去了，但在库里对不上（「课程怎么退款呀」）；写的时候库里多出来 1 条对不上的：#90001「课程怎么退款呀（改）」/);
+    assert.match(r.stderr, /md 不会动它们/);
+    assert.equal(server.state.faqs.some((f) => f.id === 90001), true);
+    assert.deepEqual(server.writes().map((q) => q.path), ['/api/qa/batch-create']);
+  });
+});
+
 const sixty = () => ({ faqs: Array.from({ length: 60 }, (_, i) => faq(`f${i + 1}`, `批量问题${i + 1}`)) });
 const countNew = (server) => server.state.faqs.filter((f) => f.kb === KB_FAQ && f.question.startsWith('批量问题')).length;
 
-for (const [label, rule] of [['第 3 批直接失败', 3], ['第 3 批写进去了、回复丢了', { n: 3, applied: true }]]) {
-  test(`md kb import 续跑：${label}——停在「建 FAQ」；--resume 补完，不重复创建`, async () => {
-    await withServer({ failOn: { 'POST /api/qa/batch-create': [rule] } }, async (server, h) => {
+test('md kb import：第 3 批写进去了、回复丢了——请求前后一比认得回来，不用停，一次做完，不重复创建', async () => {
+  await withServer({ failOn: { 'POST /api/qa/batch-create': [{ n: 3, applied: true }] } }, async (server, h) => {
+    const dir = writePackage(sixty());
+    const code = await preview(['kb', 'import', dir], h);
+    const r = await runCli(['kb', 'import', dir, '--confirm', code], { home: h });
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(countNew(server), 60);
+    assert.equal(server.writes().filter((q) => q.path === '/api/qa/batch-create').length, 3);
+  });
+});
+
+{
+  test('md kb import 续跑：第 3 批直接失败——停在「建 FAQ」；--resume 补完，不重复创建', async () => {
+    await withServer({ failOn: { 'POST /api/qa/batch-create': [3] } }, async (server, h) => {
       const dir = writePackage(sixty());
       const code = await preview(['kb', 'import', dir], h);
       const r = await runCli(['kb', 'import', dir, '--confirm', code], { home: h });
@@ -99,6 +126,8 @@ for (const [label, rule] of [['第 3 批直接失败', 3], ['第 3 批写进去�
       const p = await runCli(['kb', 'import', '--resume', importId], { home: h });
       assert.equal(p.code, 0, p.stderr);
       assert.match(p.stdout, /停在「建 FAQ」/);
+      assert.match(p.stdout, /上次停下时发出去、还没对上的：FAQ 9 条/);
+      assert.match(p.stdout, /没对上的 9 条在库里找不到，写的时候库里也没多出来别的：就是没建成，续跑会重新发一次/);
       assert.match(p.stdout, /还要做：建 FAQ、建文件和段落、核对内容、审核 FAQ（生效）、等向量化、删旧的/);
       const done = await runCli(['kb', 'import', '--resume', importId, '--confirm', codeOf(p)], { home: h });
       assert.equal(done.code, 0, done.stderr);

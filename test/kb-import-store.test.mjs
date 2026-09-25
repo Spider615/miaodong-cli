@@ -1,10 +1,11 @@
 // 导入记录的本地存储（spec 3b §6）：包拷一份、状态、日志、备份；按导入 id 找回；目录 0700、内容文件 0600
 import test, { beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { loadPackage } from '../src/kb-package.mjs';
-import { appendLog, createRecord, listRecords, loadRecord, readBackupDocs, readBackupFaqs, saveBackupDoc, saveBackupFaqs, saveState } from '../src/kb-import-store.mjs';
+import { activeImport, appendLog, claimedIds, createRecord, listRecords, loadRecord, lockKb, readBackupDocs, readBackupFaqs, saveBackupDoc, saveBackupFaqs, saveState } from '../src/kb-import-store.mjs';
 import { tempHome } from './helpers/run-cli.mjs';
 import { KB_FAQ } from './helpers/kb-fixtures.mjs';
 import { faq, writePackage } from './helpers/kb-import-fixtures.mjs';
@@ -24,7 +25,7 @@ test('kb import store：新建记录——导入 id 是时间加包指纹前 4 �
   assert.equal(existsSync(join(rec.dir, 'package', 'docs.jsonl')), false);
   assert.deepEqual({ ...rec.state, createdAt: 'x' }, {
     schema: 1, importId: rec.importId, region, org, kb, fingerprint: pkg.fingerprint, createdAt: 'x', status: 'new',
-    steps: {}, stopped: null, faqIds: {}, docIds: {}, deleted: { faq: [], doc: [] }, indexed: { faq: [], doc: [] }, revoke: null,
+    steps: {}, stopped: null, faqIds: {}, docIds: {}, deleted: { faq: [], doc: [] }, indexed: { faq: [], doc: [] }, open: null, revoke: null,
   });
   assert.equal(mode(rec.dir), 0o700);
   assert.equal(mode(join(rec.dir, 'state.json')), 0o600);
@@ -64,4 +65,57 @@ test('kb import store：列出本机全部导入记录，新的在前', () => {
   const a = createRecord({ region, org, kb, pkg: loadPackage(writePackage({ faqs: [faq('f1', 'q1')] })), now: new Date(2026, 8, 25, 10, 0, 0) });
   const b = createRecord({ region, org, kb, pkg: loadPackage(writePackage({ faqs: [faq('f1', 'q2')] })), now: new Date(2026, 8, 25, 11, 0, 0) });
   assert.deepEqual(listRecords().map((r) => r.state.importId), [b.importId, a.importId]);
+});
+
+test('kb import store：包拷的是读到、对过指纹的那一份（读完之后目录里的包被改了也不影响，审查 I1）；续跑、撤回按 parsed.json 读，不重新校验', () => {
+  const dir = writePackage({ faqs: [faq('f1', '课程怎么退款')] });
+  const original = readFileSync(join(dir, 'faqs.jsonl'), 'utf-8');
+  const pkg = loadPackage(dir);
+  writeFileSync(join(dir, 'faqs.jsonl'), JSON.stringify(faq('f1', '课程怎么退款', '被偷偷改过的答案')));
+  const rec = createRecord({ region, org, kb, pkg });
+  assert.equal(readFileSync(join(rec.dir, 'package', 'faqs.jsonl'), 'utf-8'), original);
+  assert.equal(mode(join(rec.dir, 'package', 'parsed.json')), 0o600);
+  const back = loadRecord(rec.importId);
+  assert.deepEqual(back.pkg.faqs, [{ key: 'f1', question: '课程怎么退款', answer: '课程怎么退款的答案。' }]);
+  // 记录里的包和状态对不上（被人改过）就不认
+  writeFileSync(join(rec.dir, 'package', 'parsed.json'), JSON.stringify({ ...JSON.parse(readFileSync(join(rec.dir, 'package', 'parsed.json'), 'utf-8')), fingerprint: 'x' }));
+  assert.throws(() => loadRecord(rec.importId), (e) => e.code === 'kb_import_corrupt');
+});
+
+test('kb import store：记录目录里的 .DS_Store、锁文件这些不是目录的，列记录、读备份时跳过（审查 I5）', () => {
+  const rec = createRecord({ region, org, kb, pkg: loadPackage(writePackage({ faqs: [faq('f1', 'q')] })) });
+  saveBackupDoc(rec.dir, { detail: { id: 501, name: '手册.pdf' }, paragraphs: [], original: null });
+  writeFileSync(join(rec.dir, 'backup', 'docs', '.DS_Store'), 'x');
+  mkdirSync(join(rec.dir, 'backup', 'docs', 'not-an-id'));
+  for (const d of [join(process.env.MD_HOME, 'kb-imports'), join(process.env.MD_HOME, 'kb-imports', 'k1'), join(rec.dir, '..')]) writeFileSync(join(d, '.DS_Store'), 'x');
+  assert.deepEqual(readBackupDocs(rec.dir).map((d) => d.detail.id), [501]);
+  assert.deepEqual(listRecords().map((r) => r.state.importId), [rec.importId]);
+});
+
+test('kb import store：本机导入记录认下的 id（导入建的、撤回重建的）按库汇总；同一个包没撤回的导入找得到', () => {
+  const pkg = loadPackage(writePackage({ faqs: [faq('f1', 'q')] }));
+  const a = createRecord({ region, org, kb, pkg });
+  saveState(a.dir, { ...a.state, faqIds: { f1: 90001 }, docIds: { d1: 9001 }, revoke: { faqIds: { 7002: 90005 }, docIds: {} } });
+  const other = createRecord({ region, org, kb: { id: `bbbb${KB_FAQ.slice(4)}`, name: '别的库' }, pkg });
+  saveState(other.dir, { ...other.state, faqIds: { f1: 1 } });
+  const ids = claimedIds('k1', KB_FAQ);
+  assert.deepEqual([[...ids.faq].sort(), [...ids.doc]], [[90001, 90005], [9001]]);
+  assert.equal(activeImport('k1', KB_FAQ, pkg.fingerprint).state.importId, a.importId);
+  saveState(a.dir, { ...loadRecord(a.importId).state, status: 'revoked' });
+  assert.equal(activeImport('k1', KB_FAQ, pkg.fingerprint), null);
+});
+
+test('kb import store：一个库同一时间只能有一个 md 在写——锁着就报 kb_locked（退出码 5）；解锁后能再锁；锁的主人不在了就接过来', () => {
+  const release = lockKb('k1', KB_FAQ, '导入 a');
+  assert.throws(() => lockKb('k1', KB_FAQ, '导入 b'), (e) => e.code === 'kb_locked' && e.exitCode === 5 && e.message.includes(`pid ${process.pid}`) && e.message.includes('导入 a'));
+  lockKb('k1', `cccc${KB_FAQ.slice(4)}`, '别的库')();
+  release();
+  const again = lockKb('k1', KB_FAQ, '导入 b');
+  again();
+  const file = join(process.env.MD_HOME, 'kb-imports', 'k1', KB_FAQ.slice(0, 8), '.lock');
+  writeFileSync(file, JSON.stringify({ pid: spawnSync(process.execPath, ['-e', '']).pid, what: '崩掉的导入' }));
+  const taken = lockKb('k1', KB_FAQ, '导入 c');
+  assert.equal(JSON.parse(readFileSync(file, 'utf-8')).pid, process.pid);
+  taken();
+  assert.equal(existsSync(file), false);
 });

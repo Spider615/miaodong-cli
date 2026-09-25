@@ -1,5 +1,5 @@
 // 知识库的写接口（spec 3b §2.1），以及备份要用的原始读取。只有 md kb import / revoke 用它：查 case 的命令一个都不 import 这里。
-// 参数照 09-25 从控制台前端代码（1.18.4）核对的来。两个「新建」都不返回 id：调用方按快照对账找回 id（3b §2.1）。
+// 参数照 09-25 从控制台前端代码（1.18.4）核对的来。两个「新建」都不返回 id：调用方按请求前后的差集认 id（src/kb-ops.mjs）。
 import { request } from './http.mjs';
 import { FAQ_FILTER, PAGE_SIZE, allPages, pageOf } from './kb.mjs';
 
@@ -39,13 +39,13 @@ export async function updateAbstract(identity, orgId, kbId, docId, abstract) {
   await post(identity, orgId, '/api/knowledge-base/file/update-abstract', { knowledgeBaseId: kbId, docId, abstract });
 }
 
-// 备份用：FAQ 的原始行（带素材字段），全部分页
+// 预演、备份、删之前核对用：FAQ 的原始行（带素材、标签字段），全部分页，列表不完整就报错
 export async function listFaqRows(identity, orgId, kbId) {
   return allPages(async (current) => pageOf(await request(identity, '/api/qa/list', {
     method: 'POST',
     query: { orgId },
     body: { knowledgeBaseId: kbId, current, pageSize: PAGE_SIZE, filterType: FAQ_FILTER.ALL, sortType: 'DEFAULT' },
-  })));
+  })), { checked: true });
 }
 
 // 备份用：文件详情的原始字段（原文件地址 docUrl、标签、摘要、段落数）
@@ -53,11 +53,11 @@ export async function docDetailRaw(identity, orgId, kbId, docId) {
   return (await request(identity, '/api/knowledge-base/file/details', { query: { orgId, knowledgeBaseId: kbId, docId } }))?.data ?? {};
 }
 
-// 备份用：一个文件的全部段落原样
+// 备份、续写用：一个文件的全部段落原样，列表不完整就报错
 export async function listParagraphRows(identity, orgId, kbId, docId) {
   return allPages(async (current) => pageOf(await request(identity, '/api/knowledge-base/file/paragraphs', {
     query: { orgId, knowledgeBaseId: kbId, id: String(docId), current, pageSize: PAGE_SIZE },
-  })));
+  })), { checked: true });
 }
 
 // 下载原文件：地址在对象存储上，不带身份（绝不能把 token 带给别的主机）

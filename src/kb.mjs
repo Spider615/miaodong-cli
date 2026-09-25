@@ -5,6 +5,7 @@
 //   相似度检查的 id 叫 qaId：这里统一成一套。
 import { request } from './http.mjs';
 import { asArray } from './api.mjs';
+import { MdError } from './errors.mjs';
 
 export const FAQ_FILTER = Object.freeze({ ALL: 0, REVIEWED: 1, PENDING: 2 });
 // 服务端 pageSize 给到 500 都照给（spec §2.1，09-25）：取 200，2725 条的大库十几次请求读完
@@ -49,16 +50,28 @@ export function normalizeFaq(raw) {
   };
 }
 
-// 服务端可能把每页封顶在比 pageSize 小的条数：有 page.total 时按它判断读没读完，没有才看这一页满没满
-export async function allPages(fetchPage) {
+// 服务端可能把每页封顶在比 pageSize 小的条数：有 page.total 时按它判断读没读完，没有才看这一页满没满。
+// checked：写库时认 id 用的列表必须完整——翻页不稳（有重复、有漏的）会让库里原有的条目看起来像新出现的，
+// 被认成这次建的（3b 整支审查）。所以有重复 id、或者条数和 page.total 对不上，就报错，不拿半截列表去认
+export async function allPages(fetchPage, { checked = false } = {}) {
   const rows = [];
+  let lastTotal = null;
   for (let current = 1; current <= MAX_PAGES; current++) {
     const { list, total } = await fetchPage(current);
     rows.push(...list);
+    if (Number.isFinite(total)) lastTotal = total;
     if (!list.length) break;
     if (Number.isFinite(total) && total > 0) {
       if (rows.length >= total) break;
     } else if (list.length < PAGE_SIZE) break;
+  }
+  if (checked) {
+    const ids = new Set(rows.map((r) => String(r?.id)));
+    if (ids.size !== rows.length || (lastTotal !== null && ids.size !== lastTotal)) {
+      throw new MdError('kb_list_unstable', `知识库列表翻页不稳：读到 ${rows.length} 行、${ids.size} 个不同的 id，秒懂说一共 ${lastTotal ?? '（没说）'} 条`, {
+        hint: '可能有人正在改这个库，或者秒懂那边不稳；过一会儿再接着做（写库时拿不完整的列表去认 id 会认错）',
+      });
+    }
   }
   return rows;
 }
@@ -79,12 +92,12 @@ export async function faqMetrics(identity, orgId, kbId) {
   return { total: num(d.total), reviewed: num(d.reviewed), unreviewed: num(d.unreviewed) };
 }
 
-export async function listFaqs(identity, orgId, kbId, { filter = FAQ_FILTER.ALL } = {}) {
+export async function listFaqs(identity, orgId, kbId, { filter = FAQ_FILTER.ALL, checked = false } = {}) {
   const rows = await allPages(async (current) => pageOf(await request(identity, '/api/qa/list', {
     method: 'POST',
     query: { orgId },
     body: { knowledgeBaseId: kbId, current, pageSize: PAGE_SIZE, filterType: filter, sortType: 'DEFAULT' },
-  })));
+  })), { checked });
   return rows.map(normalizeFaq);
 }
 
@@ -108,10 +121,10 @@ export async function checkSimilarity(identity, orgId, kbId, question) {
   return asArray(payload?.data).map(normalizeFaq);
 }
 
-export async function listFiles(identity, orgId, kbId) {
+export async function listFiles(identity, orgId, kbId, { checked = false } = {}) {
   const rows = await allPages(async (current) => pageOf(await request(identity, '/api/knowledge-base/file/list', {
     query: { orgId, knowledgeBaseId: kbId, current, pageSize: PAGE_SIZE },
-  })));
+  })), { checked });
   return rows.map((f) => ({ id: num(f.id), name: str(f.name), extension: str(f.extension), status: str(f.status) }));
 }
 

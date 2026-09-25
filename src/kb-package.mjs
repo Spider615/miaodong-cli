@@ -189,7 +189,8 @@ export function readPackage(dir) {
 
   const hasOps = FILES.some((f) => texts[f] !== null && texts[f].trim() !== '');
   if (!hasOps) errors.push('导入包里没有任何操作：faqs.jsonl、docs.jsonl、deletes.jsonl 至少要有一条');
-  return { dir, kb: head.kb, source: head.source, faqs, docs, deletes, fingerprint, errors };
+  // raw：读到、算指纹的原文。导入记录拷的就是它，不再回头读目录（确认那一次运行里包被改了也不会拷错，审查 I1）
+  return { dir, kb: head.kb, source: head.source, faqs, docs, deletes, fingerprint, raw: texts, errors };
 }
 
 export function loadPackage(dir) {
