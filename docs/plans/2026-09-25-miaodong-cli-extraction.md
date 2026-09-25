@@ -950,7 +950,7 @@ test('release：扫出本机路径、身份串和 token；正常的 ~/ 路径、
   const dir = tempHome();
   writeFileSync(join(dir, 'a.md'), '装到 ~/.local/bin/md；请求头是 Authorization: `Bearer ${identity.token}`');
   assert.deepEqual(scanForLeaks([dir], dir), []);
-  writeFileSync(join(dir, 'b.mjs'), "const p = '/Users/somebody/x'; const t = 'Bearer abcdefghijklmnopqrstuvwxyz0123'; const a = 'md-auth:eyJhbGciOiJIUzI1NiJ9abcd';");
+  writeFileSync(join(dir, 'b.mjs'), `const p = '/Users/somebody/x'; const t = 'Bearer ${'abcdefghij'.repeat(3)}'; const a = 'md-auth:${'eyJ'}${'Q'.repeat(24)}';`); // 假 token 拼出来：发版扫描查全部会进仓库的文件
   assert.deepEqual(scanForLeaks([dir], dir).map((h) => h.what).sort(), ['token', '本机路径', '身份串'].sort());
 });
 ```

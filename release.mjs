@@ -1,18 +1,21 @@
 // npm run release：发版。先查前提（Node 够新、设了 MD_E2E_NODE、工作区干净），
-// 再跑全部测试（含 Node 18 上的产物测试）→ 构建 dist/md.mjs → 扫 dist/ 和 skill/ 有没有本机路径、身份串、token → 列出改了什么。
+// 再跑全部测试（含 Node 18 上的产物测试）→ 构建 dist/md.mjs → 扫本机路径（dist/、skill/）和身份串、token（全部会进仓库的文件）→ 列出改了什么。
 // 不提交、不推送：人看过 git diff 再提交 dist/md.mjs，再推。同事 git pull 拿到的就是这一版。
 import { execFileSync, spawnSync } from 'node:child_process';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildBundle } from './build.mjs';
 import { testNodeProblem } from './scripts/check-node.mjs';
 
 const REPO = dirname(fileURLToPath(import.meta.url));
-const LEAKS = [
-  [/\/Users\/[^/\s'"`]+/, '本机路径'],
+// 本机路径只查 dist/ 和 skill/：同事直接用到的就是这两处；文档和历史里的本机路径是有意留的（私有仓库）。
+// 身份串、token、JWT 查全部会进仓库的文件：同事 clone 下来的是整个仓库（审查 M2）
+const LOCAL = [[/\/Users\/[^/\s'"`]+/, '本机路径']];
+const SECRETS = [
   [/md-auth:[A-Za-z0-9+/=]{16,}/, '身份串'],
   [/Bearer [A-Za-z0-9._-]{20,}/, 'token'],
+  [/eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+/, 'JWT'],
 ];
 
 // 发版前提（审查 M3）：Node 够新（测试要它）；设了 MD_E2E_NODE（产物要在同事默认的 Node 18 上验证）；
@@ -30,23 +33,28 @@ export function releaseBlockers({ root = REPO, env = process.env, nodeVersion = 
   return blockers;
 }
 
-export function scanForLeaks(dirs, root = REPO) {
+// 会进仓库的文件（相对 root 的路径）：已跟踪的，加上没被 .gitignore 忽略的新文件
+export function committableFiles(root = REPO) {
+  return execFileSync('git', ['-C', root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], { encoding: 'utf-8' })
+    .split('\0')
+    .filter(Boolean);
+}
+
+// 报出来的只有位置和开头几个字符：扫到的要是真 token，整段打到终端里（AI 看得到）本身就是一次泄露
+export function scanForLeaks(root = REPO, files = committableFiles(root)) {
   const hits = [];
-  const walk = (dir) => {
-    for (const name of readdirSync(dir)) {
-      const path = join(dir, name);
-      if (statSync(path).isDirectory()) {
-        walk(path);
-        continue;
-      }
-      const text = readFileSync(path, 'utf-8');
-      for (const [re, what] of LEAKS) {
-        const m = text.match(re);
-        if (m) hits.push({ file: relative(root, path), what, sample: m[0].slice(0, 40) });
-      }
+  for (const file of files) {
+    const path = join(root, file);
+    if (!existsSync(path) || !statSync(path).isFile()) continue; // 删了还没提交的文件
+    const text = readFileSync(path, 'utf-8');
+    const rules = /^(dist|skill)\//.test(file) ? [...LOCAL, ...SECRETS] : SECRETS;
+    for (const [re, what] of rules) {
+      const m = re.exec(text);
+      if (!m) continue;
+      const line = text.slice(0, m.index).split('\n').length;
+      hits.push({ file, line, what, sample: what === '本机路径' ? m[0] : `${m[0].slice(0, 12)}…（共 ${m[0].length} 个字符）` });
     }
-  };
-  for (const dir of dirs) walk(dir);
+  }
   return hits;
 }
 
@@ -59,9 +67,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const t = spawnSync('npm', ['test'], { cwd: REPO, stdio: 'inherit' });
   if (t.status !== 0) process.exit(t.status ?? 1);
   const { outfile, tag } = await buildBundle();
-  const hits = scanForLeaks([join(REPO, 'dist'), join(REPO, 'skill')]);
+  const hits = scanForLeaks();
   if (hits.length) {
-    for (const h of hits) console.error(`❌ ${h.file}：${h.what}（${h.sample}）`);
+    for (const h of hits) console.error(`❌ ${h.file}:${h.line}：${h.what}（${h.sample}）`);
     process.exit(1);
   }
   console.log(`已构建 ${relative(REPO, outfile)}（${tag}），扫描干净。这次的改动：`);
