@@ -129,3 +129,191 @@ export function buildExpect(expect, { events }) {
   });
   return { assertions, errors };
 }
+
+const FIELDS = new Set(['name', 'trigger', 'text', 'image', 'event', 'data', 'input', 'history', 'vars', 'expect', 'scenario', 'dimension', 'strict', 'mocks']);
+const TYPE_WORD = { string: '字符串', number: '数字', boolean: '布尔值', array: '数组' };
+
+// 值和变量类型对不上时说要什么；tag、datetime 等类型不核对
+function typeProblem(value, type) {
+  const want = typeof type === 'string' ? type : type?.type;
+  if (!TYPE_WORD[want]) return null;
+  const ok = want === 'array' ? Array.isArray(value) : typeof value === want;
+  return ok ? null : `要${TYPE_WORD[want]}`;
+}
+
+// 场景树拍平：每个节点带路径（父/子）
+export function flattenTree(tree) {
+  const out = [];
+  const walk = (nodes, parent) => {
+    for (const n of asArray(nodes)) {
+      const name = String(n?.name ?? '');
+      const path = String(n?.path || (parent ? `${parent}/${name}` : name));
+      out.push({ id: n?.id, name, path, ownCaseCount: Number(n?.ownCaseCount) || 0 });
+      walk(n?.children, path);
+    }
+  };
+  walk(tree, '');
+  return out;
+}
+
+// 带「/」按路径找，否则按名字找；同名的要求写路径
+export function resolveScenario(nodes, query) {
+  const hits = nodes.filter((n) => (query.includes('/') ? n.path === query : n.name === query));
+  if (hits.length === 1) return { hit: hits[0] };
+  if (hits.length > 1) return { error: `场景「${query}」有 ${hits.length} 个同名，写完整路径（父/子）：${hits.map((n) => n.path).join('、')}` };
+  return { error: `没有场景「${query}」` };
+}
+
+// 触发：简写或 input → [triggerType, triggerInputs]。不写 trigger 时按简写推（spec §6.3）
+function triggerOf(v, events, errors) {
+  const shorthand = ['text', 'image', 'event', 'data'].filter((k) => v[k] !== undefined);
+  if (v.trigger !== undefined && !TRIGGER_TYPES.includes(v.trigger)) {
+    errors.push(`trigger「${v.trigger}」不是秒懂的触发类型`);
+    return [v.trigger, {}];
+  }
+  if (v.input !== undefined) {
+    if (shorthand.length) errors.push(`input 不能和 ${shorthand.join('、')} 一起写`);
+    if (v.trigger === undefined) errors.push('写了 input 就要写 trigger');
+    if (!isObject(v.input)) {
+      errors.push('input 要写成对象（完整的 triggerInputs）');
+      return [v.trigger, {}];
+    }
+    if (v.trigger === 'canvas-event-trigger' && events && !events.some((e) => e.eventId === v.input.eventId)) errors.push(`input.eventId「${v.input.eventId}」在这个智能体里没有`);
+    return [v.trigger, v.input];
+  }
+  const trigger = v.trigger ?? (v.event !== undefined ? 'canvas-event-trigger' : v.image !== undefined ? 'receive-image-message' : v.text !== undefined ? 'receive-text-message' : undefined);
+  const only = (allowed) => {
+    const extra = shorthand.filter((k) => !allowed.includes(k));
+    if (extra.length) errors.push(`${trigger} 用例不写 ${extra.join('、')}`);
+  };
+  if (trigger === 'receive-text-message') {
+    only(['text']);
+    if (typeof v.text !== 'string' || !v.text.trim()) errors.push('文本用例要写 text');
+    return [trigger, { text: v.text }];
+  }
+  if (trigger === 'receive-image-message') {
+    // 用户另发的文字属于聊天历史（IM 里文字和图片是两条消息）；triggerInputs.text 在秒懂里是图片自带的说明文字
+    if (v.text !== undefined) errors.push('图片用例不写 text：用户另发的文字写进 history（text 在秒懂里是图片自带的说明文字）');
+    only(['image', 'text']);
+    if (typeof v.image !== 'string' || !v.image.trim()) errors.push('图片用例要写 image（最后一张图的 URL）');
+    return [trigger, { imageUrl: v.image }];
+  }
+  if (trigger === 'canvas-event-trigger') {
+    only(['event', 'data']);
+    if (v.data !== undefined && !isObject(v.data)) errors.push('data 要写成 {事件变量名: 值}');
+    if (!events) {
+      errors.push(`取不到事件列表，没法把「${v.event}」换成 id`);
+      return [trigger, {}];
+    }
+    const { hit, error } = byName(events, String(v.event ?? ''), '事件');
+    if (error) {
+      errors.push(error);
+      return [trigger, {}];
+    }
+    const variables = new Map(asArray(hit.variables).map((x) => [String(x?.name ?? ''), x]));
+    const data = isObject(v.data) ? v.data : {};
+    for (const [key, value] of Object.entries(data)) {
+      if (!variables.has(key)) errors.push(`事件「${hit.name}」没有变量「${key}」`);
+      else {
+        const problem = typeProblem(value, variables.get(key).type);
+        if (problem) errors.push(`事件变量「${key}」${problem}`);
+      }
+    }
+    return [trigger, { eventId: hit.eventId, data }];
+  }
+  if (trigger === undefined) errors.push('缺触发：写 text、image、event 之一，或者 trigger + input');
+  else errors.push(`「${trigger}」没有简写，要写 input（完整的 triggerInputs）`);
+  return [trigger, {}];
+}
+
+// 会话数据：history 写进「消息历史」，vars 按名字换成 id
+function sessionOf(v, vars, errors) {
+  const session = {};
+  if (v.history !== undefined) {
+    const history = historyValue(v.history);
+    if (history.error) errors.push(history.error);
+    else if (!vars) errors.push('取不到会话变量列表，history 写不进去');
+    else {
+      const { hit, error } = byName(vars, HISTORY_VAR, '会话变量');
+      if (error) errors.push(`${error}，history 写不进去（可以用 vars 写进别的变量）`);
+      else session[hit.id] = history.value;
+    }
+  }
+  if (v.vars !== undefined) {
+    if (!isObject(v.vars)) errors.push('vars 要写成 {会话变量名: 值}');
+    else if (!vars) errors.push('取不到会话变量列表，没法把 vars 的名字换成 id');
+    else {
+      for (const [varName, value] of Object.entries(v.vars)) {
+        const { hit, error } = byName(vars, varName, '会话变量');
+        if (error) {
+          errors.push(error);
+          continue;
+        }
+        if (hit.id in session) {
+          errors.push(`「${varName}」写了两遍（history 就是写进「${HISTORY_VAR}」的）`);
+          continue;
+        }
+        const problem = typeProblem(value, hit.type);
+        if (problem) errors.push(`会话变量「${varName}」${problem}`);
+        else session[hit.id] = value;
+      }
+    }
+  }
+  return session;
+}
+
+// 一行 → 一条用例（create 的请求体）。ctx.scenarios 是 null 表示这个区没有场景树
+export function buildCase(row, { events, vars, scenarios }) {
+  const v = row.value;
+  const errors = [];
+  const warnings = [];
+  const unknown = Object.keys(v).filter((k) => !k.startsWith('_') && !FIELDS.has(k));
+  if (unknown.length) errors.push(`不认识的字段：${unknown.join('、')}（自己的备注写在 _ 开头的字段里）`);
+  const name = typeof v.name === 'string' ? v.name.trim() : '';
+  if (!name) errors.push('缺 name');
+  const [triggerType, triggerInputs] = triggerOf(v, events, errors);
+  const sessionMemoryCustomData = sessionOf(v, vars, errors);
+  const expect = buildExpect(v.expect, { events });
+  errors.push(...expect.errors);
+  if (v.expect === undefined) warnings.push('没写 expect：没有断言，跑了只能看实际回复');
+  let scenarioNodeId = null;
+  if (v.scenario !== undefined) {
+    if (typeof v.scenario !== 'string' || !v.scenario.trim()) errors.push('scenario 要写场景名或路径');
+    else if (scenarios === null) warnings.push('这个区没有场景树，scenario 不挂');
+    else {
+      const { hit, error } = resolveScenario(scenarios, v.scenario.trim());
+      if (error) errors.push(error);
+      else scenarioNodeId = hit.id;
+    }
+  }
+  if (v.dimension !== undefined && typeof v.dimension !== 'string') errors.push('dimension 要写成字符串');
+  if (v.strict !== undefined && typeof v.strict !== 'boolean') errors.push('strict 要写成 true 或 false');
+  const mocks = v.mocks ?? {};
+  const mocksOk = isObject(mocks) && Object.keys(mocks).every((k) => ['plugin', 'sql'].includes(k)) && [mocks.plugin, mocks.sql].every((m) => m === undefined || Array.isArray(m));
+  if (!mocksOk) errors.push('mocks 要写成 {plugin: [...], sql: [...]}');
+  const testCase = {
+    name, triggerType, triggerInputs, sessionMemoryCustomData,
+    pluginMockOutputs: mocksOk && mocks.plugin ? mocks.plugin : [],
+    sqlDbMockOutputs: mocksOk && mocks.sql ? mocks.sql : [],
+    testNodeOutputAssertions: [],
+    canvasActionOutputAssertions: expect.assertions,
+    isStrictVerify: v.strict === true,
+    ...(typeof v.dimension === 'string' ? { dimension: v.dimension } : {}),
+  };
+  return { testCase, scenarioNodeId, errors, warnings };
+}
+
+// 全部行：逐行生成，再查 name 重复（文件里、和集里已有的）。有错误就一条都不写（spec §6.3 第 1 步）
+export function buildCases(rows, ctx, { existingNames = [] } = {}) {
+  const built = rows.map((row) => ({ line: row.line, ...buildCase(row, ctx) }));
+  const lines = new Map();
+  for (const b of built) if (b.testCase.name) lines.set(b.testCase.name, [...(lines.get(b.testCase.name) ?? []), b.line]);
+  const existing = new Set(existingNames);
+  for (const b of built) {
+    const at = lines.get(b.testCase.name) ?? [];
+    if (at.length > 1) b.errors.push(`name「${b.testCase.name}」在第 ${at.join('、')} 行重复`);
+    if (existing.has(b.testCase.name)) b.errors.push(`name「${b.testCase.name}」集里已经有了`);
+  }
+  const errors = built.flatMap((b) => b.errors.map((reason) => ({ line: b.line, name: b.testCase.name, reason })));
+  return { built, errors };
+}
