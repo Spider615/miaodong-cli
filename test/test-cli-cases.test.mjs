@@ -122,3 +122,81 @@ test('import --from-file：场景计数和挂的条数对不上就提醒（旧�
   assert.match(r.stdout, /提交 5 · 回读 5 · 挂场景 5/);
   assert.match(r.stdout, /场景「退款」用例数变了 6，这次挂的是 5 条/);
 });
+
+const EDIT = `export default ({ cases, h }) => {
+  for (const c of h.pick(/^退款/)) c.canvasActionOutputAssertions = h.expect({ event: '发送4.0', params: { text: '应说明退款流程' } });
+  h.log('退款类改成核对发送事件');
+};`;
+
+async function seedExternal(h) {
+  const r = await md(['test', 'import', '外部回归', '--bot', '179cd443', '--from-file', jsonl(h, [
+    { name: '退款-01', text: '我想退款', expect: '应说明退款流程' },
+    { name: '退款-02', text: '课程能退吗', expect: '应说明退课流程' },
+    { name: '咨询-01', text: '怎么报名', expect: '应给报名链接' },
+  ], 'seed.jsonl')], h);
+  assert.equal(r.code, 0, r.stderr);
+}
+const editFile = (h, body = EDIT, file = 'edit.mjs') => {
+  const path = join(h, file);
+  writeFileSync(path, body);
+  return path;
+};
+const planCode = (stdout) => stdout.match(/计划码：([0-9a-f]{8})/)?.[1];
+
+test('edit：默认预演，列出改了哪几条、哪些字段，给计划码；什么都不写', async () => {
+  reset();
+  const h = home();
+  await seedExternal(h);
+  const writes = fake.state.log.length;
+  const r = await md(['test', 'edit', '外部回归', editFile(h), '--bot', '179cd443'], h);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /退款类改成核对发送事件/);
+  assert.match(r.stdout, /要改 2 条（共 3 条）/);
+  assert.match(r.stdout, /退款-01：断言/);
+  assert.ok(planCode(r.stdout));
+  assert.match(r.stdout, /这是预演，什么都没改/);
+  assert.equal(fake.state.log.length, writes);
+});
+
+test('edit --confirm：先备份，再逐条全量 update，回读核对；计划码对不上退出码 5', async () => {
+  reset();
+  const h = home();
+  await seedExternal(h);
+  const file = editFile(h);
+  const code = planCode((await md(['test', 'edit', '外部回归', file, '--bot', '179cd443'], h)).stdout);
+  const wrong = await md(['test', 'edit', '外部回归', file, '--bot', '179cd443', '--confirm', '00000000'], h);
+  assert.equal(wrong.code, 5);
+  assert.match(wrong.stderr, /计划码对不上/);
+  const r = await md(['test', 'edit', '外部回归', file, '--bot', '179cd443', '--confirm', code], h);
+  assert.equal(r.code, 0, r.stderr);
+  const backup = r.stdout.match(/备份：(\S+)/)[1];
+  assert.ok(existsSync(backup));
+  assert.equal(JSON.parse(readFileSync(backup, 'utf-8')).cases.length, 3);
+  assert.equal(fake.state.posts.update.length, 2);
+  for (const body of fake.state.posts.update) for (const key of ['name', 'triggerType', 'triggerInputs', 'sessionMemoryCustomData', 'canvasActionOutputAssertions']) assert.ok(key in body, key);
+  assert.equal(casesIn('外部回归').find((c) => c.name === '退款-01').canvasActionOutputAssertions[0].verifyPayload.type, 'canvas-event-action');
+  assert.match(r.stdout, /已改 2 条/);
+});
+
+test('edit：预演之后集里的用例变了，原来的计划码对不上，什么都不写', async () => {
+  reset();
+  const h = home();
+  await seedExternal(h);
+  const file = editFile(h);
+  const code = planCode((await md(['test', 'edit', '外部回归', file, '--bot', '179cd443'], h)).stdout);
+  casesIn('外部回归').find((c) => c.name === '退款-02').triggerInputs.text = '页面上被人改了';
+  const r = await md(['test', 'edit', '外部回归', file, '--bot', '179cd443', '--confirm', code], h);
+  assert.equal(r.code, 5);
+  assert.equal(fake.state.posts.update, undefined);
+});
+
+test('edit：脚本改了不能改的字段或把 name 改成重名，什么都不写，列出问题', async () => {
+  reset();
+  const h = home();
+  await seedExternal(h);
+  const r = await md(['test', 'edit', '外部回归', editFile(h, `export default ({ cases }) => { cases[0].scenarioNodeId = 'sn-x'; cases[1].name = cases[2].name; };`, 'bad.mjs'), '--bot', '179cd443'], h);
+  assert.equal(r.code, 1);
+  assert.match(r.stdout, /改了不能改的字段：scenarioNodeId/);
+  assert.match(r.stdout, /有 2 条重名/);
+  assert.equal(fake.state.posts.update, undefined);
+});
