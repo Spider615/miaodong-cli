@@ -16,6 +16,7 @@ import { resolveBot } from '../target.mjs';
 import { createTestSet, deleteCases, deleteTestSet, importExecs, listCases, listTestSets, updateCase } from '../testcenter.mjs';
 import { buildIdMap, execIdOfCase, idProblems, leftoverIds, remapCase } from '../testcases.mjs';
 import { mergeSources, resolveTestSet, testTarget } from '../test-common.mjs';
+import { importFile } from './test-import-file.mjs';
 import { extractTriggerTextFromSnapshot } from '../../../apps/api/lib/miaodong/badcase-normalize.ts';
 
 // --from-execs：md exec 保存的 JSONL（第一行是查询条件，带着源智能体），或者逗号 / 空格隔开的执行 id
@@ -103,9 +104,15 @@ async function remapInto(t, testSetId, cases, { sourceEvents, sourceVars, target
 export async function importCmd(args) {
   const t = await testTarget(args);
   const name = String(args._[0] ?? '').trim();
-  if (!name) throw usage('缺测试集：md test import <集> --bot <智能体> --from-execs <文件或执行 id>');
+  if (!name) throw usage('缺测试集：md test import <集> --bot <智能体> --from-execs <文件或执行 id> | --from-file <cases.jsonl>');
   const from = strArg(args, 'from-execs');
-  if (!from) throw usage('缺 --from-execs：给 md exec 保存的 .jsonl，或者执行 id（逗号隔开）');
+  const fromFile = strArg(args, 'from-file');
+  if (from && fromFile) throw usage('--from-execs 和 --from-file 只能给一个');
+  if (fromFile) {
+    for (const flag of ['from-bot', 'allow-preflight-errors']) if (args[flag] !== undefined) throw usage(`--${flag} 只用于 --from-execs`);
+    return importFile(t, { name, file: fromFile, into: boolArg(args, 'into') });
+  }
+  if (!from) throw usage('缺 --from-execs 或 --from-file', '执行记录：给 md exec 保存的 .jsonl 或执行 id；外部用例：给 cases.jsonl（格式见 skill 的 references/test-cases.md）');
   const into = boolArg(args, 'into');
   const src = readExecSource(from);
   const source = await sourceOf(t, src.header, strArg(args, 'from-bot'));

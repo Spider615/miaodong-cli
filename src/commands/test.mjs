@@ -14,6 +14,7 @@ const USAGE = [
   'md test cases <集> --bot <智能体> [--out <文件.jsonl>]    用例汇总；完整用例存本机',
   'md test tree --bot <智能体>                             场景树和各节点的用例数',
   'md test import <集> --bot <智能体> --from-execs <.jsonl | 执行id,…> [--from-bot <源智能体>] [--into] [--allow-preflight-errors]   从执行记录导入；跨智能体按名字换 id；取不到事件 / 会话变量列表时默认不写',
+  'md test import <集> --bot <智能体> --from-file <cases.jsonl> [--into]   外部用例：本地先校验全部，有错一条都不写；先写 1 条读回来核对，再批量写、挂场景、审计',
   'md test run <集> --bot <智能体> [--version vX] [--rounds 1] [--concurrency 5] [--name <任务名>] [--allow-preflight-errors] [--confirm <码>]   跑回归：先跑前检查和预估，超门槛或估不出要用户确认',
   'md test status [<任务>] --bot <智能体> [--set <集>] [--wait] [--timeout 540]   进度；--wait 盯着跑，超出额度自动暂停，跑完记账',
   'md test stop <任务> --bot <智能体>                 暂停（秒懂没有取消）',
@@ -22,7 +23,7 @@ const USAGE = [
 ];
 
 export const test = {
-  summary: '测试中心：看测试集 / 用例 / 场景树，从执行记录导入，跑回归（超门槛要用户确认），看进度和结果，暂停，删测试集',
+  summary: '测试中心：看测试集 / 用例 / 场景树，从执行记录或外部文件导入，批量改用例，跑回归（超门槛要用户确认），看进度和结果，暂停，删测试集',
   usage: USAGE.join('\n'),
   async run(args) {
     const sub = args._[0];
