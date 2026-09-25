@@ -104,3 +104,26 @@ test('产物能跑 md test（测试中心接口、换 id、xlsx 一起打进去�
     await server.close();
   }
 });
+
+test('产物能导外部用例、批量改用例（Node 18 上跑改动脚本、structuredClone）', async () => {
+  const { server } = await startTestCenterServer();
+  try {
+    const home = tempHome();
+    seedIdentity(home, { key: 'k1', label: '测试区', origin: server.origin, token: 't', orgs: [{ id: 'org-1', name: '兴趣岛平台' }], currentOrgId: 'org-1' });
+    const file = join(home, 'cases.jsonl');
+    writeFile(file, `${JSON.stringify({ name: '退款-01', text: '我想退款', expect: '应说明退款流程' })}\n${JSON.stringify({ name: '事件-01', event: '延时回复', data: { text: '课程怎么退' }, expect: { handover: true } })}\n`);
+    const imported = await runCli(['test', 'import', '外部', '--bot', '179cd443', '--from-file', file], { home, bundle });
+    assert.equal(imported.code, 0, imported.stderr);
+    assert.match(imported.stdout, /提交 2 · 回读 2/);
+    const script = join(home, 'edit.mjs');
+    writeFile(script, `export default ({ cases, h }) => { for (const c of h.pick('退款-01')) c.canvasActionOutputAssertions = h.expect({ handover: true }); };`);
+    const preview = await runCli(['test', 'edit', '外部', script, '--bot', '179cd443'], { home, bundle });
+    assert.equal(preview.code, 0, preview.stderr);
+    const code = preview.stdout.match(/计划码：([0-9a-f]{8})/)[1];
+    const done = await runCli(['test', 'edit', '外部', script, '--bot', '179cd443', '--confirm', code], { home, bundle });
+    assert.equal(done.code, 0, done.stderr);
+    assert.match(done.stdout, /已改 1 条/);
+  } finally {
+    await server.close();
+  }
+});
