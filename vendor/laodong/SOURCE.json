@@ -22,5 +22,6 @@
     "packages/shared/src/workflow-risk/rules/session.ts",
     "packages/shared/src/workflow-risk/types.ts",
     "packages/shared/src/workflowParser.ts"
-  ]
+  ],
+  "branch": "feat/badcase-historical-canvas"
 }
