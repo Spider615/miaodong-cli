@@ -1,8 +1,9 @@
 // md kb：知识库（spec 3a）。全部只读：看有哪些库、拉到本机、查一句话、查一条执行为什么没召回。子命令分在 kb-*.mjs 里，这里只分发
 import { usage } from '../errors.mjs';
 import { list } from './kb-list.mjs';
+import { pull } from './kb-pull.mjs';
 
-const SUBS = { list };
+const SUBS = { list, pull };
 
 const USAGE = [
   'md kb list [--bot <智能体> [--version vX]] [--region <区>] [--org <企业>]   知识库列表；--bot 只列这个智能体引用的库、各节点怎么挂的、FAQ 未审核数',
