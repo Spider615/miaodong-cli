@@ -1,6 +1,7 @@
 // md test 各子命令共用：目标智能体、按名字 / id 找测试集、本机文件。
 // 本机文件在 $MD_HOME/tests/<区>/<智能体 id 前 8 位>/ 下：
-//   sources/<测试集 id>.json   从执行记录导入时记下的来源（时间、用户消息、线上回复、花费），结果报告的「线上回复」列用它
+//   sources/<测试集 id>.json   从执行记录导入时记下的来源：execs（执行 id → 时间、用户消息、线上回复、花费）、
+//                              byCase（用例 id → 执行 id，用例改了名也对得上）。结果报告的「执行 ID」「线上回复」列用它
 //   tasks/<任务 id>.json       md test run 建的任务：预估、账本那一笔的 id、止损额度
 //   exports/ backups/ results/  导出的用例、删测试集前的备份、结果明细
 
@@ -35,10 +36,18 @@ export async function resolveTestSet(t, query, sets = null) {
 }
 
 const sourcesFile = (t, testSetId) => join(testsDir(t, 'sources'), `${testSetId}.json`);
-export const readSources = (t, testSetId) => readJson(sourcesFile(t, testSetId), {});
-export function mergeSources(t, testSetId, entries) {
+
+// 早先的来源文件整个就是 execs（执行 id → 来源），读的时候认两种格式
+export function readSources(t, testSetId) {
+  const raw = readJson(sourcesFile(t, testSetId), {});
+  if (raw && (raw.execs || raw.byCase)) return { execs: raw.execs ?? {}, byCase: raw.byCase ?? {} };
+  return { execs: raw ?? {}, byCase: {} };
+}
+
+export function mergeSources(t, testSetId, { execs = {}, byCase = {} }) {
   const file = sourcesFile(t, testSetId);
-  writeJson(file, { ...readJson(file, {}), ...entries });
+  const old = readSources(t, testSetId);
+  writeJson(file, { execs: { ...old.execs, ...execs }, byCase: { ...old.byCase, ...byCase } });
   return file;
 }
 

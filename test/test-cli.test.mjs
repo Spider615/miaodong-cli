@@ -126,7 +126,9 @@ test('import：从 md exec 保存的文件导入（来源是另一个智能体�
   assert.deepEqual(Object.keys(cross.sessionMemoryCustomData).sort(), ['tv-flag', 'tv-hist']);
   assert.equal(cross.canvasActionOutputAssertions[1].actionContent.payload.eventId, 'tev-send');
   const sourcesFile = r.stdout.match(/结果报告里对照用：(\S+)/)[1];
-  assert.match(JSON.parse(readFileSync(sourcesFile, 'utf-8'))[CROSS_EXEC].reply, /线上回复 1/);
+  const sources = JSON.parse(readFileSync(sourcesFile, 'utf-8'));
+  assert.match(sources.execs[CROSS_EXEC].reply, /线上回复 1/);
+  assert.equal(sources.byCase[cross.testCaseId], CROSS_EXEC);
 });
 
 test('import：给了 --from-bot 的跨智能体 id 列表，也按名字换 id', async () => {
@@ -389,4 +391,52 @@ test('drop：预演之后集里的用例变了，原来的计划码就对不上�
   assert.match(r.stderr, /计划码对不上/);
   assert.equal(fake.state.sets.length, 1);
   assert.deepEqual(fake.state.log, []);
+});
+
+test('results：被暂停、没跑完的任务，没跑的条目标「未跑」，不说成空跑、不进通过率（审查 I1）', async () => {
+  reset({ perPoll: 0 });
+  seedFinished(seedSet('集', [SAME_EXEC, SAME_EXEC]), 0.02);
+  const h = home();
+  await md(['test', 'run', '集', '--bot', '179cd443'], h);
+  const task = taskOf('集-草稿');
+  await md(['test', 'stop', task, '--bot', '179cd443'], h);
+  const r = await md(['test', 'results', task, '--bot', '179cd443'], h);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /paused · v1\.0\.216 · 0 次 · 通过 0 · ¥0 · 还有 2 条没跑/);
+  assert.doesNotMatch(r.stdout, /空跑|没有真正执行/);
+});
+
+test('results：用例在页面上改了名，执行 id 和线上回复照样对得上（导入时记下了用例 id → 执行，审查 I6）', async () => {
+  reset();
+  const h = home();
+  const file = join(h, 'search.jsonl');
+  writeFileSync(file, execSearchLines({ botId: TARGET_BOT, botName: '【测试测试测试】太极2.0 测试专用版', ids: [SAME_EXEC] }));
+  await md(['test', 'import', '集', '--bot', '179cd443', '--from-execs', file], h);
+  fake.state.cases[0].name = '退款-课程-01';
+  seedFinished(fake.state.sets[0].testSetId, 0.02);
+  await md(['test', 'run', '集', '--bot', '179cd443'], h);
+  const [row] = savedRows((await md(['test', 'results', taskOf('集-草稿'), '--bot', '179cd443'], h)).stdout);
+  assert.deepEqual([row.name, row.execId, row.online], ['退款-课程-01', SAME_EXEC, '发出事件「发送4.0」：线上回复 1']);
+});
+
+test('results --deep：某一条取详情失败，标出来、接着取别的，不让整次白费（审查 M7）', async () => {
+  reset();
+  seedFinished(seedSet('集', [SAME_EXEC, SAME_EXEC]), 0.02);
+  const h = home();
+  await md(['test', 'run', '集', '--bot', '179cd443'], h);
+  const task = taskOf('集-草稿');
+  await md(['test', 'status', task, '--bot', '179cd443'], h);
+  for (const i of fake.state.items.get(task)) Object.assign(i, { executedActions: [], canvasActionOutputAssertionResult: [] });
+  const [first] = fake.state.items.get(task);
+  const original = fake.server.routes['GET /api/canvas/history/details'];
+  fake.server.routes['GET /api/canvas/history/details'] = (req) => (req.query.execId === first.canvasExecId ? { status: 502, body: { message: 'Bad Gateway' } } : original(req));
+  try {
+    const r = await md(['test', 'results', task, '--bot', '179cd443', '--deep'], h);
+    assert.equal(r.code, 0, r.stderr);
+    const rows = savedRows(r.stdout);
+    assert.match(rows.find((x) => x.testExecId === first.canvasExecId).reply, /取详情失败/);
+    assert.equal(rows.find((x) => x.testExecId !== first.canvasExecId).reply, '发出事件「发送4.0」：详情里的回复');
+  } finally {
+    fake.server.routes['GET /api/canvas/history/details'] = original;
+  }
 });

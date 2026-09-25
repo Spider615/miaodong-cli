@@ -157,10 +157,10 @@ export async function importCmd(args) {
     out(`⚠️ ${badNames.length} 条用例对不上这个智能体，md test run 的跑前检查会拦下它们：`);
     for (const b of bad.slice(0, 20)) out(`  - ${b.name}：${b.reason}`);
   }
-  if (src.rows.length) {
-    const file = mergeSources(t, set.testSetId, Object.fromEntries(src.rows.map((r) => [r.execId, sourceEntry(r)])));
-    out(`已记下 ${src.rows.length} 条来源（时间、用户消息、线上回复），结果报告里对照用：${file}`);
-  }
+  // 记下每条新用例对应哪条执行（用例 id 不随改名变，跨智能体换 id 也不变）；从文件导入的再记下时间、用户消息、线上回复
+  const byCase = Object.fromEntries(fresh.map((c) => [c.testCaseId, execIdOfCase(c.name)]).filter(([, execId]) => execId));
+  const file = mergeSources(t, set.testSetId, { execs: Object.fromEntries(src.rows.map((r) => [r.execId, sourceEntry(r)])), byCase });
+  if (src.rows.length) out(`已记下 ${src.rows.length} 条来源（时间、用户消息、线上回复），结果报告里对照用：${file}`);
   out(`下一步：md test run ${set.name} --bot ${shortId(t.botId)}`);
   return EXIT.OK;
 }

@@ -24,7 +24,7 @@ const nowLabel = () => {
 async function unitCost(t, set) {
   const last = (await recentTasks(t, { testSetId: set.testSetId, limit: 20 })).find((x) => x.status === 'finished' && typeof x.averageCostInCny === 'number');
   if (last) return { unit: last.averageCostInCny, basis: `上次跑完的任务「${last.name}」平均每条 ${formatCost(last.averageCostInCny)}` };
-  const costs = Object.values(readSources(t, set.testSetId)).map((s) => s?.cost).filter((c) => typeof c === 'number');
+  const costs = Object.values(readSources(t, set.testSetId).execs).map((s) => s?.cost).filter((c) => typeof c === 'number');
   if (costs.length) {
     const unit = costs.reduce((a, b) => a + b, 0) / costs.length;
     return { unit, basis: `导入来源的 ${costs.length} 条执行平均 ${formatCost(unit)}` };

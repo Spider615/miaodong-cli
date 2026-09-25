@@ -20,15 +20,22 @@ export function replyOfItem(item) {
   return '';
 }
 
-// 空跑：秒懂显示成功，但没有执行、花费为空（spec §2.3 核对 6）
-export const isNoop = (item) => item?.canvasExecAvailable === false && (item?.costInCny === null || item?.costInCny === undefined);
+// 还没跑的条目（任务被暂停或还在跑）：秒懂给的数据和空跑长得一样（未执行、花费为空），只能按条目状态分开（审查 I1）
+const NOT_RUN = new Set(['pending', 'processing', 'running', 'queued', 'waiting']);
+export const isNotRun = (item) => NOT_RUN.has(String(item?.status ?? ''));
 
+// 空跑：跑完了、秒懂显示成功，但没有执行、花费为空（spec §2.3 核对 6）
+export const isNoop = (item) => !isNotRun(item) && item?.canvasExecAvailable === false && (item?.costInCny === null || item?.costInCny === undefined);
+
+// sources 是导入时记下的来源：execs（执行 id → 时间、用户消息、线上回复）和 byCase（用例 id → 执行 id）。
+// 执行 id 先按用例 id 查——用户常在页面上给用例改名，改了名就解析不出来（审查 I6）；查不到再从默认名里解析
 export function itemRow(item, sources = {}) {
-  const execId = execIdOfCase(item?.testCaseName) ?? '';
+  const execId = sources.byCase?.[item?.testCaseId] ?? execIdOfCase(item?.testCaseName) ?? '';
   const content = item?.triggerContent?.content ?? {};
   const results = asArray(item?.canvasActionOutputAssertionResult);
   const describe = (r) => String(r?.assertionDetailedInfo || r?.type || '');
   const noop = isNoop(item);
+  const notRun = isNotRun(item);
   return {
     name: String(item?.testCaseName ?? ''),
     caseId: String(item?.testCaseId ?? ''),
@@ -37,7 +44,9 @@ export function itemRow(item, sources = {}) {
     user: String(content.text ?? content.data?.text ?? content.data?.userOriginalText ?? ''),
     expect: results.map(describe).filter(Boolean).join('；'),
     passed: item?.passed === true,
-    verdict: noop
+    verdict: notRun
+      ? '还没跑（任务被暂停或还在跑）'
+      : noop
       ? '没有真正执行：触发器、事件或会话变量对不上（秒懂仍显示成功）'
       : results.filter((r) => r?.passed === false).map((r) => `${describe(r)}：${r?.message || `期望「${clip(r?.expectedValue ?? '', 80)}」实际「${clip(r?.actualValue ?? '', 80)}」`}`).join('；'),
     reply: replyOfItem(item),
@@ -46,21 +55,25 @@ export function itemRow(item, sources = {}) {
     ms: typeof item?.processDuration === 'number' ? item.processDuration : null,
     testExecId: String(item?.canvasExecId ?? ''),
     noop,
-    online: execId && sources[execId] ? String(sources[execId].reply ?? '') : '',
+    notRun,
+    online: execId && sources.execs?.[execId] ? String(sources.execs[execId].reply ?? '') : '',
   };
 }
 
+// 次数、通过率只算跑过的条目；没跑的单独数（任务被暂停或还在跑时）
 export function taskSummary(detail, rows) {
-  const passed = rows.filter((r) => r.passed).length;
+  const ran = rows.filter((r) => !r.notRun);
+  const passed = ran.filter((r) => r.passed).length;
   return {
     name: String(detail?.name ?? ''),
     id: String(detail?.testTaskId ?? ''),
     status: String(detail?.status ?? ''),
     version: String(detail?.canvasVersion ?? ''),
-    runs: rows.length,
+    runs: ran.length,
     passed,
-    noop: rows.filter((r) => r.noop).length,
-    rate: rows.length ? passed / rows.length : null,
+    noop: ran.filter((r) => r.noop).length,
+    notRun: rows.length - ran.length,
+    rate: ran.length ? passed / ran.length : null,
     cost: typeof detail?.totalCostInCny === 'number' ? detail.totalCostInCny : rows.reduce((sum, r) => sum + (r.cost ?? 0), 0),
     durationMs: typeof detail?.taskDuration === 'number' ? detail.taskDuration : null,
   };
@@ -72,6 +85,7 @@ export function alignTasks(tasks) {
   const byKey = new Map();
   tasks.forEach(({ rows }, i) => {
     for (const row of rows) {
+      if (row.notRun) continue;
       const key = row.caseId || row.name;
       if (!byKey.has(key)) {
         byKey.set(key, { base: row, per: [] });
@@ -87,7 +101,7 @@ export function alignTasks(tasks) {
 }
 
 export const ROW_HEAD = ['用例名', '调优中心执行ID', '场景', '用户消息', '期望', '是否通过', '断言结论', '实际回复', '实际动作', '花费', '耗时ms', '测试执行ID', '线上回复'];
-export const rowCells = (r) => [r.name, r.execId, r.scenario, r.user, r.expect, r.noop ? '空跑' : r.passed ? '通过' : '不通过', r.verdict, r.reply, r.actions, r.cost ?? '', r.ms ?? '', r.testExecId, r.online];
+export const rowCells = (r) => [r.name, r.execId, r.scenario, r.user, r.expect, r.notRun ? '未跑' : r.noop ? '空跑' : r.passed ? '通过' : '不通过', r.verdict, r.reply, r.actions, r.cost ?? '', r.ms ?? '', r.testExecId, r.online];
 
 export function alignedTable(tasks, aligned) {
   const head = ['用例名', '调优中心执行ID', '用户消息', '线上回复', ...tasks.flatMap(({ summary }) => [`${summary.name} 通过`, `${summary.name} 回复`])];
@@ -95,10 +109,12 @@ export function alignedTable(tasks, aligned) {
   return { head, rows };
 }
 
-// CSV：带 BOM（Excel 才认得出 UTF-8 中文）；含逗号、引号、换行的格子加引号
+// CSV：带 BOM（Excel 才认得出 UTF-8 中文）；含逗号、引号、换行的格子加引号。
+// 以 = + - @ 开头的格子前面加单引号：用户原话进了报告，Excel 会把它当公式执行（审查 M4；xlsx 写的是纯文本，没这个问题）
 export function toCsv(head, rows) {
   const cell = (value) => {
-    const s = String(value ?? '');
+    const raw = String(value ?? '');
+    const s = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   return `﻿${[head, ...rows].map((r) => r.map(cell).join(',')).join('\r\n')}\r\n`;

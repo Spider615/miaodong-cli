@@ -24,7 +24,7 @@ test('replyOfItem：发送动作 → 转人工 → 断言里带出来的发出�
 });
 
 test('itemRow：执行 id 从用例名取；用户消息、期望、没通过的断言结论；线上回复从来源取；空跑单独标出', () => {
-  const failed = itemRow(item({ passed: false, canvasActionOutputAssertionResult: [{ type: 'update-data', passed: false, assertionDetailedInfo: '写字段 - 已发优惠', message: '字段值不一致' }] }), { [SAME_EXEC]: { reply: '线上回复 1' } });
+  const failed = itemRow(item({ passed: false, canvasActionOutputAssertionResult: [{ type: 'update-data', passed: false, assertionDetailedInfo: '写字段 - 已发优惠', message: '字段值不一致' }] }), { execs: { [SAME_EXEC]: { reply: '线上回复 1' } } });
   assert.deepEqual([failed.execId, failed.user, failed.expect, failed.verdict, failed.online, failed.passed], [SAME_EXEC, '我想退款', '写字段 - 已发优惠', '写字段 - 已发优惠：字段值不一致', '线上回复 1', false]);
   const diff = itemRow(item({ passed: false, canvasActionOutputAssertionResult: [{ type: 'send-text-message', passed: false, assertionDetailedInfo: '发送 - 文本', expectedValue: '期望的话', actualValue: '实际的话' }] }));
   assert.equal(diff.verdict, '发送 - 文本：期望「期望的话」实际「实际的话」');
@@ -39,7 +39,7 @@ test('taskSummary：通过数、通过率、空跑数、花费（跑完用总花
   const rows = [itemRow(item()), itemRow(item({ passed: false, canvasExecAvailable: false, costInCny: null }))];
   assert.deepEqual(
     taskSummary({ testTaskId: 't1', name: '任务', status: 'finished', canvasVersion: 'v1', totalCostInCny: 0.05, taskDuration: 45000 }, rows),
-    { name: '任务', id: 't1', status: 'finished', version: 'v1', runs: 2, passed: 1, noop: 1, rate: 0.5, cost: 0.05, durationMs: 45000 },
+    { name: '任务', id: 't1', status: 'finished', version: 'v1', runs: 2, passed: 1, noop: 1, notRun: 0, rate: 0.5, cost: 0.05, durationMs: 45000 },
   );
   assert.equal(taskSummary({ status: 'paused' }, rows).cost, 0.02);
 });
@@ -57,4 +57,27 @@ test('toCsv：带 BOM（Excel 才认中文）；含逗号、引号、换行的�
   const csv = toCsv(['a', 'b'], [['1,2', 'x"y'], ['多\n行', 3]]);
   assert.ok(csv.startsWith('﻿a,b\r\n'));
   assert.ok(csv.endsWith('"1,2","x""y"\r\n"多\n行",3\r\n'));
+});
+
+test('还没跑的条目（任务被暂停或还在跑）：和空跑分开，标「未跑」，不进通过率（审查 I1）', () => {
+  const pending = itemRow(item({ status: 'pending', passed: null, canvasExecAvailable: false, costInCny: null, processDuration: null, executedActions: [], canvasActionOutputAssertionResult: [] }));
+  assert.deepEqual([pending.notRun, pending.noop, pending.passed], [true, false, false]);
+  assert.match(pending.verdict, /还没跑/);
+  assert.equal(rowCells(pending)[5], '未跑');
+  const rows = [itemRow(item()), pending, itemRow(item({ status: 'processing', passed: null, canvasExecAvailable: false, costInCny: null }))];
+  const s = taskSummary({ status: 'paused' }, rows);
+  assert.deepEqual([s.runs, s.passed, s.noop, s.notRun, s.rate], [1, 1, 0, 2, 1]);
+  const aligned = alignTasks([{ summary: { name: 'a' }, rows }]);
+  assert.deepEqual(aligned.map(({ per }) => per[0]?.runs), [1]);
+});
+
+test('改过名的用例：执行 id 按导入时记下的「用例 id → 执行」查，线上回复跟着对上（审查 I6）', () => {
+  const renamed = itemRow(item({ testCaseName: '退款-课程-01' }), { execs: { [SAME_EXEC]: { reply: '线上回复 1' } }, byCase: { c1: SAME_EXEC } });
+  assert.deepEqual([renamed.execId, renamed.online], [SAME_EXEC, '线上回复 1']);
+  assert.equal(itemRow(item({ testCaseName: '退款-课程-01' }), {}).execId, '');
+});
+
+test('toCsv：以 = + - @ 开头的格子前面加单引号，Excel 不会当公式执行（审查 M4）', () => {
+  const csv = toCsv(['a'], [['=HYPERLINK("x")'], ['+1+1'], ['-2'], ['@SUM(A1)'], ['正常 -中间的减号']]);
+  assert.match(csv, /\r\n"'=HYPERLINK\(""x""\)"\r\n'\+1\+1\r\n'-2\r\n'@SUM\(A1\)\r\n正常 -中间的减号\r\n$/);
 });
