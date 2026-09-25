@@ -163,3 +163,19 @@ test('md kb revoke：删旧的时请求生效了、回复丢了（导入停在�
     assert.equal(server.state.files.some((f) => f.name === '新价格表'), false);
   });
 });
+
+test('md kb imports：列出本机的导入记录——区、库、增删条数、状态（已完成、停在哪一步、已撤回）', async () => {
+  await withServer({}, async (server, h) => {
+    const empty = await runCli(['kb', 'imports'], { home: h });
+    assert.equal(empty.code, 0, empty.stderr);
+    assert.match(empty.stdout, /本机还没有导入记录/);
+    const r = await importPackage(goodPackage(), h);
+    const importId = recordOf(r)[1];
+    const listed = await runCli(['kb', 'imports'], { home: h });
+    assert.match(listed.stdout, new RegExp(`${importId}  测试区 / 兴趣岛平台 / 售后 FAQ \\(aaaa0001\\)  加 FAQ 1 · 文件 1；删 FAQ 1 · 文件 1  已完成`));
+    const p = await runCli(['kb', 'revoke', importId], { home: h });
+    await runCli(['kb', 'revoke', importId, '--confirm', codeOf(p)], { home: h });
+    const after = await runCli(['kb', 'imports'], { home: h });
+    assert.match(after.stdout, new RegExp(`${importId}  .*  已撤回`));
+  });
+});

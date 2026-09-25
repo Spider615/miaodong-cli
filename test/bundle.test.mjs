@@ -16,6 +16,8 @@ import { SAME_EXEC } from './helpers/testcenter-fixtures.mjs';
 import { X } from './helpers/exec-fixtures.mjs';
 import { startKbServer } from './helpers/kb-server.mjs';
 import { KB_FAQ, kbExec, toolCall } from './helpers/kb-fixtures.mjs';
+import { writePackage } from './helpers/kb-import-fixtures.mjs';
+import { goodPackage, importServerOptions } from './helpers/kb-import-data.mjs';
 
 let bundle;
 before(async () => {
@@ -142,6 +144,30 @@ test('产物能跑 md kb（知识库读接口、画布引用、why 的重放一�
     assert.equal(why.code, 0, why.stderr);
     assert.match(why.stdout, /结论：未审核/);
     assert.doesNotMatch(`${listed.stderr}${why.stderr}`, /ExperimentalWarning/);
+    assert.deepEqual(server.unexpected(), []);
+  } finally {
+    await server.close();
+  }
+});
+
+test('产物能导入知识库、撤回（Node 18 上跑导入包校验、对账、备份下载、撤回重建）', async () => {
+  const server = await startKbServer(importServerOptions());
+  try {
+    const home = tempHome();
+    seedIdentity(home, { key: 'k1', label: '测试区', origin: server.origin, token: 't', orgs: [{ id: 'org-1', name: '兴趣岛平台' }], currentOrgId: 'org-1' });
+    const dir = writePackage(goodPackage());
+    const code = (r) => r.stdout.match(/计划码：([0-9a-f]{8})/)[1];
+    const p = await runCli(['kb', 'import', dir], { home, bundle });
+    assert.equal(p.code, 0, p.stderr);
+    const r = await runCli(['kb', 'import', dir, '--confirm', code(p)], { home, bundle });
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(server.state.faqs.some((f) => f.id === 7002), false);
+    const id = r.stdout.match(/导入记录：(\S+)（/)[1];
+    const rv = await runCli(['kb', 'revoke', id], { home, bundle });
+    const done = await runCli(['kb', 'revoke', id, '--confirm', code(rv)], { home, bundle });
+    assert.equal(done.code, 0, done.stderr);
+    assert.equal(server.state.faqs.filter((f) => f.question === '退款多久到账').length, 1);
+    assert.doesNotMatch(`${p.stderr}${r.stderr}${done.stderr}`, /ExperimentalWarning/);
     assert.deepEqual(server.unexpected(), []);
   } finally {
     await server.close();

@@ -7,8 +7,9 @@ import { confirmCode, givenCode } from '../confirm.mjs';
 import { EXIT, MdError, usage } from '../errors.mjs';
 import { loadIdentities } from '../identity.mjs';
 import { loadPackage } from '../kb-package.mjs';
-import { createRecord, loadRecord } from '../kb-import-store.mjs';
+import { createRecord, listRecords, loadRecord } from '../kb-import-store.mjs';
 import { IMPORT_STEPS, STEP_NAMES, runImport } from '../kb-import-run.mjs';
+import { REVOKE_NAMES } from '../kb-revoke.mjs';
 import { affectedBots, findKbById, importCode, planImport } from '../kb-import-plan.mjs';
 import { out, shortId } from '../output.mjs';
 import { targetArgs } from '../target.mjs';
@@ -107,4 +108,34 @@ export async function importCmd(args) {
   out(`导入记录：${rec.importId}（${rec.dir}）`);
   await runImport({ identity: target.identity, orgId: target.orgId, kbId: kb.id, dir: rec.dir, state: rec.state, pkg: loadPackage(join(rec.dir, 'package')), snapshot: null });
   return EXIT.OK;
+}
+
+// md kb imports：本机的导入记录（新的在前）。撤回、续跑都要用这里的导入 id
+export async function importsCmd() {
+  const records = listRecords();
+  if (!records.length) {
+    out('本机还没有导入记录');
+    return EXIT.OK;
+  }
+  out('本机的导入记录（新的在前）：');
+  for (const { dir, state } of records) {
+    let counts = '';
+    try {
+      const pkg = loadPackage(join(dir, 'package'));
+      const del = (type) => pkg.deletes.filter((t) => t.type === type).length;
+      counts = `加 FAQ ${pkg.faqs.length} · 文件 ${pkg.docs.length}；删 FAQ ${del('faq')} · 文件 ${del('doc')}`;
+    } catch {
+      counts = '导入包的拷贝读不出来';
+    }
+    out(`  ${state.importId}  ${state.region.label} / ${state.org.name} / ${state.kb.name} (${shortId(state.kb.id)})  ${counts}  ${statusText(state)}`);
+  }
+  return EXIT.OK;
+}
+
+function statusText(state) {
+  if (state.status === 'revoked') return '已撤回';
+  if (state.revoke) return state.revoke.stopped ? `撤回停在「${REVOKE_NAMES[state.revoke.stopped.step]}」` : '撤回中';
+  if (state.status === 'done') return '已完成';
+  if (state.stopped) return `停在「${STEP_NAMES[state.stopped.step]}」`;
+  return state.status === 'new' ? '还没开始写' : '进行中';
 }
