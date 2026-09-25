@@ -12,7 +12,7 @@ test('kb retrieval：大模型每次调知识库工具是一次检索：库、�
   const { calls, kbNodes, silent } = retrievalsOf(norm);
   assert.equal(calls.length, 1);
   const { hits, ...call } = calls[0];
-  assert.deepEqual(call, { kind: 'call', nodeId: U(2), nodeName: '回答生成', order: 2, callIndex: 1, kbId: KB_FAQ, query: '怎么退款', threshold: 0.6, limit: 10, ok: true, error: '' });
+  assert.deepEqual(call, { kind: 'call', nodeId: U(2), nodeName: '回答生成', order: 2, callIndex: 1, kbId: KB_FAQ, query: '怎么退款', threshold: 0.6, tags: [], limit: 10, ok: true, failed: false, error: '' });
   assert.deepEqual(hits, [{ faqId: 7001, question: '课程怎么退款', score: 0.75, kbId: KB_FAQ, type: 'qa' }]);
   assert.deepEqual([kbNodes, silent], [[], []]);
 });
@@ -41,4 +41,13 @@ test('kb retrieval：召回条目没写类型时当作 FAQ（spec §2.5：76 次
   const doc = { ...c, toolResult: { success: true, result: [{ knowledgeBaseId: KB_FAQ, score: 0.85, content: '段落', sourceType: 'doc', reference: { type: 'doc', source: { id: 9001 } } }] } };
   const { calls } = retrievalsOf(normalizeDetail(kbExec(14, '怎么退款', [bare, doc])));
   assert.deepEqual(calls.map((x) => x.hits.map((h) => [h.faqId, h.type])), [[[7001, 'qa']], [[9001, 'doc']]]);
+});
+
+test('kb retrieval：返回认不出（没有 success=true 和召回列表）不当成「成功、召回 0 条」；模型传的标签照记', () => {
+  const c = toolCall(KB_FAQ, '怎么退款', { threshold: 0.6 });
+  const odd = [{ ...c, toolResult: { error: 'timeout' } }, { ...c, toolResult: undefined }, { ...c, toolResult: { success: true, result: null } }];
+  const tagged = { ...c, toolCallArguments: { ...c.toolCallArguments, tags: ['售后'] } };
+  const { calls } = retrievalsOf(normalizeDetail(kbExec(15, '怎么退款', [...odd, tagged])));
+  assert.deepEqual(calls.slice(0, 3).map((x) => [x.ok, x.failed, x.error]), Array(3).fill([false, false, '这次调用的返回认不出（没有 success=true 和召回列表）']));
+  assert.deepEqual([calls[3].ok, calls[3].tags], [true, ['售后']]);
 });

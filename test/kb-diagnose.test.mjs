@@ -3,12 +3,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { COMMON_THRESHOLD, diagnose, drifted } from '../src/kb-diagnose.mjs';
 
-const call = (extra = {}) => ({ kind: 'call', query: '怎么退款', threshold: 0.6, limit: 10, ok: true, error: '', replayable: true, estimated: false, ...extra });
+const call = (extra = {}) => ({ kind: 'call', query: '怎么退款', threshold: 0.6, limit: 10, ok: true, failed: false, error: '', noReplay: null, estimated: false, ...extra });
 const reviewed = { inQueriedKb: true, reviewed: true };
 const codes = (r) => r.map((x) => x.code);
 
 test('diagnose：工具调用失败时只报这一条，不当成没召回（Review Focus 3）', () => {
-  assert.deepEqual(diagnose({ retrieval: call({ ok: false, error: '知识库服务超时' }), target: reviewed }), [{ code: 'tool_error', title: '知识库工具调用失败', detail: '知识库服务超时' }]);
+  assert.deepEqual(diagnose({ retrieval: call({ ok: false, failed: true, error: '知识库服务超时' }), target: reviewed }), [{ code: 'tool_error', title: '知识库工具调用失败', detail: '知识库服务超时' }]);
+  // 返回认不出：不说失败，也不当成召回 0 条去推原因
+  assert.deepEqual(diagnose({ retrieval: call({ ok: false, error: '这次调用的返回认不出（没有 success=true 和召回列表）' }), target: reviewed }), [{ code: 'tool_unknown', title: '工具的返回认不出', detail: '这次调用的返回认不出（没有 success=true 和召回列表）' }]);
 });
 
 test('diagnose：挂了知识库工具、这次一次都没调', () => {
@@ -23,7 +25,7 @@ test('diagnose：不在查询的库里就报出在哪个库，不再算分数', 
 
 test('diagnose：未审核的只报未审核，不拿重放结果凑「分数不够」；段落没处理完报还在处理', () => {
   assert.deepEqual(codes(diagnose({ retrieval: call({ recorded: 3 }), target: { inQueriedKb: true, reviewed: false }, replay: { query: { floor: 0.85, count: 3 } } })), ['unreviewed']);
-  assert.deepEqual(codes(diagnose({ retrieval: call({ replayable: false }), target: { inQueriedKb: true, status: 'processing' } })), ['processing']);
+  assert.deepEqual(codes(diagnose({ retrieval: call({ noReplay: '查的库只有文件段落，没有语义搜索接口' }), target: { inQueriedKb: true, status: 'processing' } })), ['processing']);
 });
 
 test('diagnose：查询被改写——原话能召回、模型的查询不能；分数不够作为补充', () => {
@@ -79,7 +81,7 @@ test('diagnose：知识库查询节点的结论注明是估计；没有运行记
   assert.deepEqual(codes(r), ['below_threshold']);
   assert.match(r[0].detail, /这是按语义分数估计的，用 md trial 确认/);
   assert.deepEqual(codes(diagnose({ retrieval: node({ threshold: 0.6 }), target: reviewed, replay: { query: { floor: 0.82, count: 2 } } })), ['low_score']);
-  const f = diagnose({ retrieval: node({ replayable: false }), target: { inQueriedKb: true, status: 'ready' } });
+  const f = diagnose({ retrieval: node({ noReplay: '查的库只有文件段落，没有语义搜索接口' }), target: { inQueriedKb: true, status: 'ready' } });
   assert.deepEqual(codes(f), ['unknown']);
   assert.match(f[0].detail, /只有文件段落，没有语义搜索接口/);
 });
@@ -117,4 +119,17 @@ test('drifted：边界上分数只差一点点的一进一出不算改过（两�
 test('drifted：召回里的段落占掉名额，段落本身不和重放比', () => {
   const rows = ids(1, 10).map((id) => row(id, 0.9));
   assert.equal(drifted(rec([hit(900, 0.95, 'doc'), ...ids(1, 9).map((id) => hit(id, 0.9))]), rows), false);
+});
+
+test('diagnose：「用 0.6 就能过」要看名次——排在前 10 名之外时，换成 0.6 也照样进不去', () => {
+  const r = diagnose({ retrieval: call({ threshold: 0.9 }), target: reviewed, replay: { query: { score: 0.8333, rank: 13 } } });
+  assert.deepEqual(codes(r), ['below_threshold']);
+  assert.equal(r[0].detail, `分数 0.833 低于门槛 0.900；门槛是模型这次自己定的，用 ${COMMON_THRESHOLD} 也只排第 13 名，照样进不了前 10 名`);
+});
+
+test('diagnose：重放不了（查询取不到、带了标签、库已删、只有文件）时只报查不出，不拿空的重放推原因', () => {
+  for (const why of ['这次检索的查询取不到', '模型这次按标签（售后）过滤了，重放不带标签，结果不可比', '查的库已经不在企业里了（执行之后被删了？）']) {
+    const r = diagnose({ retrieval: call({ noReplay: why, recorded: 0 }), target: reviewed, replay: { query: { floor: null, count: 0 } } });
+    assert.deepEqual(r, [{ code: 'unknown', title: '查不出', detail: `${why}，只能用 md trial 看` }]);
+  }
 });

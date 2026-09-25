@@ -52,8 +52,8 @@ export const paragraphs = () => [
   { id: 9002, fileId: 501, index: 1, content: '发票在订单完成后可以申请。', wordCount: 13, status: 'processing' },
 ];
 
-// 画布：1 收到文本 → 2 回答生成（挂售后 FAQ、财务 FAQ 两个知识库工具）、3 闲聊（挂了一个已被删的库）、4 查手册（知识库查询节点）
-export function kbCanvas() {
+// 画布：1 收到文本 → 2 回答生成（挂售后 FAQ、财务 FAQ 两个知识库工具）、3 闲聊（挂了一个已被删的库）、4 查手册（知识库查询节点，默认查产品手册）
+export function kbCanvas({ nodeKbs = [KB_FILE] } = {}) {
   const tool = (kb) => ({ type: 'query_kb', configParams: { knowledgeBaseId: kb } });
   return [
     node(1, { name: '收到文本', type: 'receive-text-message', category: 'trigger' }),
@@ -61,7 +61,7 @@ export function kbCanvas() {
     node(3, { name: '闲聊', payload: { modelType: 'doubao', tools: [tool(KB_GONE)] } }),
     node(4, {
       name: '查手册', type: 'query-knowledge-base',
-      payload: { knowledgeBaseIds: [KB_FILE], resultCount: 5, threshold: 80, rerankType: 'weighted', weightedRerankConfig: { vectorWeight: 0.5 }, query: { valueType: 'reference', dataPath: 'text' } },
+      payload: { knowledgeBaseIds: nodeKbs, resultCount: 5, threshold: 80, rerankType: 'weighted', weightedRerankConfig: { vectorWeight: 0.5 }, query: { valueType: 'reference', dataPath: 'text' } },
     }),
     edge(101, 1, 2), edge(102, 1, 3), edge(103, 1, 4),
   ];
@@ -95,7 +95,7 @@ export function toolCall(kb, query, { threshold = 0.6, topK = 3, success = true,
 }
 
 // 一条执行：用户问 ask（event=true 时是事件触发、取不到用户原话），「回答生成」这次的知识库工具调用是 calls
-export function kbExec(n, ask, calls, { extraResults = [], event = false } = {}) {
+export function kbExec(n, ask, calls, { extraResults = [], event = false, canvas = kbCanvas() } = {}) {
   const row = { ...chainRows()[0], execId: X(n) };
   if (event) {
     row.triggerContent = { triggerType: 'canvas-event-trigger', content: { eventId: 'ev-x', eventName: '回访', data: { contactId: 'c1' } } };
@@ -109,5 +109,5 @@ export function kbExec(n, ask, calls, { extraResults = [], event = false } = {})
     { nodeId: U(2), status: 'success', inputs: { inputData: { text: ask } }, output: { message: '好的' }, processDuration: 900, actions: [], metadata: { toolCallResults: calls } },
     ...extraResults,
   ];
-  return detailOf(row, { snapshot: kbCanvas(), nodeResults });
+  return detailOf(row, { snapshot: canvas, nodeResults });
 }

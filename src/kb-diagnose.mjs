@@ -1,7 +1,8 @@
 // 「为什么没召回这一条」的判定（spec 3a §3.5 第 6 步）。纯函数：输入检索、目标条目、重放结果，输出按顺序排好的原因；
 // 第一条是结论，其余是补充。参数：
-//   retrieval：{ kind: 'call' | 'node', query, threshold（0～1）, limit, recorded, ok, error, replayable, estimated }
-//              recorded 是这次记录的召回条数；知识库查询节点没有运行记录，为 null
+//   retrieval：{ kind: 'call' | 'node', query, threshold（0～1）, limit, recorded, ok, failed, error, noReplay, estimated }
+//              recorded 是这次记录的召回条数；知识库查询节点没有运行记录，为 null。
+//              noReplay：重放不了的原因（查询取不到、带了标签、库已删、只有文件），有它就不拿重放推原因
 //   target：{ inQueriedKb, otherKbName, reviewed, status }——期望召回的那一条；没给 --expect 时为 null
 //   replay：{ query, user }——这一条在「用记录里的查询重放」「用用户原话重放」里的位置：
 //            { score, rank } 找到了；{ floor, count } 没找到（重放结果共 count 行、最低分 floor，没有结果时 floor 为 null）。
@@ -39,7 +40,8 @@ export function diagnose({ retrieval, target = null, replay = {}, silent = false
   const reasons = [];
   const add = (code, title, detail) => reasons.push({ code, title, detail });
   if (retrieval?.kind === 'call' && retrieval.ok === false) {
-    add('tool_error', '知识库工具调用失败', retrieval.error || '工具返回失败，这不是知识库内容的问题');
+    if (retrieval.failed) add('tool_error', '知识库工具调用失败', retrieval.error || '工具返回失败，这不是知识库内容的问题');
+    else add('tool_unknown', '工具的返回认不出', retrieval.error || '这次调用的返回认不出');
     return reasons;
   }
   if (silent) add('no_call', '模型没调知识库工具', '这个大模型节点挂了知识库工具，这次运行一次都没调用');
@@ -49,8 +51,8 @@ export function diagnose({ retrieval, target = null, replay = {}, silent = false
   if (target?.reviewed === false) add('unreviewed', '未审核', '未审核的 FAQ 不进语义索引，检索不到');
   if (target?.status && target.status !== 'ready') add('processing', '还在处理', `状态是 ${target.status}，处理完之前检索不到`);
   const scorable = Boolean(retrieval) && !silent && Boolean(target) && target.inQueriedKb !== false && target.reviewed !== false && (!target.status || target.status === 'ready');
-  if (scorable && retrieval.replayable === false) {
-    add('unknown', '查不出', '这个库只有文件段落，没有语义搜索接口，只能用 md trial 看');
+  if (scorable && retrieval.noReplay) {
+    add('unknown', '查不出', `${retrieval.noReplay}，只能用 md trial 看`);
     return reasons;
   }
   if (scorable) {
@@ -63,9 +65,13 @@ export function diagnose({ retrieval, target = null, replay = {}, silent = false
     }
     if (q && typeof q.score === 'number') {
       if (q.score < threshold) {
-        const relax = retrieval.kind === 'call' && threshold > COMMON_THRESHOLD && q.score >= COMMON_THRESHOLD
-          ? `；门槛是模型这次自己定的，用 ${COMMON_THRESHOLD} 就能过`
-          : '';
+        // 换成常见门槛能不能召回，还要看名次：排在前 limit 名之外的，门槛再低也进不去
+        let relax = '';
+        if (retrieval.kind === 'call' && threshold > COMMON_THRESHOLD && q.score >= COMMON_THRESHOLD) {
+          relax = q.rank <= limit
+            ? `；门槛是模型这次自己定的，用 ${COMMON_THRESHOLD} 就能过`
+            : `；门槛是模型这次自己定的，用 ${COMMON_THRESHOLD} 也只排第 ${q.rank} 名，照样进不了前 ${limit} 名`;
+        }
         add('below_threshold', '分数不够门槛', `分数 ${fmt(q.score)} 低于门槛 ${fmt(threshold)}${relax}${note}`);
       } else if (q.rank > limit) {
         add('crowded_out', `被挤出前 ${limit} 名`, `分数 ${fmt(q.score)} 过了门槛，但排第 ${q.rank} 名${RANKS}${note}`);

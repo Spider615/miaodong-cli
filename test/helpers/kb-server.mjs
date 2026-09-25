@@ -11,7 +11,8 @@ import { faqs, files, kbCanvas, kbList, paragraphs, semanticRows, sim } from './
 const SEMANTIC_FLOOR = 0.8;
 const bad = (message) => ({ status: 400, body: { statusCode: 400, message, error: 'Bad Request' } });
 
-export async function startKbServer({ details = {}, pageCap = Infinity, kbs = kbList(), faqRows = faqs() } = {}) {
+// semanticFail：语义搜索回 502（模拟秒懂那边出错，md 不能把它当成「没有结果」）
+export async function startKbServer({ details = {}, pageCap = Infinity, kbs = kbList(), faqRows = faqs(), semanticFail = false } = {}) {
   const state = { faqs: faqRows };
   const page = (rows, current, pageSize) => {
     const size = Math.min(Number(pageSize) || 20, pageCap);
@@ -44,6 +45,7 @@ export async function startKbServer({ details = {}, pageCap = Infinity, kbs = kb
       if (body.filterType === undefined || body.sortType === undefined) {
         return bad('filterType must be one of the following values: ALL, REVIEWED, GENERATED, 0, 1, 2');
       }
+      if (semanticFail && body.searchMode === 'semantic') return { status: 502, body: { statusCode: 502, message: 'Bad Gateway' } };
       let rows = state.faqs.filter((f) => f.kb === body.knowledgeBaseId);
       if (typeof body.filterType === 'string') rows = rows.filter((f) => !f.isReviewed); // 真实服务端的坑：传字符串一律只回未审核的
       else if (body.filterType === 1) rows = rows.filter((f) => f.isReviewed);

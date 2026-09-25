@@ -6,7 +6,7 @@ import { seedIdentity } from './helpers/seed.mjs';
 import { startKbServer } from './helpers/kb-server.mjs';
 import { U } from './helpers/fixtures.mjs';
 import { X, chainRows, detailOf } from './helpers/exec-fixtures.mjs';
-import { KB_FAQ, KB_OTHER, faqs, kbExec, toolCall } from './helpers/kb-fixtures.mjs';
+import { KB_FAQ, KB_GONE, KB_OTHER, faqs, kbCanvas, kbExec, toolCall } from './helpers/kb-fixtures.mjs';
 
 const run = (n, extra = {}) => ({ nodeId: U(n), status: 'success', inputs: { inputData: {} }, output: {}, processDuration: 5, actions: [], ...extra });
 // 库里既有 FAQ 也有文件时，工具的召回里会混着段落（spec §2.5 实测只见过 FAQ，这里按同样的结构造一条）
@@ -14,6 +14,16 @@ const withParagraph = (c) => ({
   ...c,
   toolResult: { ...c.toolResult, result: [...c.toolResult.result, { knowledgeBaseId: KB_FAQ, score: 0.85, content: '课程退款规则：开课七天内全额退款。', sourceType: 'doc', reference: { type: 'doc', source: { id: 9001 } } }] },
 });
+// 画布还引用着、企业里已经删掉的库：执行时召回过一条
+const gone = {
+  name: `q_kb_${KB_GONE}`, toolType: 'query_kb', toolCallArguments: { query: '课程怎么退款', threshold: 0.6, topK: 3 },
+  toolResult: { success: true, result: [{ knowledgeBaseId: KB_GONE, score: 0.9, content: '旧的', sourceType: 'qa', reference: { type: 'qa', source: { id: 9901, question: '旧问题', reviewed: true } } }] },
+};
+// 模型按标签过滤过的调用
+const tagged = (() => {
+  const c = toolCall(KB_FAQ, '课程怎么退', { threshold: 0.6 });
+  return { ...c, toolCallArguments: { ...c.toolCallArguments, tags: ['售后'] } };
+})();
 let server;
 before(async () => {
   server = await startKbServer({
@@ -31,6 +41,10 @@ before(async () => {
       [X(31)]: kbExec(31, '发票', [], { extraResults: [run(4, { inputs: { inputData: { query: '发票' } } })] }),
       [X(32)]: kbExec(32, '课程怎么退', [withParagraph(toolCall(KB_FAQ, '课程怎么退', { threshold: 0.6 }))]),
       [X(35)]: kbExec(35, '怎么退款', [toolCall(KB_FAQ, '怎么退款', { threshold: 0.6 })]),
+      [X(61)]: kbExec(61, '课程怎么退款', [gone]),
+      [X(62)]: kbExec(62, '', [], { event: true, canvas: kbCanvas({ nodeKbs: [KB_FAQ] }), extraResults: [run(4)] }),
+      [X(63)]: kbExec(63, '怎么修改收货地址', [{ ...toolCall(KB_FAQ, '怎么修改收货地址', { threshold: 0.6 }), toolResult: { error: 'timeout' } }]),
+      [X(64)]: kbExec(64, '课程怎么退', [tagged]),
     },
   });
 });
@@ -186,6 +200,8 @@ test('md kb why：知识库查询节点 + 文件库：按关键词找到段落�
   assert.match(r.stdout, /检索：#3 查手册（知识库查询节点）· 库「产品手册」 · 查询「发票」 · 门槛 0\.800 · 召回最多 5 条/);
   assert.match(r.stdout, /目标：段落 #9002「发票在订单完成后可以申请。」 \[processing\]/);
   assert.match(r.stdout, /结论：还在处理 —— 状态是 processing，处理完之前检索不到/);
+  // spec §3.5 第 2 步：照实说这类节点的运行记录认不得
+  assert.match(r.stdout, /这类节点的运行记录 md 还不认得/);
   assert.deepEqual(server.unexpected(), []);
 });
 
@@ -224,4 +240,61 @@ test('md kb why：同一条 FAQ 在索引里占好几行（09-25 真机验收）
   } finally {
     await s.close();
   }
+});
+
+test('md kb why：重放时秒懂报错，照实报错退出，不当成「没有结果」去编原因（整支审查第 1 条）', async () => {
+  const s = await startKbServer({ semanticFail: true, details: { [X(60)]: kbExec(60, '课程怎么退', [toolCall(KB_FAQ, '课程怎么退', { threshold: 0.6 })]) } });
+  try {
+    const r = await runCli(['kb', 'why', X(60), '--expect', '7002'], { home: home(s.origin) });
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /HTTP 502/);
+    assert.doesNotMatch(r.stdout, /结论：|知识库在这次执行之后改过/);
+    assert.deepEqual(s.unexpected(), []);
+  } finally {
+    await s.close();
+  }
+});
+
+test('md kb why：查的库已经被删了——说重放不了，不误报「改过」', async () => {
+  const r = await md(['kb', 'why', X(61)]);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /查的库已经不在企业里了（执行之后被删了？）：候选和分数要用 md trial 看/);
+  assert.doesNotMatch(r.stdout, /知识库在这次执行之后改过/);
+});
+
+test('md kb why：知识库查询节点取不到查询（事件触发、没有 query）——不编查询、不下结论（整支审查第 2 条）', async () => {
+  const r = await md(['kb', 'why', X(62), '--node', '查手册', '--expect', '7001']);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /检索：#\d+ 查手册（知识库查询节点）· 库「售后 FAQ」 · 查询取不到 · 门槛 0\.800 · 召回最多 5 条/);
+  assert.match(r.stdout, /这类节点的运行记录 md 还不认得/);
+  assert.match(r.stdout, /结论：查不出 —— 这次检索的查询取不到，只能用 md trial 看/);
+  const c = await md(['kb', 'why', X(62), '--node', '查手册']);
+  assert.match(c.stdout, /这次检索的查询取不到：候选和分数要用 md trial 看/);
+  assert.doesNotMatch(c.stdout, /重放和相似度检查都没有别的候选/);
+});
+
+test('md kb why：工具的返回认不出——不写「召回 0 条」，也不推原因（整支审查第 3 条）', async () => {
+  const r = await md(['kb', 'why', X(63), '--expect', '7003']);
+  assert.equal(r.code, 0, r.stderr);
+  assert.doesNotMatch(r.stdout, /召回 0 条|一条都没有/);
+  assert.match(r.stdout, /第 1 次调用知识库工具 · .* · 返回认不出/);
+  assert.match(r.stdout, /结论：工具的返回认不出 —— 这次调用的返回认不出（没有 success=true 和召回列表）/);
+});
+
+test('md kb why：给的 FAQ id 不在查的库里，就到企业的其他库里找；哪儿都没有就报找不到（整支审查第 5 条）', async () => {
+  const other = await md(['kb', 'why', X(21), '--expect', '7101']);
+  assert.equal(other.code, 0, other.stderr);
+  assert.match(other.stdout, /目标：FAQ #7101「发票怎么开」 \[已审核\]（在「财务 FAQ」里）/);
+  assert.match(other.stdout, /结论：不在查询的库里 —— 这一条在「财务 FAQ」里，这次查的不是这个库/);
+  const none = await md(['kb', 'why', X(21), '--expect', '99999']);
+  assert.equal(none.code, 4);
+  assert.match(none.stderr, /企业的知识库里都没有 FAQ #99999/);
+});
+
+test('md kb why：模型按标签过滤过——重放不带标签、不可比，不误报「改过」、不推原因（整支审查第 6 条）', async () => {
+  const r = await md(['kb', 'why', X(64), '--expect', '7002']);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /模型这次按标签（售后）过滤了，重放不带标签，结果不可比/);
+  assert.match(r.stdout, /结论：查不出 —— 模型这次按标签（售后）过滤了/);
+  assert.doesNotMatch(r.stdout, /知识库在这次执行之后改过/);
 });

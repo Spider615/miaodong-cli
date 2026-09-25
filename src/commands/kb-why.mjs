@@ -57,18 +57,24 @@ async function kbsOf(ctx) {
 }
 const kbName = (kbs, id) => kbs.get(id)?.name ?? `已不存在的库 ${shortId(id)}`;
 
-// 用一段话在这些库里重做语义搜索，合在一起按分数排（库已经被删时当作没有结果）。
+// 重放不了的原因；能重放时是 null。有原因时不重放、不比「改过」、不推原因，只报查不出
+function noReplayReason(kbs, kbIds, query, tags) {
+  if (!String(query ?? '').trim()) return '这次检索的查询取不到';
+  if (tags.length) return `模型这次按标签（${tags.join('、')}）过滤了，重放不带标签，结果不可比`;
+  const live = kbIds.filter((id) => kbs.has(id));
+  if (!live.length) return '查的库已经不在企业里了（执行之后被删了？）';
+  if (!live.some((id) => kbs.get(id).faqCount > 0)) return '查的库只有文件段落，没有语义搜索接口';
+  return null;
+}
+
+// 用一段话在这些库里重做语义搜索，合在一起按分数排。只搜企业里还在、有 FAQ 的库；
+// 秒懂报错就照实报错退出：当成「没有结果」会编出一个很肯定的原因（整支审查第 1 条）。
 // 保留原样的行：同一条 FAQ 可能占好几行，名次按行算才和工具一致（工具取前 10 行再按 FAQ 去重，09-25 真机验收）
 async function replay(ctx, kbIds, text) {
   if (!text) return [];
-  const lists = await Promise.all(kbIds.map(async (kbId) => {
-    try {
-      return (await searchFaqs(ctx.identity, ctx.orgId, kbId, text, { size: SEARCH_SIZE })).map((f) => ({ ...f, kbId }));
-    } catch (error) {
-      if (error instanceof MdError && error.code === 'auth_expired') throw error;
-      return [];
-    }
-  }));
+  const kbs = await kbsOf(ctx);
+  const live = kbIds.filter((id) => kbs.get(id)?.faqCount > 0);
+  const lists = await Promise.all(live.map(async (kbId) => (await searchFaqs(ctx.identity, ctx.orgId, kbId, text, { size: SEARCH_SIZE })).map((f) => ({ ...f, kbId }))));
   return lists.flat().sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0));
 }
 
@@ -89,11 +95,17 @@ async function resolveExpect(ctx, expect, kbIds) {
   });
   if (/^\d+$/.test(expect)) {
     const id = Number(expect);
-    for (const kbId of kbIds) {
+    for (const kbId of kbIds.filter((x) => kbs.get(x)?.faqCount > 0)) {
       const faq = (await listFaqs(ctx.identity, ctx.orgId, kbId)).find((f) => f.id === id);
       if (faq) return { kind: 'faq', item: faq, kbId, inQueriedKb: true };
     }
-    return { kind: 'faq', item: { id, question: '' }, kbId: null, inQueriedKb: false, otherKbName: null };
+    // 不在这次查的库里：到企业的其他库里找到了，才算「不在查询的库里」（spec §3.5 判定表）；id 打错、FAQ 已删不能这么说
+    for (const k of kbs.values()) {
+      if (kbIds.includes(k.id) || !k.faqCount) continue;
+      const faq = (await listFaqs(ctx.identity, ctx.orgId, k.id)).find((f) => f.id === id);
+      if (faq) return { kind: 'faq', item: faq, kbId: k.id, inQueriedKb: false, otherKbName: k.name };
+    }
+    throw new MdError('kb_expect_not_found', `企业的知识库里都没有 FAQ #${id}`, { exitCode: EXIT.TARGET, hint: 'id 可能打错了，或者这条已经删了；去掉 --expect 看候选' });
   }
   for (const kbId of kbIds) {
     const k = kbs.get(kbId);
@@ -130,9 +142,9 @@ function targetText(t) {
 // 没给 --expect：列候选（spec §3.5 第 4 步）——差一点过门槛的、过了门槛但没进前 limit 名的、问题很像但没审核的。
 // 都按 FAQ 列（每条取它分数最高的那一行）；名次按行算，已经进了前 limit 名的 FAQ，它排在后面的其他行不算被挤出
 async function candidates(ctx, r, kbIds, byQuery, userText) {
-  if (!r.replayable) {
-    out('  这个库只有文件段落，没有语义搜索接口，候选和分数要用 md trial 看');
-    out('  看某一段为什么没召回：加 --expect "<段落里的一段文字>"');
+  if (r.noReplay) {
+    out(`  ${r.noReplay}：候选和分数要用 md trial 看`);
+    out('  看某一条为什么没召回：加 --expect <FAQ id 或一段文字>');
     return;
   }
   const scored = byQuery.filter((f) => typeof f.similarity === 'number');
@@ -176,9 +188,13 @@ async function reportRetrieval(ctx, r, userText, expect) {
   const kbs = await kbsOf(ctx);
   const kbIds = r.kind === 'call' ? [r.kbId] : r.kbIds;
   out('');
+  const query = r.query ? `查询「${clip(r.query, 80)}」${r.queryGuessed ? '（节点的实际查询取不到，按用户原话估计）' : ''}` : '查询取不到';
+  const outcome = r.kind !== 'call' ? '' : r.ok ? `召回 ${r.hits.length} 条` : r.failed ? '调用失败' : '返回认不出';
   out(r.kind === 'call'
-    ? `检索：#${r.order} ${r.nodeName} 第 ${r.callIndex} 次调用知识库工具 · 库「${kbName(kbs, r.kbId)}」(${shortId(r.kbId)}) · 查询「${clip(r.query, 80)}」 · 门槛 ${fmt(r.threshold)} · 召回 ${r.hits.length} 条`
-    : `检索：#${r.order} ${r.nodeName}（知识库查询节点）· 库${kbIds.map((id) => `「${kbName(kbs, id)}」`).join('、')} · 查询「${clip(r.query, 80)}」${r.queryGuessed ? '（节点的实际查询取不到，按用户原话估计）' : ''} · 门槛 ${fmt(r.threshold)} · 召回最多 ${r.limit} 条`);
+    ? `检索：#${r.order} ${r.nodeName} 第 ${r.callIndex} 次调用知识库工具 · 库「${kbName(kbs, r.kbId)}」(${shortId(r.kbId)}) · ${query} · 门槛 ${fmt(r.threshold)} · ${outcome}`
+    : `检索：#${r.order} ${r.nodeName}（知识库查询节点）· 库${kbIds.map((id) => `「${kbName(kbs, id)}」`).join('、')} · ${query} · 门槛 ${fmt(r.threshold)} · 召回最多 ${r.limit} 条`);
+  // spec §3.5 第 2 步：这类节点运行时的输出结构没核对过，照实说
+  if (r.kind === 'node') out('  这类节点的运行记录 md 还不认得：它这次实际召回了什么看不到，下面只按配置和重放估计');
   if (r.kind === 'call' && r.ok === false) {
     const [first] = diagnose({ retrieval: r });
     out(`结论：${first.title} —— ${first.detail}`);
@@ -189,9 +205,9 @@ async function reportRetrieval(ctx, r, userText, expect) {
       ? `  记录的召回：${r.hits.map(hitLine).join('、')}`
       : `  记录的召回：一条都没有（没有 FAQ 过门槛 ${fmt(r.threshold)}）`);
   }
-  const byQuery = r.replayable ? await replay(ctx, kbIds, r.query) : [];
-  const byUser = r.replayable && userText && !sameText(userText, r.query) ? await replay(ctx, kbIds, userText) : byQuery;
-  if (r.kind === 'call' && r.replayable && drifted(r, byQuery)) {
+  const byQuery = r.noReplay ? [] : await replay(ctx, kbIds, r.query);
+  const byUser = !r.noReplay && userText && !sameText(userText, r.query) ? await replay(ctx, kbIds, userText) : byQuery;
+  if (r.kind === 'call' && !r.noReplay && drifted(r, byQuery)) {
     out('  ⚠️ 知识库在这次执行之后改过：用同样的查询重放，结果和记录不一样，下面的结论要打折扣');
   }
   if (!expect) {
@@ -245,18 +261,17 @@ export async function why(args) {
   out(`用户原话：${userText ? clip(userText, 200) : '（取不到：这次不是文本消息触发的）'}`);
   if (picked.silent) await reportSilent(ctx, picked.silent, userText);
   const kbs = await kbsOf(ctx);
-  // 库里一条 FAQ 都没有（只有文件）时重放不了；库已经被删时照样重放，结果是空的
   for (const call of picked.calls) {
-    await reportRetrieval(ctx, { ...call, replayable: kbs.get(call.kbId)?.faqCount !== 0, estimated: false, recorded: call.hits.length }, userText, expect);
+    await reportRetrieval(ctx, { ...call, noReplay: noReplayReason(kbs, [call.kbId], call.query, call.tags), estimated: false, recorded: call.hits.length }, userText, expect);
   }
   if (picked.kbNode) {
     const n = picked.kbNode;
     const query = typeof n.inputs?.query === 'string' ? n.inputs.query : userText;
     await reportRetrieval(ctx, {
       kind: 'node', nodeId: n.nodeId, nodeName: n.nodeName, order: n.order, kbIds: n.kbIds,
-      query, queryGuessed: typeof n.inputs?.query !== 'string',
+      query, queryGuessed: typeof n.inputs?.query !== 'string' && Boolean(query),
       threshold: unit(n.threshold), limit: n.limit ?? 5, recorded: null, ok: true, hits: null,
-      replayable: n.kbIds.some((id) => kbs.get(id)?.faqCount > 0), estimated: true,
+      noReplay: noReplayReason(kbs, n.kbIds, query, []), estimated: true,
     }, userText, expect);
   }
   out('');
