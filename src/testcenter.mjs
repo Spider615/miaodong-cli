@@ -84,6 +84,24 @@ export function updateCase(t, testCase) {
   return post(t, '/test-case/update', body);
 }
 
+// 批量建外部用例：每批 50 条。create 只回 {code: 0}、不给 id，要按 name 回读（spec §2.3 核对 8）。onBatch(已写条数) 给命令报进度
+export async function createCases(t, testSetId, cases, { batch = 50, onBatch } = {}) {
+  for (let i = 0; i < cases.length; i += batch) {
+    await post(t, '/test-case/create', { testSetId, testCases: cases.slice(i, i + batch) });
+    onBatch?.(Math.min(i + batch, cases.length));
+  }
+}
+
+// 挂场景：create 会丢掉 scenarioNodeId，只能建完再挂；每批 100 个，重复挂是幂等的（spec §2.3）。返回秒懂说挂上了几个
+export async function attachCases(t, scenarioNodeId, testCaseIds, { batch = 100 } = {}) {
+  let attached = 0;
+  for (let i = 0; i < testCaseIds.length; i += batch) {
+    const payload = await post(t, '/scenario/attach-cases', { botId: t.botId, testCaseIds: testCaseIds.slice(i, i + batch), scenarioNodeId });
+    attached += Number(payload?.data?.attachedCount) || 0;
+  }
+  return attached;
+}
+
 export async function deleteCases(t, testCaseIds, { batch = 100 } = {}) {
   for (let i = 0; i < testCaseIds.length; i += batch) await post(t, '/test-case/batch-delete', { testCaseIds: testCaseIds.slice(i, i + batch) });
 }

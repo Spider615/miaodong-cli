@@ -3,6 +3,9 @@
 //   canvas —— canvas/get 返回的画布（默认 targetCanvas()）；itemCost —— 每条跑完的花费
 //   perPoll —— 每查一次 detail 跑完几条（默认全部）；tree —— null 表示老一代（scenario/tree 返回 404）
 //   pageCap —— 每页最多返回几条（模拟服务端封顶）
+//   keepDimension —— 默认 false：create / update 都把 dimension 存成 ''（兴趣岛不保存 dimension，spec §2.3 核对 8）
+//   dropFields —— create 时把这些字段存成空对象或空数组（模拟关键字段被服务端丢掉）
+//   failCreateAt —— 第 N 次 create 起返回 502；treeDrift —— 每次挂场景额外给节点计数加几（模拟旧批次重复挂载）
 // 事件在目标智能体里不存在的用例会「空跑」：status success、passed false、没有执行、花费为空（spec §2.3 核对 6）
 import { ok, startFakeMiaodong } from './fake-miaodong.mjs';
 import { SOURCE_BOT, TARGET_BOT, botEvents, botVars, importable, targetCanvas } from './testcenter-fixtures.mjs';
@@ -10,6 +13,9 @@ import { SOURCE_BOT, TARGET_BOT, botEvents, botVars, importable, targetCanvas } 
 const id = (prefix, n) => `${prefix}${String(n).padStart(8 - prefix.length, '0')}-0000-4000-8000-000000000000`;
 const bad = (message) => ({ status: 400, body: { statusCode: 400, message, error: 'Bad Request' } });
 const WRITABLE = ['name', 'dimension', 'triggerType', 'triggerInputs', 'sessionMemoryCustomData', 'pluginMockOutputs', 'sqlDbMockOutputs', 'testNodeOutputAssertions', 'canvasActionOutputAssertions', 'isStrictVerify'];
+// 服务端的触发类型枚举（spec §2.3 核对 8）
+const TRIGGERS = ['input', 'receive-text-message', 'receive-image-message', 'receive-audio-message', 'receive-video-message', 'receive-file-message', 'receive-other-message', 'receive-intent-comment', 'receive-note-message', 'receive-share-note-comment-message', 'receive-email-message', 'custom-attr-event', 'tag-event', 'join-room', 'new-friend', 'canvas-event-trigger', 'bot-receive-text-message', 'write-message', 'contact-lead-filled', 'wecom-contact-bind'];
+const isObj = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 
 export async function startTestCenterServer({ itemCost = 0.02, perPoll = Infinity, tree = [] } = {}) {
   const state = { sets: [], cases: [], tasks: [], items: new Map(), posts: {}, log: [], canvas: null, itemCost, perPoll, tree, n: 0 };
@@ -106,12 +112,58 @@ export async function startTestCenterServer({ itemCost = 0.02, perPoll = Infinit
       if (!c) return bad('test case not found');
       // 全量覆盖：没传的可写字段清空（spec §2.3）
       for (const key of WRITABLE) c[key] = body[key] ?? (key === 'name' ? '' : null);
+      if (!state.keepDimension) c.dimension = ''; // 兴趣岛不保存 dimension（核对 8）
       return ok(null);
     },
     'POST /api/test-center/test-case/batch-delete': ({ body }) => {
       record('batchDelete', body);
       state.cases = state.cases.filter((c) => !body.testCaseIds.includes(c.testCaseId));
       return ok(null);
+    },
+    'POST /api/test-center/test-case/create': ({ body, query }) => {
+      record('caseCreate', body);
+      const rows = Array.isArray(body.testCases) ? body.testCases : [];
+      const problems = rows.flatMap((c, i) => [
+        TRIGGERS.includes(c?.triggerType) ? null : `testCases.${i}.triggerType must be one of the following values: ${TRIGGERS.join(', ')}`,
+        isObj(c?.triggerInputs) ? null : `testCases.${i}.triggerInputs must be an object`,
+        isObj(c?.sessionMemoryCustomData) ? null : `testCases.${i}.sessionMemoryCustomData must be an object`,
+        Array.isArray(c?.testNodeOutputAssertions) ? null : `testCases.${i}.testNodeOutputAssertions must be an array`,
+        Array.isArray(c?.canvasActionOutputAssertions) ? null : `testCases.${i}.canvasActionOutputAssertions must be an array`,
+      ]).filter(Boolean);
+      if (problems.length) return bad(problems.join('；'));
+      if (state.failCreateAt && state.posts.caseCreate.length >= state.failCreateAt) return { status: 502, body: { message: 'Bad Gateway' } };
+      const eventNames = new Map((botEvents[query.botId] ?? []).map((e) => [e.eventId, e.name]));
+      for (const c of rows) {
+        const stored = { ...structuredClone(c), testCaseId: id('e', ++state.n), testSetId: body.testSetId, status: 'ready', isReviewed: true, scenarioNodeId: null, dimensionDetail: '', dimension: state.keepDimension ? (c.dimension ?? '') : '' };
+        // 发事件断言没带 eventName 时服务端按 eventId 补上（核对 8）
+        for (const a of stored.canvasActionOutputAssertions) {
+          const payload = a?.actionContent?.payload;
+          if (a?.actionContent?.type === 'canvas-event-action' && payload && !payload.eventName) payload.eventName = eventNames.get(payload.eventId) ?? '';
+        }
+        for (const field of state.dropFields ?? []) stored[field] = Array.isArray(c[field]) ? [] : {};
+        state.cases.push(stored);
+      }
+      return { status: 201, body: { code: 0 } };
+    },
+    'POST /api/test-center/scenario/attach-cases': ({ body }) => {
+      record('attach', body);
+      let attachedCount = 0;
+      for (const testCaseId of body.testCaseIds ?? []) {
+        const c = state.cases.find((x) => x.testCaseId === testCaseId);
+        if (c && c.scenarioNodeId !== body.scenarioNodeId) {
+          c.scenarioNodeId = body.scenarioNodeId;
+          attachedCount++;
+        }
+      }
+      // 场景树计数跟着变；treeDrift 模拟「旧批次重复挂着」，计数和这次挂的条数对不上
+      const bump = (nodes) => {
+        for (const n of nodes ?? []) {
+          if (n.id === body.scenarioNodeId) n.ownCaseCount = (n.ownCaseCount ?? 0) + attachedCount + (state.treeDrift ?? 0);
+          bump(n.children);
+        }
+      };
+      bump(state.tree);
+      return ok({ attachedCount, scenarioPath: '' });
     },
     'GET /api/test-center/scenario/tree': () => (state.tree === null
       ? { status: 404, body: { statusCode: 404, message: 'Cannot GET /api/test-center/scenario/tree' } }

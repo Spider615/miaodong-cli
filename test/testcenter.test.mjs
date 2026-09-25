@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { startTestCenterServer } from './helpers/testcenter-server.mjs';
 import { CROSS_EXEC, SAME_EXEC, TARGET_BOT, importable } from './helpers/testcenter-fixtures.mjs';
 import {
-  createTask, createTestSet, deleteCases, deleteTestSet, importExecs, listCases, listTestSets,
+  attachCases, createCases, createTask, createTestSet, deleteCases, deleteTestSet, importExecs, listCases, listTestSets,
   pauseTask, recentTasks, scenarioTree, taskDetail, taskItems, updateCase,
 } from '../src/testcenter.mjs';
 
@@ -72,5 +72,27 @@ test('翻页以 page.total 为准：服务端把每页封顶在 100 条时也读
     await assert.rejects(listCases(t(), set), (e) => /翻了 200 页还没读完（已读 200 条，共 201 条）/.test(e.message));
   } finally {
     fake.state.pageCap = undefined;
+  }
+});
+
+test('批量建用例每批 50 条（create 不回 id，按 name 回读）；挂场景每批 100 个，返回挂上的条数', async () => {
+  const id = await createTestSet(t(), '外部-批量');
+  const cases = Array.from({ length: 120 }, (_, i) => ({ name: `外部-${i + 1}`, triggerType: 'receive-text-message', triggerInputs: { text: `问题 ${i + 1}` }, sessionMemoryCustomData: {}, testNodeOutputAssertions: [], canvasActionOutputAssertions: [] }));
+  const before = fake.state.posts.caseCreate?.length ?? 0;
+  const progress = [];
+  await createCases(t(), id, cases, { onBatch: (done) => progress.push(done) });
+  assert.deepEqual(fake.state.posts.caseCreate.slice(before).map((p) => p.testCases.length), [50, 50, 20]);
+  assert.deepEqual(progress, [50, 100, 120]);
+  const back = await listCases(t(), id);
+  assert.equal(back.length, 120);
+  assert.deepEqual([back[0].isReviewed, back[0].dimension], [true, '']);
+  const savedTree = fake.state.tree;
+  fake.state.tree = [{ id: 'sn-refund', name: '退款', path: '退款', ownCaseCount: 0, totalCaseCount: 0, children: [] }];
+  try {
+    assert.equal(await attachCases(t(), 'sn-refund', back.map((c) => c.testCaseId)), 120);
+    assert.deepEqual(fake.state.posts.attach.slice(-2).map((p) => [p.testCaseIds.length, p.botId, p.scenarioNodeId]), [[100, TARGET_BOT, 'sn-refund'], [20, TARGET_BOT, 'sn-refund']]);
+    assert.equal(fake.state.tree[0].ownCaseCount, 120);
+  } finally {
+    fake.state.tree = savedTree;
   }
 });

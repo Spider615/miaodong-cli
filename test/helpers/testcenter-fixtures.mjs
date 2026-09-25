@@ -10,13 +10,32 @@ export const CROSS_EXEC = X(12);
 export const LOST_EXEC = X(13);
 
 export const botEvents = {
-  [TARGET_BOT]: [{ eventId: 'tev-delay', name: '延时回复' }, { eventId: 'tev-send', name: '发送4.0' }],
+  [TARGET_BOT]: [
+    { eventId: 'tev-delay', name: '延时回复', variables: [{ name: 'text', type: { type: 'string' } }] },
+    { eventId: 'tev-send', name: '发送4.0', variables: [{ name: 'text', type: { type: 'string' } }, { name: 'urls', type: { type: 'array' } }] },
+  ],
   [SOURCE_BOT]: [{ eventId: 'sev-delay', name: '延时回复' }, { eventId: 'sev-send', name: '发送4.0' }, { eventId: 'sev-only', name: '只在源里有' }],
 };
 export const botVars = {
-  [TARGET_BOT]: [{ id: 'tv-hist', name: '消息历史', isDefault: true }, { id: 'tv-flag', name: '已发优惠', isDefault: false }],
+  [TARGET_BOT]: [
+    { id: 'tv-hist', name: '消息历史', isDefault: true, type: { type: 'array' } },
+    { id: 'tv-flag', name: '已发优惠', isDefault: false, type: { type: 'boolean' } },
+    { id: 'tv-note', name: '客户备注', isDefault: false, type: { type: 'string' } },
+  ],
   [SOURCE_BOT]: [{ id: 'sv-hist', name: '消息历史', isDefault: true }, { id: 'sv-flag', name: '已发优惠', isDefault: false }],
 };
+
+// 场景树：两个「课程」同名，只能按路径找
+export function scenarioTreeFixture() {
+  return [
+    { id: 'sn-refund', name: '退款', path: '退款', ownCaseCount: 3, totalCaseCount: 3, children: [
+      { id: 'sn-refund-course', name: '课程', path: '退款/课程', ownCaseCount: 0, totalCaseCount: 0, children: [] },
+    ] },
+    { id: 'sn-consult', name: '咨询', path: '咨询', ownCaseCount: 0, totalCaseCount: 0, children: [
+      { id: 'sn-consult-course', name: '课程', path: '咨询/课程', ownCaseCount: 0, totalCaseCount: 0, children: [] },
+    ] },
+  ];
+}
 
 // 目标智能体的草稿：延时回复的事件入口 → 回答生成（大模型）→ 发送
 export function targetCanvas() {
