@@ -203,7 +203,7 @@ function stopLoss(t, rec, detail, p) {
 // 账本跟着实际走（审查 C1）：每次看进度都把观察到的写回 md 建的那一笔——
 // 跑的过程中，预留 = max(原预留, 已花 + 没跑的 × 单价)，并记下观察到的单价（下次 md test run 按它估价）；
 // 任务停下来（跑完、暂停、失败）就记实际：跑完用秒懂给的总花费，别的按已完成条目的花费 + 正在跑的按单价。
-// 同样的结果只写一次；暂停后在页面上接着跑完，会再按新结果记
+// 同样的结果只写一次；之后状态或花费变了（比如暂停的任务后来又跑完了），再按新结果记
 function observe(t, detail, p) {
   const rec = readTaskRecord(t, detail?.testTaskId);
   if (!rec?.spendId) return;
