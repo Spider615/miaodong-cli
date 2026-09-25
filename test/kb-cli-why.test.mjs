@@ -19,6 +19,12 @@ const gone = {
   name: `q_kb_${KB_GONE}`, toolType: 'query_kb', toolCallArguments: { query: '课程怎么退款', threshold: 0.6, topK: 3 },
   toolResult: { success: true, result: [{ knowledgeBaseId: KB_GONE, score: 0.9, content: '旧的', sourceType: 'qa', reference: { type: 'qa', source: { id: 9901, question: '旧问题', reviewed: true } } }] },
 };
+// 没记录门槛的调用
+const noThreshold = (() => {
+  const c = toolCall(KB_FAQ, '课程怎么退', { threshold: 0.6 });
+  const { threshold, ...args } = c.toolCallArguments;
+  return { ...c, toolCallArguments: args };
+})();
 // 模型按标签过滤过的调用
 const tagged = (() => {
   const c = toolCall(KB_FAQ, '课程怎么退', { threshold: 0.6 });
@@ -45,6 +51,12 @@ before(async () => {
       [X(62)]: kbExec(62, '', [], { event: true, canvas: kbCanvas({ nodeKbs: [KB_FAQ] }), extraResults: [run(4)] }),
       [X(63)]: kbExec(63, '怎么修改收货地址', [{ ...toolCall(KB_FAQ, '怎么修改收货地址', { threshold: 0.6 }), toolResult: { error: 'timeout' } }]),
       [X(64)]: kbExec(64, '课程怎么退', [tagged]),
+      [X(65)]: kbExec(65, '课程怎么退', [toolCall(KB_FAQ, '课程怎么退', { threshold: 0.6 })], { extraResults: [run(3, { metadata: {} })] }),
+      [X(66)]: kbExec(66, '发票', [toolCall(KB_FAQ, '发票', { threshold: 0.6 })], { extraResults: [run(4, { inputs: { inputData: { query: '发票' } } })] }),
+      [X(68)]: kbExec(68, '课程怎么退', [toolCall(KB_FAQ, '课程怎么退', { threshold: 0.6 })]),
+      [X(69)]: kbExec(69, '课程怎么退', [toolCall(KB_FAQ, '课程怎么退', { threshold: 0.6 })]),
+      [X(70)]: kbExec(70, '课程怎么退', [], { canvas: kbCanvas({ nodeKbs: [KB_FAQ, KB_GONE] }), extraResults: [run(4, { inputs: { inputData: { query: '课程怎么退' } } })] }),
+      [X(71)]: kbExec(71, '课程怎么退', [noThreshold]),
     },
   });
 });
@@ -92,7 +104,14 @@ test('md kb why：候选里列出过了门槛、但排在前 10 名之后的（s
   const [top, ...rest] = call.toolResult.result;
   const para = { knowledgeBaseId: KB_FAQ, score: 0.95, content: '课程退款规则', sourceType: 'doc', reference: { type: 'doc', source: { id: 9001 } } };
   const mixed = { ...call, toolResult: { success: true, result: [top, para, ...rest].slice(0, 10) } };
-  const s = await startKbServer({ faqRows: rows, details: { [X(33)]: kbExec(33, '课程怎么退款', [call]), [X(34)]: kbExec(34, '课程怎么退款', [mixed]) } });
+  const s = await startKbServer({
+    faqRows: rows,
+    details: {
+      [X(33)]: kbExec(33, '课程怎么退款', [call]),
+      [X(34)]: kbExec(34, '课程怎么退款', [mixed]),
+      [X(72)]: kbExec(72, '课程怎么退款', [toolCall(KB_FAQ, '课程怎么退款', { threshold: 0.8, rows })]),
+    },
+  });
   try {
     const r = await runCli(['kb', 'why', X(33)], { home: home(s.origin) });
     assert.equal(r.code, 0, r.stderr);
@@ -103,6 +122,11 @@ test('md kb why：候选里列出过了门槛、但排在前 10 名之后的（s
     assert.equal(m.code, 0, m.stderr);
     assert.match(m.stdout, /记录的召回：#7001 1\.000、#9001（doc）0\.950、#8001/);
     assert.doesNotMatch(m.stdout, /知识库在这次执行之后改过/);
+    // 门槛 0.8：0.8 以上的已经有 13 行，#7002 被挤出；它又不在 0.8 以上的结果里，分数也低于门槛（整支审查小问题 2）
+    const both = await runCli(['kb', 'why', X(72), '--expect', '7002'], { home: home(s.origin) });
+    assert.match(both.stdout, /结论：被挤出前 10 名 —— 重放结果里没有这一条（语义搜索只返回 0\.8 以上的）；过了门槛、分数比它高的已经占了 13 个名次/);
+    assert.match(both.stdout, /补充：分数不够门槛 —— 重放结果里没有这一条（语义搜索只返回 0\.8 以上的），它的分数低于门槛 0\.800/);
+    assert.deepEqual(s.unexpected(), []);
   } finally {
     await s.close();
   }
@@ -128,15 +152,30 @@ test('md kb why：按关键词找目标，在别的库里——不在查询的�
   assert.match(r.stdout, /结论：不在查询的库里 —— 这一条在「财务 FAQ」里，这次查的不是这个库/);
 });
 
-test('md kb why：有多处检索时要求 --node；挂了工具没调', async () => {
-  const many = await md(['kb', 'why', X(25)]);
-  assert.equal(many.code, 4);
-  assert.match(many.stderr, /这次执行有 2 处知识库检索，用 --node 指定/);
-  assert.match(many.stderr, /#3 闲聊：挂了知识库工具但没调/);
-  const r = await md(['kb', 'why', X(25), '--node', '闲聊']);
+test('md kb why：一处检索都没有时，挂了知识库工具却没调的节点逐个报「模型没调知识库工具」（spec §3.5 第 2 步）', async () => {
+  const r = await md(['kb', 'why', X(25)]);
   assert.equal(r.code, 0, r.stderr);
-  assert.match(r.stdout, /检索：#3 闲聊 挂了知识库工具（「已不存在的库 dddd0004」），这次一次都没调/);
-  assert.match(r.stdout, /结论：模型没调知识库工具/);
+  assert.match(r.stdout, /检索：#2 回答生成 挂了知识库工具（「售后 FAQ」、「财务 FAQ」），这次一次都没调\n结论：模型没调知识库工具/);
+  assert.match(r.stdout, /检索：#3 闲聊 挂了知识库工具（「已不存在的库 dddd0004」），这次一次都没调\n结论：模型没调知识库工具/);
+  assert.match(r.stdout, /下一步：md trial 00000002-0000-4000-8000-000000000000 [^\n]*\n下一步：md trial 00000003-0000-4000-8000-000000000000 /);
+  const one = await md(['kb', 'why', X(25), '--node', '闲聊']);
+  assert.equal(one.code, 0, one.stderr);
+  assert.doesNotMatch(one.stdout, /#2 回答生成/);
+  assert.match(one.stdout, /检索：#3 闲聊 挂了知识库工具（「已不存在的库 dddd0004」），这次一次都没调/);
+});
+
+test('md kb why：只有一处真的检索时直接看它，挂了工具没调的节点只附一句（整支审查小问题 1）', async () => {
+  const r = await md(['kb', 'why', X(65)]);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /另有 1 个挂了知识库工具的大模型节点这次没调：#3 闲聊（要看它加 --node）/);
+  assert.match(r.stdout, /检索：#2 回答生成 第 1 次调用知识库工具/);
+  assert.doesNotMatch(r.stdout, /检索：#3 闲聊/);
+});
+
+test('md kb why：有多处真的检索时列出来，要求 --node', async () => {
+  const r = await md(['kb', 'why', X(66)]);
+  assert.equal(r.code, 4);
+  assert.match(r.stderr, /这次执行有 2 处知识库检索，用 --node 指定：\n  - #2 回答生成：调了 1 次知识库工具\n  - #3 查手册：知识库查询节点/);
 });
 
 test('md kb why：一个节点调了两个库，逐次分析（Review Focus 2）', async () => {
@@ -147,6 +186,49 @@ test('md kb why：一个节点调了两个库，逐次分析（Review Focus 2）
   assert.match(first, /结论：不在查询的库里 —— 这一条在「财务 FAQ」里/);
   assert.match(second, /第 2 次调用知识库工具 · 库「财务 FAQ」/);
   assert.match(second, /结论：这次召回到了这一条（排第 1，0\.400）/);
+  // 几次调用放在一起的总结论（整支审查小问题 9）
+  assert.match(r.stdout, /总结：2 次调用里，第 2 次召回到了这一条/);
+});
+
+test('md kb why：几次调用都没召回时总结各次的原因；同一个库的 FAQ 只整库拉一次（整支审查小问题 9）', async () => {
+  const before = server.requests.length;
+  const r = await md(['kb', 'why', X(26), '--expect', '7003']);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /总结：2 次调用都没召回这一条（第 1 次：分数偏低；第 2 次：不在查询的库里）/);
+  const scans = server.requests.slice(before).filter((q) => q.path === '/api/qa/list' && q.body?.sortType === 'DEFAULT' && q.body?.knowledgeBaseId === KB_FAQ);
+  assert.equal(scans.length, 1);
+});
+
+test('md kb why：重放里没有、又推不出原因时报「分数偏低」（整支审查小问题 10）', async () => {
+  const r = await md(['kb', 'why', X(68), '--expect', '7002']);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /结论：分数偏低 —— 重放结果里没有这一条（语义搜索只返回 0\.8 以上的），它的分数低于 0\.8/);
+});
+
+test('md kb why：重放显示它该召回、记录里却没有——知识库改过，查不出（整支审查小问题 10）', async () => {
+  server.state.faqs = faqs().map((f) => (f.id === 7002 ? { ...f, question: '课程怎么退呀' } : f));
+  try {
+    const r = await md(['kb', 'why', X(69), '--expect', '7002']);
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout, /⚠️ 知识库在这次执行之后改过/);
+    assert.match(r.stdout, /结论：查不出 —— 以上原因都不成立，用 md trial 复验/);
+  } finally {
+    server.state.faqs = faqs();
+  }
+});
+
+test('md kb why：查询节点挂的库里有一个被删了——候选只查还在的库，不抛接口的原始报错（整支审查小问题 7）', async () => {
+  const r = await md(['kb', 'why', X(70)]);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /检索：#\d+ 查手册（知识库查询节点）· 库「售后 FAQ」、「已不存在的库 dddd0004」/);
+  assert.match(r.stdout, /看某一条为什么没召回/);
+});
+
+test('md kb why：工具调用没记录门槛——标题照实写，不拿「门槛 ?」去比（整支审查小问题 5）', async () => {
+  const r = await md(['kb', 'why', X(71), '--expect', '7002']);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /第 1 次调用知识库工具 · 库「售后 FAQ」\(aaaa0001\) · 查询「课程怎么退」 · 门槛没记录 · 召回 1 条/);
+  assert.match(r.stdout, /结论：查不出 —— 这次调用没记录门槛，推不出为什么没召回；用 md trial 看/);
 });
 
 test('md kb why：知识库在执行之后改过——重放和记录（0.8 以上的部分）对不上时提示', async () => {

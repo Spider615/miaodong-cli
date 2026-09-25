@@ -54,16 +54,17 @@ test('diagnose：分数过了门槛但排在 10 条之外是被挤出', () => {
 });
 
 test('diagnose：重放里没有这一条（分数低于 0.8，控制台看不到）时按门槛和召回条数推断（spec §3.5 判定表）', () => {
-  const missing = (retrieval, count, floor = count ? 0.82 : null) => diagnose({ retrieval, target: reviewed, replay: { query: { floor, count } } });
+  const missing = (retrieval, count, { floor = count ? 0.82 : null, passing = count, truncated = false } = {}) => diagnose({ retrieval, target: reviewed, replay: { query: { floor, count, passing, truncated } } });
   // 门槛不低于 0.8：它的分数低于门槛
-  const high = missing(call({ threshold: 0.85, recorded: 0 }), 3);
+  const high = missing(call({ threshold: 0.85, recorded: 0 }), 3, { passing: 2 });
   assert.deepEqual(codes(high), ['below_threshold']);
   assert.equal(high[0].detail, '重放结果里没有这一条（语义搜索只返回 0.8 以上的），它的分数低于门槛 0.850');
   // 0.8 以上的行都过了门槛，已经占了 12 个名次：被挤出前 10 名（门槛低于 0.8、等于 0.8 都一样）
   const crowded = missing(call({ recorded: 10 }), 12);
   assert.deepEqual(codes(crowded), ['crowded_out']);
   assert.equal(crowded[0].detail, '重放结果里没有这一条（语义搜索只返回 0.8 以上的）；过了门槛、分数比它高的已经占了 12 个名次（同一条 FAQ 在索引里可能占好几个名次）');
-  assert.deepEqual(codes(missing(call({ threshold: 0.8, recorded: 10 }), 12)), ['crowded_out']);
+  // 门槛 0.8、重放没截断时，它不在 0.8 以上的结果里，分数也必然低于门槛：不够门槛作补充（整支审查小问题 2）
+  assert.deepEqual(codes(missing(call({ threshold: 0.8, recorded: 10 }), 12)), ['crowded_out', 'below_threshold']);
   // 这次一条都没召回：没有过门槛的，它也没过
   assert.deepEqual(codes(missing(call({ recorded: 0 }), 0)), ['below_threshold']);
   // 召回了 3 条、不满 10 条也推不出：同一条 FAQ 占好几行时，前 10 行去重后本来就不满 10 条（09-25 真机：20 次不满 10 条全是这样）
@@ -132,4 +133,38 @@ test('diagnose：重放不了（查询取不到、带了标签、库已删、只
     const r = diagnose({ retrieval: call({ noReplay: why, recorded: 0 }), target: reviewed, replay: { query: { floor: null, count: 0 } } });
     assert.deepEqual(r, [{ code: 'unknown', title: '查不出', detail: `${why}，只能用 md trial 看` }]);
   }
+});
+
+test('diagnose：被挤出和不够门槛同时成立时都报：被挤出是结论，不够门槛作补充（整支审查小问题 2）', () => {
+  const missing = (retrieval, q) => diagnose({ retrieval, target: reviewed, replay: { query: q } });
+  const both = missing(call({ threshold: 0.8, recorded: 10 }), { floor: 0.82, count: 12, passing: 12, truncated: false });
+  assert.deepEqual(codes(both), ['crowded_out', 'below_threshold']);
+  assert.equal(both[1].detail, '重放结果里没有这一条（语义搜索只返回 0.8 以上的），它的分数低于门槛 0.800');
+  // 门槛 0.85：最低分 0.82 没过门槛，但过了门槛的也已经有 11 行
+  assert.deepEqual(codes(missing(call({ threshold: 0.85, recorded: 10 }), { floor: 0.82, count: 30, passing: 11, truncated: false })), ['crowded_out', 'below_threshold']);
+  // 重放截断了（取满 50 行）、最低分也过了门槛：它可能也在 0.8 以上，只能说被挤出
+  assert.deepEqual(codes(missing(call({ threshold: 0.8, recorded: 10 }), { floor: 0.9, count: 50, passing: 50, truncated: true })), ['crowded_out']);
+  // 找到了、分数不够门槛：过了门槛的已经占了 11 个名次，就算它过了门槛也进不去
+  const found = diagnose({ retrieval: call({ threshold: 0.9 }), target: reviewed, replay: { query: { score: 0.8333, rank: 13, passing: 11 } } });
+  assert.deepEqual(codes(found), ['below_threshold', 'crowded_out']);
+  assert.equal(found[1].detail, '过了门槛、分数比它高的已经占了 11 个名次，就算它过了门槛也进不了前 10 名（同一条 FAQ 在索引里可能占好几个名次）');
+});
+
+test('diagnose：工具调用没记录门槛时，只下和门槛无关的结论（整支审查小问题 5）', () => {
+  const noT = (q, extra = {}) => diagnose({ retrieval: call({ threshold: null, recorded: 3, ...extra }), target: reviewed, replay: { query: q } });
+  const far = noT({ score: 0.9, rank: 12, passing: null });
+  assert.deepEqual(codes(far), ['crowded_out']);
+  assert.equal(far[0].detail, '分数 0.900，排第 12 名：就算过了门槛也进不了前 10 名（同一条 FAQ 在索引里可能占好几个名次）');
+  assert.deepEqual(codes(noT({ floor: 0.82, count: 12, passing: null, truncated: false })), ['crowded_out']);
+  assert.deepEqual(noT({ score: 0.9, rank: 2, passing: null }), [{ code: 'unknown', title: '查不出', detail: '这次调用没记录门槛，推不出为什么没召回；用 md trial 看' }]);
+  assert.deepEqual(codes(noT({ floor: 0.82, count: 3, passing: null, truncated: false })), ['unknown']);
+  // 也不判「查询被改写」：原话能不能召回要看门槛
+  const r = diagnose({ retrieval: call({ threshold: null, query: '退款流程' }), target: reviewed, userText: '课程怎么退款', replay: { query: { floor: null, count: 0, passing: null, truncated: false }, user: { score: 1, rank: 1, passing: null } } });
+  assert.deepEqual(codes(r), ['unknown']);
+});
+
+test('drifted：没记录门槛时，拿记录里最低的分数当线（门槛不会比它高）', () => {
+  assert.equal(drifted(rec([hit(1, 0.9), hit(2, 0.85)], { threshold: null }), [row(1, 0.9), row(2, 0.85), row(3, 0.82)]), false);
+  assert.equal(drifted(rec([hit(1, 0.9), hit(2, 0.85)], { threshold: null }), [row(1, 0.9), row(3, 0.87), row(2, 0.85)]), true);
+  assert.equal(drifted(rec([], { threshold: null }), [row(1, 0.9)]), false);
 });

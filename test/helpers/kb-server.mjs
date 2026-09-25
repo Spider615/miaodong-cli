@@ -45,6 +45,7 @@ export async function startKbServer({ details = {}, pageCap = Infinity, kbs = kb
       if (body.filterType === undefined || body.sortType === undefined) {
         return bad('filterType must be one of the following values: ALL, REVIEWED, GENERATED, 0, 1, 2');
       }
+      if (!kbs.some((k) => k.id === body.knowledgeBaseId)) return bad('knowledge base not found');
       if (semanticFail && body.searchMode === 'semantic') return { status: 502, body: { statusCode: 502, message: 'Bad Gateway' } };
       let rows = state.faqs.filter((f) => f.kb === body.knowledgeBaseId);
       if (typeof body.filterType === 'string') rows = rows.filter((f) => !f.isReviewed); // 真实服务端的坑：传字符串一律只回未审核的
@@ -58,11 +59,11 @@ export async function startKbServer({ details = {}, pageCap = Infinity, kbs = kb
       }
       return page(out, body.current, body.pageSize);
     },
-    'POST /api/qa/check-similarity': ({ body }) => ok(state.faqs
+    'POST /api/qa/check-similarity': ({ body }) => (!kbs.some((k) => k.id === body.knowledgeBaseId) ? bad('knowledge base not found') : ok(state.faqs
       .filter((f) => f.kb === body.knowledgeBaseId)
       .map((f) => ({ qaId: f.id, question: f.question, answer: f.answer, similarity: sim(body.question, f.question), reviewed: f.isReviewed, materials: [], mhMaterialIds: [] }))
       .filter((f) => f.similarity >= 0.5)
-      .sort((a, b) => b.similarity - a.similarity)),
+      .sort((a, b) => b.similarity - a.similarity))),
     'GET /api/knowledge-base/file/list': ({ query }) => page(
       files().filter((f) => f.kb === query.knowledgeBaseId).map(({ kb, paragraphCount, ...f }) => ({ ...f, createAt: 0, createBy: 'u', tags: [] })),
       query.current, query.pageSize,
