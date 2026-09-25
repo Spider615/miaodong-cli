@@ -2,21 +2,23 @@
 //   sets / cases / tasks / items —— 服务端数据；posts —— 每个写接口收到的请求体；log —— 写接口的先后顺序
 //   canvas —— canvas/get 返回的画布（默认 targetCanvas()）；itemCost —— 每条跑完的花费
 //   perPoll —— 每查一次 detail 跑完几条（默认全部）；tree —— null 表示老一代（scenario/tree 返回 404）
+//   pageCap —— 每页最多返回几条（模拟服务端封顶）
 // 事件在目标智能体里不存在的用例会「空跑」：status success、passed false、没有执行、花费为空（spec §2.3 核对 6）
 import { ok, startFakeMiaodong } from './fake-miaodong.mjs';
 import { SOURCE_BOT, TARGET_BOT, botEvents, botVars, importable, targetCanvas } from './testcenter-fixtures.mjs';
 
 const id = (prefix, n) => `${prefix}${String(n).padStart(8 - prefix.length, '0')}-0000-4000-8000-000000000000`;
-const page = (rows, query) => {
-  const size = Number(query.pageSize) || 20;
-  const current = Number(query.current) || 1;
-  return ok(rows.slice((current - 1) * size, current * size), { page: { current, pageSize: size, total: rows.length } });
-};
 const bad = (message) => ({ status: 400, body: { statusCode: 400, message, error: 'Bad Request' } });
 const WRITABLE = ['name', 'dimension', 'triggerType', 'triggerInputs', 'sessionMemoryCustomData', 'pluginMockOutputs', 'sqlDbMockOutputs', 'testNodeOutputAssertions', 'canvasActionOutputAssertions', 'isStrictVerify'];
 
 export async function startTestCenterServer({ itemCost = 0.02, perPoll = Infinity, tree = [] } = {}) {
   const state = { sets: [], cases: [], tasks: [], items: new Map(), posts: {}, log: [], canvas: null, itemCost, perPoll, tree, n: 0 };
+  // pageCap：服务端把每页封顶在多少条（比请求的 pageSize 小时，只能靠 page.total 判断读没读完）
+  const page = (rows, query) => {
+    const size = Math.min(Number(query.pageSize) || 20, state.pageCap ?? Infinity);
+    const current = Number(query.current) || 1;
+    return ok(rows.slice((current - 1) * size, current * size), { page: { current, pageSize: size, total: rows.length } });
+  };
   const record = (key, body) => {
     (state.posts[key] ??= []).push(body);
     state.log.push(key);

@@ -10,17 +10,20 @@ const MAX_PAGES = 200;
 const q = (t, extra = {}) => ({ orgId: t.orgId, botId: t.botId, ...extra });
 const post = (t, path, body) => request(t.identity, `${TC}${path}`, { method: 'POST', query: q(t), body, timeoutMs: 90_000 });
 
-// 翻到底：以 page.total 为准，没有 total 时看这一页满没满
+// 翻到底。有 page.total 以它为准：服务端可能把每页封顶在比 pageSize 小的数，「这一页没满」不代表读完了（审查 I5）；
+// 没有 total 才看这一页满没满。翻到页数上限还没读完就报错：跑前检查、预估、删测试集都假设列表是全的，不能悄悄截断
 async function paged(t, path, extra, pageSize) {
   const rows = [];
+  let total = null;
   for (let current = 1; current <= MAX_PAGES; current++) {
     const payload = await request(t.identity, `${TC}${path}`, { query: q(t, { ...extra, current, pageSize }), timeoutMs: 90_000 });
     const page = asArray(payload?.data);
     rows.push(...page);
-    const total = Number(payload?.page?.total);
-    if (page.length < pageSize || (Number.isFinite(total) && rows.length >= total)) break;
+    const n = Number(payload?.page?.total);
+    if (Number.isFinite(n)) total = n;
+    if (!page.length || (total !== null ? rows.length >= total : page.length < pageSize)) return rows;
   }
-  return rows;
+  throw new MdError('upstream', `${path} 翻了 ${MAX_PAGES} 页还没读完（已读 ${rows.length} 条，共 ${total ?? '?'} 条）`, { hint: '数据太多，md 只读到了一部分；这条命令没有继续往下做' });
 }
 
 export const listTestSets = (t) => paged(t, '/test-set/list', {}, 100);

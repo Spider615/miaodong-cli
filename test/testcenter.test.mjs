@@ -1,7 +1,7 @@
 import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { startTestCenterServer } from './helpers/testcenter-server.mjs';
-import { CROSS_EXEC, SAME_EXEC, TARGET_BOT } from './helpers/testcenter-fixtures.mjs';
+import { CROSS_EXEC, SAME_EXEC, TARGET_BOT, importable } from './helpers/testcenter-fixtures.mjs';
 import {
   createTask, createTestSet, deleteCases, deleteTestSet, importExecs, listCases, listTestSets,
   pauseTask, recentTasks, scenarioTree, taskDetail, taskItems, updateCase,
@@ -58,4 +58,19 @@ test('场景树：老一代 404 返回 null；删用例再删集', async () => {
   await deleteTestSet(t(), set);
   assert.equal((await listCases(t(), set)).length, 0);
   assert.ok(!(await listTestSets(t())).some((s) => s.testSetId === set));
+});
+
+test('翻页以 page.total 为准：服务端把每页封顶在 100 条时也读全；翻到页数上限还没读完就报错，不悄悄截断（审查 I5）', async () => {
+  const set = await createTestSet(t(), '大集');
+  const add = (n) => { for (let i = 0; i < n; i++) fake.state.cases.push({ ...structuredClone(importable[SAME_EXEC]), testCaseId: `e${String(fake.state.cases.length).padStart(7, '0')}-0000-4000-8000-000000000000`, testSetId: set }); };
+  try {
+    add(150);
+    fake.state.pageCap = 100;
+    assert.equal((await listCases(t(), set)).length, 150);
+    add(51);
+    fake.state.pageCap = 1;
+    await assert.rejects(listCases(t(), set), (e) => /翻了 200 页还没读完（已读 200 条，共 201 条）/.test(e.message));
+  } finally {
+    fake.state.pageCap = undefined;
+  }
 });
