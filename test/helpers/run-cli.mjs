@@ -1,7 +1,7 @@
 // 起子进程跑 md。默认跑源码（Node 22 + strip-types），传 bundle 时跑打包产物，
 // 并可用 MD_E2E_NODE 指定别的 node（用来验证 Node 18）。
 // HOME 与 MD_HOME 都指向临时目录，保证测试碰不到真实身份与工作副本。
-// 试跑的轮询间隔压到 5ms。
+// 试跑、导入知识库时的轮询间隔压到 5ms。
 import { spawn } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -24,7 +24,7 @@ export function runCli(args, { home, env = {}, input, bundle } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(nodeBin, argv, {
       cwd: REPO,
-      env: { PATH: process.env.PATH ?? '', HOME: home, MD_HOME: join(home, 'md'), MD_POLL_MS: '5', ...env },
+      env: { PATH: process.env.PATH ?? '', HOME: home, MD_HOME: join(home, 'md'), MD_POLL_MS: '5', MD_KB_POLL_MS: '5', ...env },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stdout = '';
