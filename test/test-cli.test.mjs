@@ -359,3 +359,34 @@ test('results 两个任务：按用例对齐，--out csv 每个任务一组「�
   assert.match(csv, /用例名,调优中心执行ID,用户消息,线上回复,改前 通过,改前 回复,改后 通过,改后 回复/);
   assert.match(csv, /1\/1,回复：我想退款,1\/1,回复：我想退款/);
 });
+
+test('drop：先预演给计划码、什么都不删；码不对退出码 5；对了先备份，再先删用例后删集，回读确认（审查重点 4）', async () => {
+  reset();
+  seedSet('要删的集', [SAME_EXEC, CROSS_EXEC]);
+  const h = home();
+  const preview = await md(['test', 'drop', '要删的集', '--bot', '179cd443'], h);
+  assert.equal(preview.code, 0, preview.stderr);
+  assert.match(preview.stdout, /要删的测试集「要删的集」\(40000001\)：2 条用例/);
+  const code = preview.stdout.match(/计划码：([0-9a-f]{8})/)[1];
+  assert.deepEqual(fake.state.log, []);
+  assert.equal((await md(['test', 'drop', '要删的集', '--bot', '179cd443', '--confirm', '00000000'], h)).code, 5);
+  const r = await md(['test', 'drop', '要删的集', '--bot', '179cd443', '--confirm', code], h);
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(fake.state.log, ['batchDelete', 'setDelete']);
+  assert.equal(fake.state.sets.length, 0);
+  const backup = r.stdout.match(/备份：(\S+)/)[1];
+  assert.equal(JSON.parse(readFileSync(backup, 'utf-8')).cases.length, 2);
+});
+
+test('drop：预演之后集里的用例变了，原来的计划码就对不上，什么都不删', async () => {
+  reset();
+  const set = seedSet('集', [SAME_EXEC]);
+  const h = home();
+  const code = (await md(['test', 'drop', '集', '--bot', '179cd443'], h)).stdout.match(/计划码：([0-9a-f]{8})/)[1];
+  fake.state.cases.push({ ...structuredClone(importable[CROSS_EXEC]), testCaseId: 'b0000009-0000-4000-8000-000000000000', testSetId: set });
+  const r = await md(['test', 'drop', '集', '--bot', '179cd443', '--confirm', code], h);
+  assert.equal(r.code, 5);
+  assert.match(r.stderr, /计划码对不上/);
+  assert.equal(fake.state.sets.length, 1);
+  assert.deepEqual(fake.state.log, []);
+});
