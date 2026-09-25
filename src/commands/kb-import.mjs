@@ -12,7 +12,7 @@ import { activeImport, createRecord, importCount, listRecords, loadRecord, lockK
 import { IMPORT_STEPS, STEP_NAMES, itemsByType, itemsOf, runImport } from '../kb-import-run.mjs';
 import { REVOKE_NAMES, tracking } from '../kb-revoke.mjs';
 import { affectedBots, findKbById, importCode, planImport } from '../kb-import-plan.mjs';
-import { applySettle, describe, label, rowsOf, save, settleOpen } from '../kb-ops.mjs';
+import { applySettle, describe, label, orphanRows, rowsOf, save, settleOpen } from '../kb-ops.mjs';
 import { textKey } from '../kb-package.mjs';
 import { out, shortId } from '../output.mjs';
 import { targetArgs } from '../target.mjs';
@@ -63,31 +63,46 @@ function printSettle(s, pkg, importId) {
   const text = (k) => (open.type === 'faq' ? items[k]?.question : items[k]?.name);
   out(`上次停下时发出去、还没对上的：${label(open.type)} ${open.keys.length} 条（${open.keys.slice(0, 5).map((k) => `「${text(k)}」`).join('、')}${open.keys.length > 5 ? '……' : ''}）`);
   const claimed = Object.entries(s.claimed);
-  if (claimed.length) out(`  现在在库里对上了、当成这次建的：${claimed.map(([k, id]) => `#${id}「${text(k)}」`).join('、')}`);
-  if (s.extras.length) out(`  还多出 ${s.extras.length} 条一模一样的：是这次重复建出来的，续跑时删掉（#${s.extras.join('、#')}）`);
-  if (!s.unresolved.length) return;
+  if (claimed.length) out(`  请求刚发完时就在库里、内容一模一样，认下了：${claimed.map(([k, id]) => `#${id}「${text(k)}」`).join('、')}`);
+  const late = Object.entries(s.late);
+  if (late.length && open.type === 'faq') {
+    out(`  库里有和这几条一模一样的，但是这次请求之后才出现的：${late.map(([k, r]) => `#${r.id}「${text(k)}」`).join('、')}——可能是这次的请求晚落库了，也可能是别人按同样的内容建的`);
+    out(`  确认续跑就是认定它们是这次建的（md 接着用它们，撤回时会删它们）；不是的话别续跑：先 md kb revoke ${importId}（不会动它们），再弄清楚是谁建的`);
+  }
+  if (late.length && open.type === 'doc') {
+    out(`  库里有同名的文件，是这次请求之后才出现的：${late.map(([, r]) => `#${r.id}「${r.name}」（空的手工文件）`).join('、')}——可能是这次的请求晚落库了，也可能是别人建的；md 不认它、也不往里写，续跑会另建一个`);
+    out('  它要是这次晚落库的，请用户之后在秒懂上删掉这个空文件（撤回时也会把它列出来）');
+  }
+  const resend = s.unresolved.filter((k) => !(s.late[k] && open.type === 'faq') && !s.ambiguous[k]);
+  if (!resend.length) return;
   const doubt = [...s.suspects, ...s.past];
   if (doubt.length) {
-    out(`  没对上的 ${s.unresolved.length} 条在库里没有一模一样的；写的时候库里多出来、对不上的：${describe(open.type, doubt)}`);
-    out(`  确认续跑就是认定它们不是这次建的：md 不会动它们，没对上的 ${s.unresolved.length} 条会重新发一次。它们要是这次写进去的（秒懂改写了内容），就别续跑：先 md kb revoke ${importId}，再在秒懂上手动删掉它们`);
+    out(`  没对上的 ${resend.length} 条在库里没有一模一样的；写的时候库里多出来、对不上的：${describe(open.type, doubt)}`);
+    out(`  确认续跑就是认定它们不是这次建的：md 不会动它们，没对上的 ${resend.length} 条会重新发一次。它们要是这次写进去的（秒懂改写了内容），就别续跑：先 md kb revoke ${importId}，再请用户在秒懂上看一眼、决定怎么处理`);
   } else {
-    out(`  没对上的 ${s.unresolved.length} 条在库里找不到，写的时候库里也没多出来别的：就是没建成，续跑会重新发一次`);
+    out(`  没对上的 ${resend.length} 条在库里找不到，写的时候库里也没多出来别的：就是没建成，续跑会重新发一次`);
   }
 }
 
 const settleKey = (s) => (s ? {
-  op: s.open.op, keys: s.open.keys ?? null, ids: s.open.ids ?? null, claimed: s.claimed ?? null, extras: s.extras ?? null,
+  op: s.open.op, keys: s.open.keys ?? null, ids: s.open.ids ?? null, claimed: s.claimed ?? null,
+  late: s.late ? Object.fromEntries(Object.entries(s.late).map(([k, r]) => [k, r.id])) : null,
   doubt: s.suspects ? [...s.suspects, ...s.past].map((r) => r.id) : null, gone: s.gone ?? null,
 } : null);
 
-// 续跑要发的 FAQ（还没认上的）里，库里已经有同一个问题、又不是这次建的：和导入时的闸门一样拦下（复审：预演之后有人加了同样的问题）
-async function duplicatesNow(ctx, pkg, state, settle) {
-  const pending = pkg.faqs.filter((f) => !state.faqIds[f.key] && !settle?.claimed?.[f.key]);
+// 续跑要发的 FAQ（还没认上、也不是等用户确认的）里，库里已经有同一个问题、而且是导入开始之后才出现的、又不是这次建的：
+// 和导入时的闸门一样拦下（再建就重复了）。导入开始时就在的（包括包里要删的旧 FAQ）预演时查过，不再查
+async function duplicatesNow(ctx, rec, settle) {
+  const { pkg, state, snapshot } = rec;
+  const waiting = settle?.open.op !== 'delete' ? new Set([...Object.keys(settle?.claimed ?? {}), ...Object.keys(settle?.late ?? {}), ...Object.keys(settle?.ambiguous ?? {})]) : new Set();
+  const pending = pkg.faqs.filter((f) => !state.faqIds[f.key] && !waiting.has(f.key));
   if (!pending.length) return [];
-  const mine = new Set([...Object.values(state.faqIds), ...Object.values(settle?.claimed ?? {}), ...(state.extras?.faq ?? []), ...(settle?.extras ?? [])]);
-  const rows = (await rowsOf(ctx, 'faq')).filter((r) => !mine.has(r.id));
+  const listed = new Set([...(settle?.suspects ?? []), ...(settle?.past ?? []), ...Object.values(settle?.late ?? {}), ...Object.values(settle?.ambiguous ?? {}).flat()].map((r) => r.id));
+  const mine = new Set([...Object.values(state.faqIds), ...Object.values(settle?.claimed ?? {})]);
+  const before = new Set(snapshot?.faqIds ?? []);
+  const rows = (await rowsOf(ctx, 'faq')).filter((r) => !before.has(r.id) && !mine.has(r.id) && !listed.has(r.id));
   return pending.flatMap((f) => rows.filter((r) => textKey(r.question) === textKey(f.question)).slice(0, 1)
-    .map((r) => `新 FAQ「${f.question}」（${f.key}）和库里 #${r.id} 完全一样（导入之后有人加的）：要保留它就先撤回这次导入（md kb revoke ${state.importId}），要换掉就先在秒懂上删掉它`));
+    .map((r) => `新 FAQ「${f.question}」（${f.key}）和库里 #${r.id} 问题一样（导入开始之后才出现的，不是这次建的）：续跑会让这个问题有两条。请用户在秒懂上看一眼 #${r.id}：要保留它，就撤回这次导入（md kb revoke ${state.importId}）；要换成这次的内容，由用户在秒懂上处理掉它之后再续跑`));
 }
 
 // 停下之后接着做（3b §4.3）：说明做完了哪几步、还剩什么（包括还要删的），上次开着的意图重新认一次，给一个新的计划码；
@@ -113,15 +128,28 @@ async function resumeImport(args, importId) {
     const doneSteps = IMPORT_STEPS.filter((s) => state.steps[s]);
     const left = IMPORT_STEPS.filter((s) => !state.steps[s]);
     if (state.stopped) out(`停在「${STEP_NAMES[state.stopped.step]}」：${state.stopped.reason}`);
-    if (settle?.stuck?.length) {
-      const doubt = [...settle.suspects, ...settle.past];
-      throw new MdError('kb_resume_refused', `有 ${settle.stuck.length} 条已经发了两次，两次写的时候库里都多出来对不上的（或者发出去都找不到）${doubt.length ? `：${describe(settle.open.type, doubt)}` : ''}。多半是秒懂改写了这几条的内容，不能再续跑`, {
-        hint: `先 md kb revoke ${importId}，再在秒懂上手动删掉上面列的；按秒懂改写后的样子改导入包，再重新导入`,
+    printSettle(settle, rec.pkg, importId);
+    const same = settle?.open.op !== 'delete' ? Object.values(settle?.ambiguous ?? {}).flat() : [];
+    if (same.length) {
+      throw new MdError('kb_resume_refused', `库里有不止一条和要建的一模一样的：${describe(settle.open.type, same)}——分不清哪条是这次建的（可能是这次的请求落了两次，也可能是有人同时导了同样的内容），不能续跑`, {
+        hint: `先 md kb revoke ${importId}（撤回不会动它们，会列出来），再请用户在秒懂上看一眼、决定留哪条`,
       });
     }
-    const dups = await duplicatesNow(ctx, rec.pkg, state, settle);
+    const stuck = settle?.stuck?.filter((k) => !(settle.late[k] && settle.open.type === 'faq')) ?? [];
+    if (stuck.length) {
+      const doubt = [...settle.suspects, ...settle.past];
+      const late = stuck.map((k) => settle.late[k]).filter(Boolean);
+      const orphans = (await orphanRows(ctx, state)).filter((x) => x.type === settle.open.type).map((x) => x.row);
+      const same = [...new Map([...late, ...orphans].map((r) => [r.id, r])).values()];
+      const why = same.length
+        ? `两次写完当时都没在库里找到，之后才出现一模一样的：${describe(settle.open.type, same)}——多半是秒懂的列表延迟很长（它们就是这几次建的），md 不在事后认它们`
+        : `两次写完都没在库里找到一模一样的${doubt.length ? `，写的时候库里多出来：${describe(settle.open.type, doubt)}` : ''}——多半是秒懂改写了这几条的内容`;
+      throw new MdError('kb_resume_refused', `有 ${stuck.length} 条已经发了两次，${why}，不能再续跑`, {
+        hint: `先 md kb revoke ${importId}；再请用户在秒懂上看一眼上面列的：是这次写进去的就手动删掉，不是就别动${same.length ? '' : '；按秒懂改写后的样子改导入包，再重新导入'}`,
+      });
+    }
+    const dups = await duplicatesNow(ctx, rec, settle);
     if (dups.length) throw new MdError('kb_import_blocked', `闸门没过（续跑一条都不会写）：\n${dups.map((b) => `  - ${b}`).join('\n')}`, { hint: '按上面处理之后再预演一次' });
-    printSettle(settle, rec.pkg, importId);
     out(`做完的：${doneSteps.map((s) => STEP_NAMES[s]).join('、') || '没有'}`);
     out(`还要做：${left.map((s) => STEP_NAMES[s]).join('、')}`);
     const goneNow = (t) => settle?.open.op === 'delete' && settle.open.type === t.type && settle.gone.includes(t.id);
@@ -137,7 +165,7 @@ async function resumeImport(args, importId) {
       return EXIT.OK;
     }
     if (given !== code) throw new MdError('plan_mismatch', `计划码对不上（给的是 ${given || '空'}，当前是 ${code}）`, { exitCode: EXIT.BLOCKED, hint: '重新预演一次，把新的情况给用户看' });
-    applySettle(ctx, state, settle);
+    applySettle(ctx, state, settle, { claimLate: true });
     save(ctx);
     await runImport(ctx);
     return EXIT.OK;

@@ -93,52 +93,95 @@ test('建 FAQ 的第 2 批 504 没落库，窗口里同事加了同一个问题�
   });
 });
 
-for (const [label, route, pkg, count] of [
-  ['文件', 'POST /api/knowledge-base/file/manual-create', { docs: [doc('d1', '新价格表', ['瑜伽月卡 399 元'])] }, (s) => docsNamed(s, '新价格表').length],
-  ['FAQ', 'POST /api/qa/batch-create', { faqs: [faq('f1', '课程怎么退款呀', '在订单详情页申请。')] }, (s) => faqsAsking(s, '课程怎么退款呀').length],
-]) {
-  test(`${label}：建的请求回了 504、过一会儿才落库——续跑认得回来（不重复建）；撤回删得掉，干净了才说撤回完成`, async () => {
-    await withServer({}, async (server, h) => {
-      const dir = writePackage(pkg);
-      const code = await previewCode(dir, h);
-      onCall(server, route, 1, (rec, orig) => {
-        setTimeout(() => orig(rec), 300);
-        return gatewayTimeout;
-      });
-      const r = await runCli(['kb', 'import', dir, '--confirm', code], { home: h });
-      assert.equal(r.code, 1);
-      await sleep(600);
-      const importId = recordOf(r)[1];
-      const { preview, done } = await resume(importId, h);
-      assert.match(preview.stdout, /现在在库里对上了、当成这次建的/);
-      assert.equal(done.code, 0, done.stderr);
-      assert.equal(count(server), 1);
-      const rv = await revoke(importId, h);
-      assert.equal(rv.done.code, 0, rv.done.stderr);
-      assert.match(rv.done.stdout, /撤回完成/);
-      assert.equal(count(server), 0);
+test('FAQ：建的请求回了 504、过一会儿才落库——续跑预演列出来，用户确认就认下（不重复建）；撤回删得掉，干净了才说撤回完成', async () => {
+  await withServer({}, async (server, h) => {
+    const dir = writePackage({ faqs: [faq('f1', '课程怎么退款呀', '在订单详情页申请。')] });
+    const code = await previewCode(dir, h);
+    onCall(server, 'POST /api/qa/batch-create', 1, (rec, orig) => {
+      setTimeout(() => orig(rec), 300);
+      return gatewayTimeout;
     });
+    const r = await runCli(['kb', 'import', dir, '--confirm', code], { home: h });
+    assert.equal(r.code, 1);
+    await sleep(600);
+    const importId = recordOf(r)[1];
+    const { preview, done } = await resume(importId, h);
+    assert.match(preview.stdout, /这次请求之后才出现的[^\n]*可能是这次的请求晚落库了/);
+    assert.match(preview.stdout, /确认续跑就是认定它们是这次建的/);
+    assert.equal(done.code, 0, done.stderr);
+    assert.equal(faqsAsking(server, '课程怎么退款呀').length, 1);
+    const rv = await revoke(importId, h);
+    assert.equal(rv.done.code, 0, rv.done.stderr);
+    assert.match(rv.done.stdout, /撤回完成/);
+    assert.equal(faqsAsking(server, '课程怎么退款呀').length, 0);
   });
+});
+
+test('文件：建的请求回了 504、过一会儿才落库——晚出现的同名空文件不认、不往里写，续跑另建一个；撤回删掉自己建的，把那个空文件列出来；人删掉它之后复查才算干净', async () => {
+  await withServer({}, async (server, h) => {
+    const dir = writePackage({ docs: [doc('d1', '新价格表', ['瑜伽月卡 399 元'])] });
+    const code = await previewCode(dir, h);
+    onCall(server, 'POST /api/knowledge-base/file/manual-create', 1, (rec, orig) => {
+      setTimeout(() => orig(rec), 300);
+      return gatewayTimeout;
+    });
+    const r = await runCli(['kb', 'import', dir, '--confirm', code], { home: h });
+    assert.equal(r.code, 1);
+    await sleep(600);
+    const importId = recordOf(r)[1];
+    const [late] = docsNamed(server, '新价格表');
+    const { preview, done } = await resume(importId, h);
+    assert.match(preview.stdout, new RegExp(`#${late.id}「新价格表」（空的手工文件）[^\\n]*md 不认它、也不往里写`));
+    assert.equal(done.code, 0, done.stderr);
+    assert.deepEqual(touched(server, late.id), []);
+    assert.equal(docsNamed(server, '新价格表').length, 2);
+    const rv = await revoke(importId, h);
+    assert.equal(rv.done.code, 1);
+    assert.match(rv.done.stdout, new RegExp(`还有 1 条分不清是不是这次建的，没删：[^\\n]*#${late.id}`));
+    assert.deepEqual(docsNamed(server, '新价格表').map((d) => d.id), [late.id]);
+    server.state.files = server.state.files.filter((f) => f.id !== late.id);
+    const again = await runCli(['kb', 'revoke', importId], { home: h });
+    assert.equal(again.code, 0, again.stdout);
+  });
+});
+
+function lagged(server, ms) {
+  const route = 'POST /api/knowledge-base/file/manual-create';
+  const orig = server.routes[route];
+  server.routes[route] = async (rec) => {
+    setTimeout(() => orig(rec), ms);
+    return { status: 200, body: { code: 0, data: null } };
+  };
 }
 
-test('文件列表有延迟（新建之后 200ms 才读得到）：续跑认得回来，不会每续跑一次多一个空文件', async () => {
+test('文件列表有延迟（新建之后 200ms 才读得到），在发完之后再列的那几次里——认得上，不停、不重复建', async () => {
   await withServer({}, async (server, h) => {
     const dir = writePackage({ docs: [doc('d1', '新价格表', ['瑜伽月卡 399 元', '瑜伽年卡 2999 元'])] });
-    const code = await previewCode(dir, h);
-    const route = 'POST /api/knowledge-base/file/manual-create';
-    const orig = server.routes[route];
-    server.routes[route] = async (rec) => {
-      setTimeout(() => orig(rec), 200);
-      return { status: 200, body: { code: 0, data: null } };
-    };
-    const r = await runCli(['kb', 'import', dir, '--confirm', code], { home: h });
-    let last = r;
-    for (let i = 0; i < 3 && last.code !== 0; i++) {
-      await sleep(400);
-      last = (await resume(recordOf(r)[1], h)).done;
-    }
-    assert.equal(last.code, 0, last.stderr);
+    const env = { MD_KB_POLL_MS: '60' };
+    const code = await previewCode(dir, h, env);
+    lagged(server, 200);
+    const r = await runCli(['kb', 'import', dir, '--confirm', code], { home: h, env });
+    assert.equal(r.code, 0, r.stderr);
     assert.equal(docsNamed(server, '新价格表').length, 1);
+  });
+});
+
+test('文件列表的延迟比发完之后再列的那几次还长——md 认不上也不在事后认：最多多出两个空文件就拒绝续跑，说清楚可能是列表延迟，不往它们里写', async () => {
+  await withServer({}, async (server, h) => {
+    const dir = writePackage({ docs: [doc('d1', '新价格表', ['瑜伽月卡 399 元'])] });
+    const code = await previewCode(dir, h);
+    lagged(server, 200);
+    const r = await runCli(['kb', 'import', dir, '--confirm', code], { home: h });
+    assert.equal(r.code, 1);
+    const importId = recordOf(r)[1];
+    await sleep(400);
+    assert.equal((await resume(importId, h)).done.code, 1);
+    await sleep(400);
+    const refused = await runCli(['kb', 'import', '--resume', importId], { home: h });
+    assert.equal(refused.code, 1);
+    assert.match(refused.stderr, /列表延迟/);
+    assert.equal(docsNamed(server, '新价格表').length, 2);
+    assert.equal(server.requests.some((q) => q.path.endsWith('manual-create-paragraph')), false);
   });
 });
 
@@ -169,7 +212,7 @@ test('建文件成功、紧接着的那次列表 502——再列几次就认得�
   });
 });
 
-test('排队的第一次请求和续跑重发的那次落在同一个窗口：两条一模一样——认一条，另一条是自己的副本、删掉；不说「对不上」', async () => {
+test('排队的第一次请求和续跑重发的那次落在同一个窗口：两条一模一样——分不清哪条是这次建的：一条都不认、不删；续跑拒绝；撤回列出来不删', async () => {
   await withServer({}, async (server, h) => {
     const dir = writePackage({ faqs: [faq('f1', '课程怎么退款呀', '在订单详情页申请。')] });
     const code = await previewCode(dir, h);
@@ -189,10 +232,19 @@ test('排队的第一次请求和续跑重发的那次落在同一个窗口：�
     };
     const r = await runCli(['kb', 'import', dir, '--confirm', code], { home: h });
     assert.equal(r.code, 1);
-    const { done } = await resume(recordOf(r)[1], h);
-    assert.equal(done.code, 0, done.stderr);
-    assert.doesNotMatch(done.stdout + done.stderr, /对不上/);
-    assert.equal(faqsAsking(server, '课程怎么退款呀').length, 1);
+    const importId = recordOf(r)[1];
+    const { done } = await resume(importId, h);
+    assert.equal(done.code, 1);
+    assert.match(done.stderr, /库里有不止一条和它一模一样的：#90001「课程怎么退款呀」、#90002「课程怎么退款呀」/);
+    assert.doesNotMatch(done.stderr, /秒懂改写了内容/);
+    const refused = await runCli(['kb', 'import', '--resume', importId], { home: h });
+    assert.equal(refused.code, 1);
+    assert.doesNotMatch(refused.stdout, /计划码/);
+    assert.equal(faqsAsking(server, '课程怎么退款呀').length, 2);
+    const rv = await revoke(importId, h);
+    assert.equal(rv.done.code, 1);
+    assert.equal(faqsAsking(server, '课程怎么退款呀').length, 2);
+    assert.deepEqual(server.writes().filter((q) => q.path === '/api/qa/batch-delete'), []);
   });
 });
 
@@ -343,7 +395,7 @@ test('续跑之前同事加了一条和还没发的新 FAQ 一样的问题——
     const p = await runCli(['kb', 'import', '--resume', recordOf(r)[1]], { home: h });
     assert.equal(p.code, 1);
     assert.doesNotMatch(p.stdout, /计划码/);
-    assert.match(p.stderr, /新 FAQ「新问题二」（f2）和库里 #6100 完全一样/);
+    assert.match(p.stderr, /新 FAQ「新问题二」（f2）和库里 #6100 问题一样（导入开始之后才出现的，不是这次建的）/);
   });
 });
 

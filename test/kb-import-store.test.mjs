@@ -119,3 +119,13 @@ test('kb import store：一个库同一时间只能有一个 md 在写——锁�
   taken();
   assert.equal(existsSync(file), false);
 });
+
+test('kb import store：上一个接管锁的进程死在半路（.lock 和 .lock.takeover 都是死进程留下的）——不自动清接管标记，报 kb_locked，提示人工删', () => {
+  const dir = join(process.env.MD_HOME, 'kb-imports', 'k1', KB_FAQ.slice(0, 8));
+  mkdirSync(dir, { recursive: true });
+  const dead = () => spawnSync(process.execPath, ['-e', '']).pid;
+  writeFileSync(join(dir, '.lock'), JSON.stringify({ pid: dead(), what: '被杀掉的导入', at: '2026-09-25T00:00:00.000Z' }));
+  writeFileSync(join(dir, '.lock.takeover'), JSON.stringify({ pid: dead(), what: '接管到一半被杀掉的', at: '2026-09-25T00:00:01.000Z' }));
+  assert.throws(() => lockKb('k1', KB_FAQ, '导入 x'), (e) => e.code === 'kb_locked' && e.exitCode === 5 && e.hint.includes('.lock.takeover'));
+  assert.equal(existsSync(join(dir, '.lock.takeover')), true);
+});

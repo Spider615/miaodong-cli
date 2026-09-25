@@ -78,7 +78,7 @@ test('md kb import 执行：试写的 FAQ 读回来只差空白（问题、答�
     const code = await preview(['kb', 'import', dir], h);
     const r = await runCli(['kb', 'import', dir, '--confirm', code], { home: h });
     assert.equal(r.code, 1);
-    assert.match(r.stderr, /停在「试写一条」：试写的 FAQ 读回来和包里的不一样.*已经把它删了/);
+    assert.match(r.stderr, /停在「试写一条」：试写的 FAQ 读回来和包里的只差空白.*已经把它删了/);
     assert.equal(server.state.faqs.some((f) => f.question === '课程怎么退款呀'), false);
     assert.equal(server.state.files.some((f) => f.name === '新价格表'), false);
     assert.equal(server.writes().filter((q) => q.path === '/api/qa/batch-create').length, 1);

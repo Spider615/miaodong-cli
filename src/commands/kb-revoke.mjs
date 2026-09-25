@@ -88,22 +88,31 @@ export async function revoke(args) {
     out(`这次导入：${status}`);
     if (state.revoke?.stopped) out(`撤回停在「${REVOKE_NAMES[state.revoke.stopped.step]}」：${state.revoke.stopped.reason}`);
     const rs = plan.revokeSettle;
+    const skipOf = (t) => plan.skip[t];
     if (rs?.open.op === 'create' && rs.unresolved.length) {
-      const doubt = [...rs.suspects, ...rs.past];
-      const resend = rs.unresolved.filter((k) => !rs.stuck.includes(k));
+      const type = rs.open.type;
+      const items = type === 'faq' ? plan.faqItems : plan.docItems;
+      const text = (k) => { const it = items.find((x) => x.key === k); return type === 'faq' ? it?.question : it?.full; };
+      const late = Object.entries(rs.late).filter(([k]) => !skipOf(type).includes(k) && type === 'faq');
+      if (late.length) {
+        out(`撤回上次重建的可能已经建成了（请求之后才在库里出现、内容一模一样）：${late.map(([k, r]) => `${label(type)} #${k}「${text(k)}」→ #${r.id}`).join('、')}`);
+        out('  确认就是认定它们是撤回重建出来的：接着用它们，不再重建');
+      }
+      const resend = rs.unresolved.filter((k) => !skipOf(type).includes(k) && !(rs.late[k] && type === 'faq'));
       if (resend.length) {
-        out(`撤回上次停下时发出去、还没对上的：${label(rs.open.type)} ${resend.length} 条`);
+        const doubt = [...rs.suspects, ...rs.past];
+        out(`撤回上次停下时发出去、还没对上的：${label(type)} ${resend.length} 条`);
         out(doubt.length
-          ? `  写的时候库里多出来、对不上的：${describe(rs.open.type, doubt)}。确认就是认定它们不是撤回建的：md 不会动它们，没对上的会重新发一次`
+          ? `  写的时候库里多出来、对不上的：${describe(type, doubt)}。确认就是认定它们不是撤回建的：md 不会动它们，没对上的会重新发一次`
           : '  在库里找不到，写的时候库里也没多出来别的：就是没建成，接着做会重新发一次');
       }
     }
     const skipped = ['faq', 'doc'].flatMap((t) => plan.skip[t].map((k) => (t === 'faq' ? plan.faqItems : plan.docItems).find((it) => it.key === k)).filter(Boolean)
       .map((it) => (t === 'faq' ? `FAQ #${it.key}「${it.question}」` : `文件 #${it.key}「${it.full}」`)));
     if (skipped.length) {
-      const doubt = rs?.stuck?.length ? [...rs.suspects, ...rs.past] : [];
-      out(`重建不了（发了两次，两次都对不上，多半是秒懂改写了内容）：${skipped.join('、')}${doubt.length ? `；改写出来的：${describe(rs.open.type, doubt)}（不删，列出来）` : ''}`);
-      out(`  确认撤回就跳过它们的重建，先把这次导入建的删掉；它们的原样在备份里：${rec.dir}/backup，需要时在秒懂上手工恢复`);
+      const doubt = rs?.open.op === 'create' ? [...Object.values(rs.ambiguous).flat(), ...rs.suspects, ...rs.past] : [];
+      out(`重建不了（同一条重建失败了两次：认不上、核对不过或者段落写不进去，多半是秒懂改写或拒收了内容）：${skipped.join('、')}${doubt.length ? `；写的时候多出来的：${describe(rs.open.type, doubt)}（不删，列出来）` : ''}`);
+      out(`  确认撤回就跳过它们的重建，先把这次导入建的删掉（它们重建了一半的、还是 md 写的内容，一起删掉）；它们的原样在备份里：${rec.dir}/backup，需要时在秒懂上手工恢复`);
     }
     const del = plan.deleteFaqs.length || plan.deleteDocs.length;
     out(`要删（这次建的，还在库里的）：${del ? `FAQ ${plan.deleteFaqs.length} 条 · 文件 ${plan.deleteDocs.length} 个${listOf('faq', plan.deleteFaqs)}${listOf('doc', plan.deleteDocs)}` : '没有'}`);
@@ -112,7 +121,8 @@ export async function revoke(args) {
     out(`要重建（这次删的，从备份）：${plan.faqItems.length || plan.docItems.length ? `FAQ ${plan.faqItems.length} 条 · 文件 ${plan.docItems.length} 个（${paragraphs} 段）` : '没有'}`);
     if (plan.dupes.length) out(`库里已经有一样的（不是这次导入建的，可能有人手动恢复了；照样重建，会重复，确认前先在秒懂上看一眼）：${plan.dupes.join('、')}`);
     out(plan.changed.length ? `导入后被人改过的（撤回会连改动一起删掉）：${plan.changed.map((c) => c.text).join('、')}` : '导入后被人改过的：没有');
-    if (plan.doubt) out(`分不清是不是这次建的（导入写的时候库里多出来、对不上的；撤回不会删它们）：${describe(plan.doubt.type, plan.doubt.rows)}`);
+    if (plan.doubt) out(`分不清是不是这次建的（导入写的时候库里多出来的、和要建的一模一样但不能确定是这次建的；撤回不会删它们）：${plan.doubt.mixed ? mixed(plan.doubt.mixed) : describe(plan.doubt.type, plan.doubt.rows)}`);
+    if (plan.goneBefore.length) out(`要删的旧内容里，有的在 md 删之前就被人删了（不是这次删的，撤回不重建，免得复活别人删掉的）：${plan.goneBefore.join('、')}；原样在备份里：${rec.dir}/backup`);
     const cut = plan.docItems.filter((d) => d.name !== d.full);
     if (cut.length) out(`名字超过 30 字，重建时截成：${cut.map((d) => `「${d.name}」`).join('、')}`);
     if (plan.docItems.some((d) => d.originalFile)) out(`原文件传不回秒懂：重建的是同名手工文件（段落一样），原文件在备份里：${rec.dir}/backup/docs`);
@@ -120,8 +130,11 @@ export async function revoke(args) {
     const code = confirmCode({
       kind: 'kb-revoke', importId, steps: Object.keys(state.revoke?.steps ?? {}), scope: plan.scope, skip: plan.skip,
       deleteFaqIds: plan.deleteFaqs.map((r) => r.id), deleteDocIds: plan.deleteDocs.map((r) => r.id), changed: plan.changed.map((c) => c.key),
-      doubt: plan.doubt?.rows.map((r) => r.id) ?? [], dupes: plan.dupes,
-      revokeOpen: rs ? { claimed: rs.claimed ?? null, extras: rs.extras ?? null, doubt: rs.suspects ? [...rs.suspects, ...rs.past].map((r) => r.id) : null, gone: rs.gone ?? null } : null,
+      doubt: plan.doubt?.mixed ? plan.doubt.mixed.map(({ type, row }) => `${type}#${row.id}`) : plan.doubt?.rows.map((r) => r.id) ?? [], dupes: plan.dupes, goneBefore: plan.goneBefore,
+      revokeOpen: rs ? {
+        claimed: rs.claimed ?? null, late: rs.late ? Object.fromEntries(Object.entries(rs.late).map(([k, r]) => [k, r.id])) : null,
+        doubt: rs.suspects ? [...rs.suspects, ...rs.past, ...Object.values(rs.ambiguous).flat()].map((r) => r.id) : null, gone: rs.gone ?? null,
+      } : null,
     });
     if (given === null) {
       out(`这是预演，什么都没写。计划码：${code}`);
@@ -131,6 +144,8 @@ export async function revoke(args) {
     if (given !== code) throw new MdError('plan_mismatch', `计划码对不上（给的是 ${given || '空'}，当前是 ${code}）：库里的情况在预演之后变了，或者计划码抄错了`, { exitCode: EXIT.BLOCKED, hint: '重新预演一次，把新的清单给用户看' });
     const left = await runRevoke(ctx, plan);
     if (skipped.length) out(`没有重建（跳过了）：${skipped.join('、')}；原样在备份里：${rec.dir}/backup`);
+    if (state.revoke.partialKept?.length) out(`跳过重建的那几条，撤回建了一半、又被人改过的，没删：${state.revoke.partialKept.join('、')}`);
+    if (plan.goneBefore.length) out(`${plan.goneBefore.join('、')} 在 md 删之前就被人删了，没有重建；原样在备份里：${rec.dir}/backup`);
     if (left.length) {
       reportLeft(left, importId);
       return EXIT.ERROR;
@@ -139,7 +154,9 @@ export async function revoke(args) {
       out('撤回做完了：这次导入建的都删了；上面跳过的几条没有重建，要在秒懂上手工恢复。');
       return EXIT.ERROR;
     }
-    out('撤回完成：这次导入建的都删了，删掉的都按备份重建了。');
+    out(plan.goneBefore.length
+      ? `撤回完成：这次导入建的都删了；md 删过的 ${state.revoke.scope.faqs.length + state.revoke.scope.docs.length} 条都按备份重建了，上面那几条不是 md 删的，没有重建。`
+      : '撤回完成：这次导入建的都删了，删掉的都按备份重建了。');
     return EXIT.OK;
   } finally {
     release?.();

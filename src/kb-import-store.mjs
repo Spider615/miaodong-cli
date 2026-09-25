@@ -189,7 +189,8 @@ const sameHolder = (a, b) => a && b && a.pid === b.pid && a.at === b.at && a.hos
 
 // 给这个库上锁，返回解锁函数。先写好临时文件再硬链接成锁文件：锁一出现就带着 pid，不会被读到半截。
 // 锁的主人已经不在了（被杀、崩了）就接过来：先原子地抢一把接管标记（.lock.takeover），抢到了再读一遍锁，
-// 还是刚才那条死记录才删——不然两个进程同时接管，一个删掉另一个刚拿到的锁，两个都以为自己拿到了（复审 Important 5）
+// 还是刚才那条死记录才删——不然两个进程同时接管，一个删掉另一个刚拿到的锁，两个都以为自己拿到了（复审 Important 5）。
+// 接管标记本身不自动清（接管的进程死在半路时要人工删），自动清会重新打开同样的竞态
 export function lockKb(regionKey, kbId, what) {
   const file = join(kbDir(regionKey, kbId), '.lock');
   const takeover = `${file}.takeover`;
@@ -218,10 +219,13 @@ export function lockKb(regionKey, kbId, what) {
     const held = lockHolder(file);
     if (!dead(held)) throw blocked(held);
     if (!grab(takeover)) {
+      // 别人正在接管；或者上一个接管的进程死在了半路（极少见）。接管标记不自动清：自动清又会让两个进程同时接管（复审）
       const taker = lockHolder(takeover);
       if (!dead(taker)) throw blocked(taker ?? held);
-      rmSync(takeover, { force: true }); // 接管到一半死掉的进程留下的标记
-      if (!grab(takeover)) throw blocked(lockHolder(takeover));
+      throw new MdError('kb_locked', `这个库的锁上次接管到一半、接管的进程（pid ${taker.pid}）没做完就退出了`, {
+        exitCode: EXIT.BLOCKED,
+        hint: `确认没有别的 md 在写这个库，就把 ${takeover} 和 ${file} 两个文件都删掉，再运行一次`,
+      });
     }
     try {
       if (sameHolder(lockHolder(file), held)) rmSync(file, { force: true });
