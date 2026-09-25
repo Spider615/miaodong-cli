@@ -6,6 +6,7 @@
 // writable：打开 3b 的写接口，行为照 09-25 从控制台前端代码核对的来（3b §2.1）：新建不返回 id；新 FAQ 默认未审核；
 //   新段落先是 processing，被读 readyAfter 次之后变 ready；原文件从 /files/... 下载。
 // failOn：{ 'POST /api/qa/batch-create': [2, { n: 3, applied: true }] }——第 2 次调用直接回 502；第 3 次先写进去再回 502（回复丢了）。
+// mangle：写进去的问题、答案、段落先经过它（模拟服务端改了内容，读回来和写的不一样）。
 // 路由清单之外的请求都走 404，unexpected() 把它们列出来；writes() 列出全部写请求。
 import { ok, startFakeMiaodong } from './fake-miaodong.mjs';
 import { EXEC_BOT } from './exec-fixtures.mjs';
@@ -19,7 +20,7 @@ const gateway = { status: 502, body: { statusCode: 502, message: 'Bad Gateway' }
 // omitFaqFields：FAQ 的返回里去掉这些字段（模拟接口改名）；overlap：第 2 页起往回多给几条（模拟翻页不稳：条数对得上，却有重复、有漏的）
 export async function startKbServer({
   details = {}, pageCap = Infinity, kbs = kbList(), faqRows = faqs(), semanticFail = false, omitFaqFields = [], overlap = 0,
-  fileRows = files(), paragraphRows = paragraphs(), writable = false, readyAfter = 1, failOn = {}, bots = null,
+  fileRows = files(), paragraphRows = paragraphs(), writable = false, readyAfter = 1, failOn = {}, bots = null, mangle = (s) => s,
 } = {}) {
   const state = {
     faqs: faqRows,
@@ -123,7 +124,7 @@ export async function startKbServer({
     'POST /api/qa/batch-create': ({ body }) => {
       if (!hasKb(body.knowledgeBaseId)) return bad('knowledge base not found');
       for (const q of body.qaList ?? []) {
-        state.faqs.push({ id: state.nextFaqId++, kb: body.knowledgeBaseId, question: q.question, answer: q.answer, isReviewed: false });
+        state.faqs.push({ id: state.nextFaqId++, kb: body.knowledgeBaseId, question: mangle(q.question), answer: mangle(q.answer), isReviewed: false });
       }
       return ok(null);
     },
@@ -145,7 +146,7 @@ export async function startKbServer({
     'POST /api/knowledge-base/file/manual-create-paragraph': ({ body }) => {
       const f = state.files.find((x) => x.id === body.docId && x.kb === body.knowledgeBaseId);
       if (!f) return bad('doc not found');
-      state.paragraphs.push({ id: state.nextParaId++, fileId: f.id, index: parasOf(f.id).length, content: body.content, wordCount: [...body.content].length, status: 'processing', readyAfter });
+      state.paragraphs.push({ id: state.nextParaId++, fileId: f.id, index: parasOf(f.id).length, content: mangle(body.content), wordCount: [...body.content].length, status: 'processing', readyAfter });
       return ok(null);
     },
     'POST /api/knowledge-base/file/delete': ({ body }) => {
