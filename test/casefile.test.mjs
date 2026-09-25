@@ -127,3 +127,7 @@ test('buildCases：name 在文件里重复、和集里已有的重复都报出�
 test('buildCase：vars 不能写「消息历史」，要用 history（md 会核对格式，审查 I3）', () => {
   assert.match(buildCase(row({ name: 'h-1', text: 'x', vars: { 消息历史: ['裸字符串', 123] } }), ctx).errors.join(), /用 history 写/);
 });
+
+test('buildCase：触发类型写错时列出可选的值（审查 I4）', () => {
+  assert.match(buildCase(row({ name: 't-1', trigger: 'receive-txt-message', input: {} }), ctx).errors.join(), /可选：input、receive-text-message、/);
+});

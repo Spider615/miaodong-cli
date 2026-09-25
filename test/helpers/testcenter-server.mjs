@@ -6,6 +6,7 @@
 //   keepDimension —— 默认 false：create / update 都把 dimension 存成 ''（兴趣岛不保存 dimension，spec §2.3 核对 8）
 //   dropFields —— create 时把这些字段存成空对象或空数组（模拟关键字段被服务端丢掉）
 //   failCreateAt —— 第 N 次 create 起返回 502；treeDrift —— 每次挂场景额外给节点计数加几（模拟旧批次重复挂载）
+//   renameCreated —— create 时给 name 加的后缀（模拟服务端改写 name，按 name 找不到）
 // 事件在目标智能体里不存在的用例会「空跑」：status success、passed false、没有执行、花费为空（spec §2.3 核对 6）
 import { ok, startFakeMiaodong } from './fake-miaodong.mjs';
 import { SOURCE_BOT, TARGET_BOT, botEvents, botVars, importable, targetCanvas } from './testcenter-fixtures.mjs';
@@ -134,7 +135,7 @@ export async function startTestCenterServer({ itemCost = 0.02, perPoll = Infinit
       if (state.failCreateAt && state.posts.caseCreate.length >= state.failCreateAt) return { status: 502, body: { message: 'Bad Gateway' } };
       const eventNames = new Map((botEvents[query.botId] ?? []).map((e) => [e.eventId, e.name]));
       for (const c of rows) {
-        const stored = { ...structuredClone(c), testCaseId: id('e', ++state.n), testSetId: body.testSetId, status: 'ready', isReviewed: true, scenarioNodeId: null, dimensionDetail: '', dimension: state.keepDimension ? (c.dimension ?? '') : '' };
+        const stored = { ...structuredClone(c), ...(state.renameCreated ? { name: `${c.name}${state.renameCreated}` } : {}), testCaseId: id('e', ++state.n), testSetId: body.testSetId, status: 'ready', isReviewed: true, scenarioNodeId: null, dimensionDetail: '', dimension: state.keepDimension ? (c.dimension ?? '') : '' };
         // 发事件断言没带 eventName 时服务端按 eventId 补上（核对 8）
         for (const a of stored.canvasActionOutputAssertions) {
           const payload = a?.actionContent?.payload;

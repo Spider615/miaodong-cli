@@ -83,7 +83,8 @@ description: 用 md 命令读写句子秒懂（JZ Insight，控制台域名形�
 - 用户明确要做的改动，风险最多提醒一次，然后照做。
 - 花钱前先按参考价说个大概（豆包约 ¥0.01/次，Gemini 约 ¥0.3–0.7/次），跑完报实际。超单次门槛、今天累计超上限、估不出花费、会调插件，或者跑到一半按实际推算超了，`md trial` 不跑，只给预估和确认码（退出码 5）。
 - 这时必须**单独**问用户：写明智能体、节点、跑几次、预计多少钱、原因，不能夹在别的问题里（比如和「可以推吗」一起问）。用户明确同意这一笔后，才能在同一条命令后加 `--confirm <码>`。不许没问就用码，不许改 `~/.miaodong/md/` 里的 `config.json`、`spend.jsonl`，不许直接调秒懂接口绕过去。
-- `md trial`、`md test status --wait`、`md test results --deep` 可能要跑几分钟：Bash 超时给到 10 分钟；`md test status` 的 `--timeout` 不要超过 540 秒。
+- `md trial`、`md test status --wait`、`md test results --deep`，以及几百条的 `md test import --from-file`、`md test edit --confirm`，都可能要跑几分钟：Bash 超时给到 10 分钟；`md test status` 的 `--timeout` 不要超过 540 秒。
+  - 批量改被打断了：看输出里「已备份」的路径，然后重新预演（已经改好的不会再出现在清单里），把新清单给用户看。
   - `--deep` 每条约 2 秒，开跑前会说要取几条；超过 300 条就放到后台跑。
   - `md trial` 被打断不要直接重跑，先看开头打印的结果目录和 `md spend`。
 - 插件节点试跑（`--allow-plugin`）会真的调外部系统，要用户明确同意。

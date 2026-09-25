@@ -18,7 +18,7 @@ function home() {
   return h;
 }
 const md = (args, h = home()) => runCli(args, { home: h });
-const reset = (patch = {}) => Object.assign(fake.state, { sets: [], cases: [], tasks: [], items: new Map(), posts: {}, log: [], canvas: null, tree: [], pageCap: undefined, keepDimension: false, dropFields: [], failCreateAt: 0, treeDrift: 0, ...patch });
+const reset = (patch = {}) => Object.assign(fake.state, { sets: [], cases: [], tasks: [], items: new Map(), posts: {}, log: [], canvas: null, tree: [], pageCap: undefined, keepDimension: false, dropFields: [], failCreateAt: 0, treeDrift: 0, renameCreated: '', ...patch });
 const jsonl = (h, rows, file = 'cases.jsonl') => {
   const path = join(h, file);
   writeFileSync(path, rows.map((r) => (typeof r === 'string' ? r : JSON.stringify(r))).join('\n'));
@@ -211,4 +211,67 @@ test('edit --confirm：update 把没改的字段冲掉了（这个区不保存 d
   const r = await md(['test', 'edit', '外部回归', file, '--bot', '179cd443', '--confirm', code], h);
   assert.equal(r.code, 0, r.stderr);
   assert.match(r.stdout, /dimension：1 条读回来和改的不一样/);
+});
+
+test('edit --confirm：写之前先打出备份路径，中途出错说清改了几条（审查 M8）', async () => {
+  reset();
+  const h = home();
+  await seedExternal(h);
+  const file = editFile(h);
+  const code = planCode((await md(['test', 'edit', '外部回归', file, '--bot', '179cd443'], h)).stdout);
+  const original = fake.server.routes['POST /api/test-center/test-case/update'];
+  let calls = 0;
+  fake.server.routes['POST /api/test-center/test-case/update'] = (req) => (++calls === 2 ? { status: 502, body: { message: 'Bad Gateway' } } : original(req));
+  try {
+    const r = await md(['test', 'edit', '外部回归', file, '--bot', '179cd443', '--confirm', code], h);
+    assert.notEqual(r.code, 0);
+    assert.match(r.stdout, /已备份全部 3 条用例：\S+/);
+    assert.match(r.stderr, /已改 1\/2 条/);
+  } finally {
+    fake.server.routes['POST /api/test-center/test-case/update'] = original;
+  }
+});
+
+test('import --from-file：先写的那 1 条读回来时出错、挂场景时出错，都说清留下了什么（审查 M1）', async () => {
+  reset();
+  const h = home();
+  const list = fake.server.routes['GET /api/test-center/test-case/list'];
+  fake.server.routes['GET /api/test-center/test-case/list'] = (req) => (fake.state.posts.caseCreate?.length === 1 ? { status: 502, body: { message: 'Bad Gateway' } } : list(req));
+  try {
+    const r = await md(['test', 'import', '外部回归', '--bot', '179cd443', '--from-file', jsonl(h, withoutScenario(THREE))], h);
+    assert.notEqual(r.code, 0);
+    assert.match(r.stderr, /测试集「外部回归」\([0-9a-f]{8}\) 已经建了，可能已经写进去一部分/);
+    assert.match(r.stderr, /md test drop/);
+  } finally {
+    fake.server.routes['GET /api/test-center/test-case/list'] = list;
+  }
+  reset({ tree: scenarioTreeFixture() });
+  const attach = fake.server.routes['POST /api/test-center/scenario/attach-cases'];
+  fake.server.routes['POST /api/test-center/scenario/attach-cases'] = () => ({ status: 502, body: { message: 'Bad Gateway' } });
+  try {
+    const r = await md(['test', 'import', '外部回归', '--bot', '179cd443', '--from-file', jsonl(h, THREE, 'b.jsonl')], h);
+    assert.notEqual(r.code, 0);
+    assert.match(r.stdout, /提交 3 · 回读 3/);
+    assert.match(r.stderr, /用例都写进去了，挂场景时出错/);
+  } finally {
+    fake.server.routes['POST /api/test-center/scenario/attach-cases'] = attach;
+  }
+});
+
+test('import --from-file --into：先写的 1 条被丢时只撤回这 1 条；按 name 找不到就一条都不删，说清集里可能多了一条（审查 I5）', async () => {
+  reset();
+  const h = home();
+  await md(['test', 'import', '外部回归', '--bot', '179cd443', '--from-file', jsonl(h, [{ name: '旧-01', text: 'x', expect: 'y' }])], h);
+  fake.state.dropFields = ['sessionMemoryCustomData'];
+  const r = await md(['test', 'import', '外部回归', '--bot', '179cd443', '--into', '--from-file', jsonl(h, withoutScenario(THREE), 'b.jsonl')], h);
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /已撤回/);
+  assert.doesNotMatch(r.stderr, /删了新建的测试集/);
+  assert.deepEqual(casesIn('外部回归').map((c) => c.name), ['旧-01']);
+  assert.equal(fake.state.sets.length, 1);
+  Object.assign(fake.state, { dropFields: [], renameCreated: '（服务端改了名）' });
+  const lost = await md(['test', 'import', '外部回归', '--bot', '179cd443', '--into', '--from-file', jsonl(h, withoutScenario(THREE), 'c.jsonl')], h);
+  assert.equal(lost.code, 1);
+  assert.match(lost.stderr, /按 name 找不到：秒懂没存下 md 写的内容，没法撤回：集里可能多了一条/);
+  assert.deepEqual(casesIn('外部回归').map((c) => c.name).sort(), ['旧-01', '退款-01（服务端改了名）']);
 });

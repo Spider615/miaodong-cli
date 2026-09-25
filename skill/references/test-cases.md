@@ -56,14 +56,40 @@ md test import <集> --bot <智能体> --from-file cases.jsonl --into   # 导进
 {"name": "看图-第3行", "image": "https://example.com/b.jpg", "history": ["这张截图是什么意思", "https://example.com/a.jpg"], "expect": {"reply": {"similar": "这是订单详情页"}}}
 {"name": "延时回复-第4行", "event": "延时回复", "data": {"text": "课程怎么退"}, "expect": {"event": "发送", "params": {"text": "应说明退课流程"}}}
 {"name": "投诉-第5行", "text": "我要投诉你们", "expect": {"handover": true}, "scenario": "售后/投诉"}
-{"name": "新好友-第6行", "trigger": "new-friend", "input": {"contactId": "c1"}, "expect": "应发送欢迎语"}
+{"name": "其他消息-第6行", "trigger": "receive-other-message", "input": {"rawContent": "[名片]"}, "expect": {"handover": true}}
 ```
 
 ### 怎么建模
 
 - 触发输入只放「触发这一轮」的那条消息；这之前的对话都进 `history`。
 - 图片用例：最后一张图写 `image`；用户另外发的文字、前面几张图，按时间顺序写进 `history`（图片写裸 URL）。不要把用户的文字写进 `text`：在秒懂里那是图片自带的说明文字。
-- 触发类型一共 20 个，只有文本、图片、事件三种有简写。别的写 `trigger` + `input`。字段拿不准，就先在秒懂页面上建一条同类用例，用 `md test cases --out` 导出来照抄它的触发输入，只换业务值。
+- 触发类型和触发输入该写哪些字段，见下一节。
+
+### 触发类型与触发输入的字段
+
+一共 20 个（服务端校验列出的枚举）：
+`input`、`receive-text-message`、`receive-image-message`、`receive-audio-message`、`receive-video-message`、`receive-file-message`、`receive-other-message`、`receive-intent-comment`、`receive-note-message`、`receive-share-note-comment-message`、`receive-email-message`、`custom-attr-event`、`tag-event`、`join-room`、`new-friend`、`canvas-event-trigger`、`bot-receive-text-message`、`write-message`、`contact-lead-filled`、`wecom-contact-bind`。
+
+md 有简写的只有三种：文本（`text`）、图片（`image`）、事件（`event` + `data`）。别的写 `trigger` + `input`。
+
+已知的触发输入字段。证据等级：**实测** = 真实用例里见过；**双源** = 秒懂前端代码和 JSON 结构手册一致；**手册** = 只有手册这么写。
+
+| 触发类型 | 字段 | 证据 |
+|---|---|---|
+| `receive-text-message` | `text`（必填）；另有 `roomId`、`contactId`、`receiverId`、`messageId`、`isCoworker`、`mentionSelf`、`mentionCoworker`、`mentionCustomer`、`isMentionAll`、`contactTags`、`senderName`、`quoteMessageId` | 双源；只给 `text` 实测能写入 |
+| `receive-image-message` | `imageUrl`（必填）、`imageUrls`、`text`（图片自带的说明文字），另有消息类公共字段 | 实测 |
+| `receive-other-message` | `rawContent`（必填）、`messageId`、`receiverId`、`contactId`、`role`、`isCoworker`、`roomId`、`contactTags`、`customAttrs` | 实测（从执行记录导入的用例） |
+| `canvas-event-trigger` | `eventId`、`data`（事件变量）；从执行记录导入的还带 `executionId` | 实测 |
+| `receive-audio-message` | `audioUrl`（必填），另有公共字段 | 手册 |
+| `receive-video-message` | `videoUrl`（必填），另有公共字段 | 手册 |
+| `receive-file-message` | `fileUrl`（必填）、`text`，另有公共字段 | 手册 |
+| `receive-email-message` | `fromAddress`、`toAddress`、`subject`、`text`、`html`、`attachments`、`contactId`、`receiverId`、`messageId`、`quoteMessageId` | 手册 |
+| `tag-event` | `tagId`（必填）、`operation`（必填，`ADD` 或 `REMOVE`）、`contactId`、`receiverId` | 双源 |
+| `new-friend` | `contactId`、`receiverId` | 手册 |
+
+- 消息类的公共字段：`roomId`（可空）、`contactId`、`receiverId`、`messageId`、`isCoworker`、`contactTags`、`senderName`。
+- 其余几种（`input`、`receive-intent-comment`、`receive-note-message`、`receive-share-note-comment-message`、`custom-attr-event`、`join-room`、`bot-receive-text-message`、`write-message`、`contact-lead-filled`、`wecom-contact-bind`）没有可靠资料。
+- 拿不准时，先在秒懂页面上建一条同类用例，用 `md test cases --out` 导出来，照抄它的触发输入，只换业务值。字段名写错秒懂不报错：多余的字段会被丢掉，缺了字段的可能根本触发不了画布。
 
 ### md 导入时做了什么
 

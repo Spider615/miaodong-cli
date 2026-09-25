@@ -175,7 +175,7 @@ export function resolveScenario(nodes, query) {
 function triggerOf(v, events, errors) {
   const shorthand = ['text', 'image', 'event', 'data'].filter((k) => v[k] !== undefined);
   if (v.trigger !== undefined && !TRIGGER_TYPES.includes(v.trigger)) {
-    errors.push(`trigger「${v.trigger}」不是秒懂的触发类型`);
+    errors.push(`trigger「${v.trigger}」不是秒懂的触发类型（可选：${TRIGGER_TYPES.join('、')}）`);
     return [v.trigger, {}];
   }
   if (v.input !== undefined) {

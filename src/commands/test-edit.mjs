@@ -4,7 +4,7 @@
 
 import { join } from 'node:path';
 import { EXIT, MdError, usage } from '../errors.mjs';
-import { out, shortId, targetLine } from '../output.mjs';
+import { note, out, shortId, targetLine } from '../output.mjs';
 import { writeJson } from '../home.mjs';
 import { stamp } from '../workspace.mjs';
 import { hashOf } from '../canvas.mjs';
@@ -54,11 +54,14 @@ export async function edit(args) {
   }
   const backup = join(testsDir(t, 'backups'), `${shortId(set.testSetId)}-edit-${stamp()}.json`);
   writeJson(backup, { testSet: set, cases: before });
+  // 先打出备份在哪：改得多时命令可能被 AI 的超时打断，打断后也要知道去哪找（审查 M8）
+  out(`已备份全部 ${before.length} 条用例：${backup}`);
   let done = 0;
   try {
     for (const c of changed) {
       await updateCase(t, c.after);
       done++;
+      if (done % 20 === 0 && done < changed.length) note(`（已改 ${done}/${changed.length}）`);
     }
   } catch (error) {
     throw new MdError(error?.code ?? 'upstream', `${error?.message ?? error}（已改 ${done}/${changed.length} 条）`, {
