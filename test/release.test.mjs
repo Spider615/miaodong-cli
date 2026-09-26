@@ -1,7 +1,7 @@
 // npm run release 的扫描：dist/ 和 skill/ 里不能带本机路径、身份串、token（spec §6、§8 第 8 条）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -58,6 +58,26 @@ test('release：没设 MD_E2E_NODE、Node 不够新、工作区有没提交的�
   // 新文件没提交也一样
   writeFileSync(join(root, 'src', 'new.mjs'), 'new');
   assert.match(releaseBlockers(ok).join('\n'), /src\/new\.mjs/);
+});
+
+test('release：版本号（package.json 的 version）要比 main 上的大才发版；要写成 1.2.3 这样', () => {
+  const root = tempHome();
+  gitInit(root);
+  write(root, { 'package.json': JSON.stringify({ name: 'x', version: '1.0.0' }), 'src/a.mjs': 'a' });
+  gitCommitAll(root);
+  execFileSync('git', ['checkout', '-q', '-b', 'feat'], { cwd: root });
+  write(root, { 'src/a.mjs': 'changed' });
+  gitCommitAll(root);
+  const ok = { root, env: { MD_E2E_NODE: '/x/node' }, nodeVersion: '22.23.1' };
+  // 改了代码、版本号没改：和 main 上的一样，拦下
+  assert.match(releaseBlockers(ok).join('\n'), /版本号没改[^\n]*1\.0\.0[^\n]*main 上已经是 1\.0\.0/);
+  write(root, { 'package.json': JSON.stringify({ name: 'x', version: '1.1.0' }) });
+  gitCommitAll(root);
+  assert.deepEqual(releaseBlockers(ok), []);
+  // 改小了也不行；写法不对也不行
+  assert.match(releaseBlockers({ ...ok, version: '0.9.0', released: '1.0.0' }).join('\n'), /版本号没改/);
+  assert.match(releaseBlockers({ ...ok, version: '1.0', released: '1.0.0' }).join('\n'), /要写成 1\.2\.3 这样/);
+  assert.deepEqual(releaseBlockers({ ...ok, version: '1.0.10', released: '1.0.9' }), []);
 });
 
 test('release：扫出裸 JWT（审查 M2）', () => {

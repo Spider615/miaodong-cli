@@ -84,7 +84,8 @@ clone 到哪都行，就是**不要 clone 到 `~/.claude/skills/` 下面**（`in
 源码在 `src/`，测试在 `test/`，开发说明见 `CLAUDE.md`。
 - 测试：Node 22 下 `npm test`（`.nvmrc` 写着 22）。
 - 本机试新构建：`npm run install:local`（md 链到开发构建 `build/md.mjs`）；换回发过版的：再跑一次 `./install.sh`。
-- 发版：先把改动提交（工作区要干净），再跑 `MD_E2E_NODE=<Node 18 的 node 路径> npm run release`：它跑全部测试、构建 `dist/md.mjs`、扫描有没有本机路径和 token。看过 diff 后提交 `dist/md.mjs` 并推送，同事 `git pull` 拿到的就是这一版。
+- 版本号：只写在 `package.json` 的 `version` 一处，`md --version` 显示成 `md 1.0.0（提交号@构建日期）`。每次发版前先把它改大：新功能加中间那位（1.0.0 → 1.1.0），只修问题加最后一位（1.0.0 → 1.0.1），不兼容的大改加第一位。没改大，发版检查会拦下。
+- 发版：先把改动（包括改大的版本号）提交（工作区要干净），再跑 `MD_E2E_NODE=<Node 18 的 node 路径> npm run release`：它跑全部测试、构建 `dist/md.mjs`、扫描有没有本机路径和 token。看过 diff 后提交 `dist/md.mjs`、合进 main 并推送，再给这个提交打标签 `v<版本号>` 并推送（`git tag -a v1.1.0 -m "md 1.1.0"`，`git push origin v1.1.0`）。同事 `git pull` 拿到的就是这一版。
 - `vendor/laodong/` 是句子老懂仓库的代码，原样拷贝，不在这里改：`npm run sync:laodong -- <老懂仓库路径>` 同步。
 
 第三方软件声明见 `THIRD_PARTY_NOTICES.md`。

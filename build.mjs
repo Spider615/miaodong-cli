@@ -11,7 +11,7 @@
 // 3. Node 18 以文件方式跑 ESM 时没有全局 crypto，而共享代码里有裸 crypto.randomUUID()。
 
 import { build } from 'esbuild';
-import { chmodSync, mkdirSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -28,6 +28,11 @@ const BANNER = [
   "process.emitWarning = function (warning, ...rest) { const type = typeof rest[0] === 'string' ? rest[0] : rest[0]?.type; if (type === 'ExperimentalWarning') return; return __mdEmitWarning.call(process, warning, ...rest); };",
 ].join('\n');
 
+// 版本号只写在 package.json 一处：发版前改它（新功能加中间那位，只修问题加最后一位），发版检查会拦「没改大」的
+export function packageVersion(root = KIT) {
+  return JSON.parse(readFileSync(join(root, 'package.json'), 'utf-8')).version;
+}
+
 function buildTag() {
   let sha = 'nogit';
   try {
@@ -41,6 +46,7 @@ function buildTag() {
 export async function buildBundle({ outfile = BUNDLE_PATH } = {}) {
   mkdirSync(dirname(outfile), { recursive: true });
   const tag = buildTag();
+  const version = packageVersion();
   await build({
     entryPoints: [join(KIT, 'src', 'cli.mjs')],
     bundle: true,
@@ -49,7 +55,7 @@ export async function buildBundle({ outfile = BUNDLE_PATH } = {}) {
     target: 'node18',
     outfile,
     banner: { js: BANNER },
-    define: { __MD_BUILD__: JSON.stringify(tag) },
+    define: { __MD_BUILD__: JSON.stringify(tag), __MD_VERSION__: JSON.stringify(version) },
     logLevel: 'warning',
     legalComments: 'none',
     // 去掉全部注释与源码路径标记：注释里有内部信息，而 dist/md.mjs 进仓库、同事装的就是它（legalComments 只管许可证注释）
@@ -58,10 +64,10 @@ export async function buildBundle({ outfile = BUNDLE_PATH } = {}) {
     charset: 'utf8',
   });
   chmodSync(outfile, 0o755);
-  return { outfile, tag };
+  return { outfile, tag, version };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const { outfile, tag } = await buildBundle({ outfile: DEV_BUNDLE_PATH });
-  console.log(`已构建开发版 ${outfile}（${tag}）。要发给同事用 npm run release`);
+  const { outfile, tag, version } = await buildBundle({ outfile: DEV_BUNDLE_PATH });
+  console.log(`已构建开发版 ${outfile}（${version}，${tag}）。要发给同事用 npm run release`);
 }

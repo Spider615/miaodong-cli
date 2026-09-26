@@ -8,6 +8,8 @@ import { COMMANDS } from './commands/index.mjs';
 
 // eslint-disable-next-line no-undef
 const BUILD = typeof __MD_BUILD__ === 'string' ? __MD_BUILD__ : 'dev';
+// 版本号来自 package.json，构建时写进来；开发模式下没有，只显示 dev
+const VERSION = typeof __MD_VERSION__ === 'string' ? __MD_VERSION__ : null;
 
 function renderHelp() {
   const lines = ['用法：md <命令> [参数]    （md <命令> --help 看该命令的详细用法）', '', '命令：'];
@@ -21,7 +23,7 @@ export async function main(argv) {
   const [name, ...rest] = args._;
   // 只有不带子命令时 --version 才是「看 md 版本」：md pull --version v1.0.400 里它是秒懂版本号
   if (name === 'version' || (!name && args.version)) {
-    out(`md ${BUILD}`);
+    out(VERSION ? `md ${VERSION}（${BUILD}）` : `md ${BUILD}`);
     return EXIT.OK;
   }
   if (!name || name === 'help') {

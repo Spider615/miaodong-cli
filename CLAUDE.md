@@ -26,7 +26,7 @@ MD_E2E_NODE=<Node 18 的 node> npm test     # 同时验证打包产物在 Node 1
 npm run build                              # 只构建开发版 build/md.mjs（被忽略，不碰 dist）
 ./install.sh                               # 用发过版的 dist/md.mjs 装（和同事一样）；日常修 bot 用这个
 npm run install:local                      # 试新构建：开发版构建进 build/md.mjs（被忽略）+ install.sh 链过去 + 桌面副本（MD_EXPORT_DIR='' 不放）
-MD_E2E_NODE=<Node 18 的 node> npm run release   # 发版：改动先提交（工作区要干净）；它跑测试、构建 dist/md.mjs、扫描，之后提交 dist/md.mjs 再推送
+MD_E2E_NODE=<Node 18 的 node> npm run release   # 发版：先把 package.json 的 version 改大、和改动一起提交（工作区要干净）；它跑测试、构建 dist/md.mjs、扫描，之后提交 dist/md.mjs、合进 main、推送，再打 tag v<版本号> 推送
 npm run sync:laodong -- <老懂仓库路径>       # 同步 vendor/laodong
 ```
 
@@ -38,7 +38,7 @@ npm run sync:laodong -- <老懂仓库路径>       # 同步 vendor/laodong
 4. **花钱、调插件、调高门槛要用户确认**（`src/confirm.mjs`）：需要确认时 md 不跑，只给预估和确认码（退出码 5）。AI 单独问用户，同意后在同一条命令加 `--confirm <码>`。码绑定这次操作的全部要素（智能体、节点、次数、输入、预估、插件、日期），任何一样变了就对不上；同一笔操作每确认一次换一个码；试跑每跑完一次按实际花费重算，超了就停，剩下的几次要重新确认。这是约定不是锁（用户 2026-09-25 决定不用弹窗）：不要加「跳过确认」的开关，也不要把确认码写进任何自动流程。
 5. **测试中心**（`src/testcenter.mjs` 接口，`src/testcases.mjs` 换 id 与跑前检查）：秒懂对事件、会话变量对不上的用例不报错，显示成功但其实空跑（实测见 `docs/specs/2026-09-24-miaodong-cli-step2-design.md` §2.3），所以跑前检查必须拦。导入的撤回只按导入前后的差集删，不碰集里原有的用例。
 6. **外部用例与批量改**（`src/casefile.mjs` 解析与校验，`src/caseedit.mjs` 改动脚本）：写秒懂之前先在本地校验全部，外部用例先写 1 条读回来核对。断言只生成实测过的形状（同一份 spec §2.3 的核对 8：发文本、发事件、转人工），别的用 raw：断言写错时秒懂不报错，只是永远不生效。批量改走计划码，先备份再写。
-7. **main 就是同事拿到的版本**：同事 `git pull` 之后，说明来自 main 上的 `skill/`（软链，立即生效），命令来自 main 上的 `dist/md.mjs`。所以改 `src/`、`vendor/` 的活在分支上做：改动提交后跑 `npm run release`，再提交它重新构建的 `dist/md.mjs`，然后合进 main（构建号就是改动所在的那个提交）；只改说明文字、不涉及新命令的，可以直接进 main。
+7. **main 就是同事拿到的版本**：同事 `git pull` 之后，说明来自 main 上的 `skill/`（软链，立即生效），命令来自 main 上的 `dist/md.mjs`。所以改 `src/`、`vendor/` 的活在分支上做：把 `package.json` 的 `version` 改大（新功能加中间那位，只修问题加最后一位；没改大发版检查会拦），和改动一起提交后跑 `npm run release`，再提交它重新构建的 `dist/md.mjs`，然后合进 main（构建号就是改动所在的那个提交），推送后给它打 tag `v<版本号>` 并推送；只改说明文字、不涉及新命令的，可以直接进 main，不改版本号。`md --version` 显示 `md <版本号>（<构建号>）`，版本号只写在 `package.json` 一处。
 8. **`dist/md.mjs` 只有 `npm run release` 写**：`npm run build` 和 `npm run install:local` 都把开发构建放进被忽略的 `build/md.mjs`，不碰 dist。
 9. **本仓库必须保持私有**：`vendor/laodong/packages/shared/src/miaodong-regions.ts` 里有独立部署客户的名单。token 类的东西一律不进仓库：发版扫描查全部会进仓库的文件，测试和文档里要用假 token 就在运行时拼出来（照 `test/release.test.mjs` 的 `FAKE`）。
 10. **`install.sh` 里的变量一律写成 `${VAR}`**：UTF-8 locale 下，macOS 自带的 bash 3.2 会把紧跟在变量后面的中文标点字节读进变量名，`set -u` 时直接报 unbound variable。C locale 下没事，所以 `test/install-sh.test.mjs` 固定在 `zh_CN.UTF-8` 下跑，别改回去。
