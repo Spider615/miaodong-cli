@@ -28,11 +28,12 @@ export async function edit(args) {
   const { changed, errors } = editChanges(before, after, { historyVarId: history?.id ?? null });
   // 改出来的事件、会话变量要在这个智能体里有：脚本改出新的对不上就拦；改之前就对不上的（比如事件后来删了）只提醒，
   // 不因为它拦下只改别的字段的脚本。列表取不到时这里不查，md test run 的跑前检查会拦
+  // 按 kind + id 比：原因文字里带着个数，两个里修好一个文字就变了，按文字比会把剩下那个当成新问题
   const stale = [];
   if (events && vars) {
     for (const c of changed) {
-      const was = new Set(idProblems([c.before], { events, vars }).map((p) => p.reason));
-      for (const p of idProblems([c.after], { events, vars })) (was.has(p.reason) ? stale : errors).push(`用例「${p.name}」：${p.reason}`);
+      const was = new Set(idProblems([c.before], { events, vars }).flatMap((p) => p.ids.map((id) => `${p.kind}:${id}`)));
+      for (const p of idProblems([c.after], { events, vars })) (p.ids.every((id) => was.has(`${p.kind}:${id}`)) ? stale : errors).push(`用例「${p.name}」：${p.reason}`);
     }
   }
   out(targetLine(t));

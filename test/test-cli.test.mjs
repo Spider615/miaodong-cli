@@ -136,6 +136,18 @@ test('edit：用例里本来就对不上的断言（事件后来删了）只提�
   assert.equal(fake.state.posts.update, undefined);
 });
 
+test('edit：只修好一部分原本就有的问题（两个不存在的会话变量删掉一个），剩下那个不算新问题、不拦（整支审查 5）', async () => {
+  reset();
+  const h = home();
+  seedSet('跨', [CROSS_EXEC]);
+  const script = join(h, 'fix-one.mjs');
+  writeFileSync(script, "export default ({ cases }) => { for (const c of cases) delete c.sessionMemoryCustomData['sv-flag']; };");
+  const r = await md(['test', 'edit', '跨', script, '--bot', '179cd443'], h);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /这是预演/);
+  assert.match(r.stdout, /⚠️ 改之前就对不上.*1 个会话变量在这个智能体里不存在（sv-hist）/);
+});
+
 test('import：从 md exec 保存的文件导入（来源是另一个智能体）→ 按名字换 id、全量回写不清掉名字、回读不剩源 id；换不了的列出来；记下线上回复', async () => {
   reset();
   const h = home();
