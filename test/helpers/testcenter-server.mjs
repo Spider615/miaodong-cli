@@ -9,7 +9,7 @@
 //   renameCreated —— create 时给 name 加的后缀（模拟服务端改写 name，按 name 找不到）
 //   assertions —— 每条跑完的条目带几条断言结果（默认 1）；judgeFee —— 任务跑完时总额另加的断言判定费（默认 0；逐条花费里没有它，09-29 实测）
 //   resumeLag —— 继续之后头几次查 detail 状态还是 paused（秒懂晚一拍）；resumeStatus —— 继续接口直接回这个 HTTP 状态（400 拒绝、401 身份失效）
-//   omitSelected —— 任务详情里不带 selectedTestCaseIds（真实服务端带不带没实测）
+//   omitSelected —— 任务详情里不带 selectedTestCaseIds（真实服务端带不带没实测）；scenarioOmitSet —— 场景下的用例不带 testSetId（同样没实测）
 // 事件在目标智能体里不存在的用例会「空跑」：status success、passed false、没有执行、花费为空（spec §2.3 核对 6）
 import { ok, startFakeMiaodong } from './fake-miaodong.mjs';
 import { SOURCE_BOT, TARGET_BOT, botEvents, botVars, importable, targetCanvas } from './testcenter-fixtures.mjs';
@@ -177,7 +177,11 @@ export async function startTestCenterServer({ itemCost = 0.02, perPoll = Infinit
       bump(state.tree);
       return ok({ attachedCount, scenarioPath: '' });
     },
-    'GET /api/test-center/scenario/cases': ({ query }) => page(state.cases.filter((c) => c.scenarioNodeId === query.scenarioNodeId), query),
+    'GET /api/test-center/scenario/cases': ({ query }) => page(state.cases.filter((c) => c.scenarioNodeId === query.scenarioNodeId).map((c) => {
+      if (!state.scenarioOmitSet) return c;
+      const { testSetId, ...rest } = c;
+      return rest;
+    }), query),
     'GET /api/test-center/scenario/tree': () => (state.tree === null
       ? { status: 404, body: { statusCode: 404, message: 'Cannot GET /api/test-center/scenario/tree' } }
       : ok({ tree: state.tree, unclassifiedCount: 0, classifiedCount: 0 })),

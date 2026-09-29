@@ -18,7 +18,7 @@ function home() {
   return h;
 }
 const md = (args, h = home()) => runCli(args, { home: h });
-const reset = (patch = {}) => Object.assign(fake.state, { sets: [], cases: [], tasks: [], items: new Map(), posts: {}, log: [], canvas: null, tree: [], pageCap: undefined, keepDimension: false, dropFields: [], failCreateAt: 0, treeDrift: 0, renameCreated: '', ...patch });
+const reset = (patch = {}) => Object.assign(fake.state, { sets: [], cases: [], tasks: [], items: new Map(), posts: {}, log: [], canvas: null, tree: [], pageCap: undefined, keepDimension: false, dropFields: [], failCreateAt: 0, treeDrift: 0, renameCreated: '', scenarioOmitSet: false, ...patch });
 const jsonl = (h, rows, file = 'cases.jsonl') => {
   const path = join(h, file);
   writeFileSync(path, rows.map((r) => (typeof r === 'string' ? r : JSON.stringify(r))).join('\n'));
@@ -345,5 +345,18 @@ test('md test audit：拿本地的 cases.jsonl 和秒懂里存的逐条逐字段
   assert.match(r.stdout, /❌ 第 2 行「图片-01」：触发输入 和文件不一样/);
   assert.match(r.stdout, /❌ 第 3 行「事件-01」：没挂在场景「咨询\/课程」上/);
   assert.equal(fake.state.log.length, writes, '审计只读');
+});
+
+test('md test cases --scenario 和集一起给：场景下的用例不带 testSetId 时（真实接口带不带没实测）按这个集的用例 id 筛，照样筛得出来', async () => {
+  reset({ tree: scenarioTreeFixture() });
+  const h = home();
+  assert.equal((await md(['test', 'import', '外部回归', '--bot', '179cd443', '--from-file', jsonl(h, THREE)], h)).code, 0);
+  fake.state.scenarioOmitSet = true;
+  const inSet = await md(['test', 'cases', '外部回归', '--scenario', '退款', '--bot', '179cd443'], h);
+  assert.equal(inSet.code, 0, inSet.stderr);
+  assert.match(inSet.stdout, /场景「退款」、测试集「外部回归」：1 条用例/);
+  assert.match(inSet.stdout, /退款-01 · 测试集「外部回归」 · /);
+  const all = await md(['test', 'cases', '--scenario', '退款', '--bot', '179cd443'], h);
+  assert.match(all.stdout, /退款-01 · 测试集「\?」 · /);
 });
 

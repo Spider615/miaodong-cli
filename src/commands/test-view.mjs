@@ -52,14 +52,19 @@ async function casesOfScenario(t, args, query) {
   const { hit, error } = resolveScenario(flattenTree(tree.tree), query);
   if (error) throw new MdError('scenario_not_found', error, { exitCode: EXIT.TARGET, hint: `md test tree --bot ${shortId(t.botId)} 看有哪些场景` });
   const set = args._[0] ? await resolveTestSet(t, args._[0]) : null;
-  const [all, sets, events] = await Promise.all([scenarioCases(t, hit.id), listTestSets(t), listEvents(t.identity, t.orgId, t.botId)]);
-  const rows = set ? all.filter((c) => c.testSetId === set.testSetId) : all;
+  const [all, sets, events, members] = await Promise.all([
+    scenarioCases(t, hit.id), listTestSets(t), listEvents(t.identity, t.orgId, t.botId), set ? listCases(t, set.testSetId) : null,
+  ]);
+  // 给了集就按这个集的用例 id 筛：场景下的用例带不带 testSetId 没实测，不能靠它
+  const inSet = members ? new Set(members.map((c) => c.testCaseId)) : null;
+  const rows = inSet ? all.filter((c) => inSet.has(c.testCaseId)) : all;
   const setName = new Map(sets.map((s) => [s.testSetId, s.name]));
+  if (set) for (const c of rows) setName.set(c.testSetId ?? '', set.name);
   out(targetLine(t));
   out(DATA_NOTE);
   out(`场景「${hit.path}」${set ? `、测试集「${set.name}」` : ''}：${rows.length} 条用例`);
   for (const c of rows.slice(0, 30)) {
-    const where = setName.get(c.testSetId) ?? (c.testSetId ? shortId(c.testSetId) : '?');
+    const where = setName.get(c.testSetId ?? '') ?? (c.testSetId ? shortId(c.testSetId) : '?');
     out(`  ${c.name} · 测试集「${where}」 · ${triggerLabel(c, events)} · ${clip(caseText(c), 40) || '-'}`);
   }
   if (rows.length > 30) out(`  …另有 ${rows.length - 30} 条`);
