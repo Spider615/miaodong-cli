@@ -11,7 +11,7 @@ import { LOADER_URL, REPO, runCli } from './helpers/run-cli.mjs';
 import { KB_FAQ } from './helpers/kb-fixtures.mjs';
 import { doc, faq, writePackage } from './helpers/kb-import-fixtures.mjs';
 import { goodPackage, importFaqRows } from './helpers/kb-import-data.mjs';
-import { codeOf, confirmImport, previewCode, recordOf, resume, revoke, withServer } from './helpers/kb-import-cli.mjs';
+import { codeOf, confirmImport, holdCreates, previewCode, recordOf, resume, revoke, withServer } from './helpers/kb-import-cli.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const gatewayTimeout = { status: 504, body: { statusCode: 504, message: 'Gateway Timeout' } };
@@ -97,13 +97,10 @@ test('FAQ：建的请求回了 504、过一会儿才落库——续跑预演列�
   await withServer({}, async (server, h) => {
     const dir = writePackage({ faqs: [faq('f1', '课程怎么退款呀', '在订单详情页申请。')] });
     const code = await previewCode(dir, h);
-    onCall(server, 'POST /api/qa/batch-create', 1, (rec, orig) => {
-      setTimeout(() => orig(rec), 300);
-      return gatewayTimeout;
-    });
+    const held = holdCreates(server, 'POST /api/qa/batch-create', gatewayTimeout, { calls: 1 });
     const r = await runCli(['kb', 'import', dir, '--confirm', code], { home: h });
     assert.equal(r.code, 1);
-    await sleep(600);
+    await held.flush();
     const importId = recordOf(r)[1];
     const { preview, done } = await resume(importId, h);
     assert.match(preview.stdout, /这次请求之后才出现的[^\n]*可能是这次的请求晚落库了/);
@@ -121,13 +118,10 @@ test('文件：建的请求回了 504、过一会儿才落库——晚出现的�
   await withServer({}, async (server, h) => {
     const dir = writePackage({ docs: [doc('d1', '新价格表', ['瑜伽月卡 399 元'])] });
     const code = await previewCode(dir, h);
-    onCall(server, 'POST /api/knowledge-base/file/manual-create', 1, (rec, orig) => {
-      setTimeout(() => orig(rec), 300);
-      return gatewayTimeout;
-    });
+    const held = holdCreates(server, 'POST /api/knowledge-base/file/manual-create', gatewayTimeout, { calls: 1 });
     const r = await runCli(['kb', 'import', dir, '--confirm', code], { home: h });
     assert.equal(r.code, 1);
-    await sleep(600);
+    await held.flush();
     const importId = recordOf(r)[1];
     const [late] = docsNamed(server, '新价格表');
     const { preview, done } = await resume(importId, h);
@@ -170,13 +164,13 @@ test('文件列表的延迟比发完之后再列的那几次还长——md 认�
   await withServer({}, async (server, h) => {
     const dir = writePackage({ docs: [doc('d1', '新价格表', ['瑜伽月卡 399 元'])] });
     const code = await previewCode(dir, h);
-    lagged(server, 200);
+    const held = holdCreates(server, 'POST /api/knowledge-base/file/manual-create', { status: 200, body: { code: 0, data: null } });
     const r = await runCli(['kb', 'import', dir, '--confirm', code], { home: h });
     assert.equal(r.code, 1);
     const importId = recordOf(r)[1];
-    await sleep(400);
+    await held.flush();
     assert.equal((await resume(importId, h)).done.code, 1);
-    await sleep(400);
+    await held.flush();
     const refused = await runCli(['kb', 'import', '--resume', importId], { home: h });
     assert.equal(refused.code, 1);
     assert.match(refused.stderr, /列表延迟/);

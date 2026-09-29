@@ -10,7 +10,7 @@ import { runCli } from './helpers/run-cli.mjs';
 import { KB_FAQ } from './helpers/kb-fixtures.mjs';
 import { doc, faq, writePackage } from './helpers/kb-import-fixtures.mjs';
 import { goodPackage, importParagraphRows } from './helpers/kb-import-data.mjs';
-import { codeOf, confirmImport, homeFor, previewCode, recordOf, resume, revoke, withServer } from './helpers/kb-import-cli.mjs';
+import { codeOf, confirmImport, holdCreates, homeFor, previewCode, recordOf, resume, revoke, withServer } from './helpers/kb-import-cli.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const gatewayTimeout = { status: 504, body: { statusCode: 504, message: 'Gateway Timeout' } };
@@ -172,18 +172,13 @@ test('建文件每次都 504、过一会儿才落库——文件不在事后认�
   await withServer({}, async (server, h) => {
     const dir = writePackage({ docs: [doc('d1', '新价格表', ['瑜伽月卡 399 元'])] });
     const code = await previewCode(dir, h);
-    const route = 'POST /api/knowledge-base/file/manual-create';
-    const orig = server.routes[route];
-    server.routes[route] = async (rec) => {
-      setTimeout(() => orig(rec), 300);
-      return gatewayTimeout;
-    };
+    const held = holdCreates(server, 'POST /api/knowledge-base/file/manual-create', gatewayTimeout);
     const r = await runCli(['kb', 'import', dir, '--confirm', code], { home: h });
     assert.equal(r.code, 1);
     const importId = recordOf(r)[1];
     let refused = null;
     for (let i = 0; i < 4 && !refused; i++) {
-      await sleep(500);
+      await held.flush();
       const p = await runCli(['kb', 'import', '--resume', importId], { home: h });
       if (!codeOf(p)) refused = p;
       else {
@@ -193,7 +188,7 @@ test('建文件每次都 504、过一会儿才落库——文件不在事后认�
     }
     assert.ok(refused, '续跑一直没被拒绝');
     assert.match(refused.stderr, /延迟/);
-    await sleep(500);
+    await held.flush();
     assert.ok(docsNamed(server, '新价格表').length <= 2, `攒了 ${docsNamed(server, '新价格表').length} 个空文件`);
   });
 });
@@ -202,18 +197,10 @@ test('这次导入做完了，但有晚出现、没认下的同名空文件（�
   await withServer({}, async (server, h) => {
     const dir = writePackage({ docs: [doc('d1', '新价格表', ['瑜伽月卡 399 元'])] });
     const code = await previewCode(dir, h);
-    const route = 'POST /api/knowledge-base/file/manual-create';
-    const orig = server.routes[route];
-    let first = true;
-    server.routes[route] = async (rec) => {
-      if (!first) return orig(rec);
-      first = false;
-      setTimeout(() => orig(rec), 300);
-      return gatewayTimeout;
-    };
+    const held = holdCreates(server, 'POST /api/knowledge-base/file/manual-create', gatewayTimeout, { calls: 1 });
     const r = await runCli(['kb', 'import', dir, '--confirm', code], { home: h });
     assert.equal(r.code, 1);
-    await sleep(600);
+    await held.flush();
     const [late] = docsNamed(server, '新价格表');
     const { done } = await resume(recordOf(r)[1], h);
     assert.equal(done.code, 0, done.stderr);

@@ -20,6 +20,26 @@ export async function withServer(options, fn) {
   }
 }
 
+// 建的请求先回 reply（504、或回了成功但没有 id），东西先不落库；测试调 flush() 才落，模拟「过一会儿才落库 / 列表延迟」。
+// 不用毫秒定时器：机器忙时 md 发完之后那几次重列会变慢，按毫秒设的延迟会落进窗口里，测试就测不到「窗口外才出现」
+// （09-29 全量跑时偶发失败，把文件列表调慢 40ms 能稳定复现）。命令跑完再 flush，必定在窗口之外
+export function holdCreates(server, route, reply, { calls = Infinity } = {}) {
+  const orig = server.routes[route];
+  const held = [];
+  let n = 0;
+  server.routes[route] = async (rec) => {
+    n += 1;
+    if (n > calls) return orig(rec);
+    held.push(rec);
+    return reply;
+  };
+  return {
+    async flush() {
+      while (held.length) await orig(held.shift());
+    },
+  };
+}
+
 export const codeOf = (r) => r.stdout.match(/计划码：([0-9a-f]{8})/)?.[1];
 export const recordOf = (r) => r.stdout.match(/导入记录：(\S+)（(\S+)）/);
 
