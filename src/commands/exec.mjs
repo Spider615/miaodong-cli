@@ -14,6 +14,7 @@ import { saveNodes, saveSearch } from '../exec-store.mjs';
 import { EXEC_ID, locateExec } from '../exec-locate.mjs';
 import { NODE_LINE_LIMIT, driftAgainst, findExecNode, locateText, nodeLine, normalizeDetail, promptText, renderNodeDetail, verdictLine } from '../exec-detail.mjs';
 import { DEFAULT_CHAIN_WINDOW_MS, chainExecFromDetail, chainOf, extractEmittedEvents, fetchSessionPool, renderChain } from '../exec-chain.mjs';
+import { retrievalsOf } from '../kb-retrieval.mjs';
 
 const SHOW_LIMIT = 50;
 
@@ -113,6 +114,18 @@ async function eventLabel(target, event, known) {
   return (events ?? []).find((x) => x?.eventId === event.eventId)?.name || shortId(event.eventId);
 }
 
+// 查 case 要结合知识库：这次用到了知识库（大模型调了知识库工具、跑了知识库查询节点），或者挂了知识库工具却没调，
+// 单独一行说出来并给出 md kb why——很多回复本该来自知识库，库里没有、没审核、没召回都是常见原因。没用到知识库的不说
+function kbLine(norm, execId) {
+  const { calls, kbNodes, silent } = retrievalsOf(norm);
+  const places = (list) => [...new Map(list.map((x) => [`${x.nodeId}#${x.order}`, `#${x.order} ${x.nodeName}`])).values()];
+  const shown = (list) => `${list.slice(0, 3).join('、')}${list.length > 3 ? ` 等 ${list.length} 处` : ''}`;
+  const used = [...calls, ...kbNodes];
+  if (used.length) return `知识库：这次检索了 ${used.length} 次（${shown(places(used))}），召回了什么、该召回的为什么没召回：md kb why ${execId}`;
+  if (silent.length) return `知识库：${shown(places(silent))} 挂了知识库工具，这次没调；用户原话在库里能搜到什么：md kb why ${execId}`;
+  return null;
+}
+
 async function showExec(args, target, norm, dir) {
   const e = norm.exec;
   const { lines: chainLines, eventName } = await chainOfExec(args, target, norm);
@@ -123,6 +136,8 @@ async function showExec(args, target, norm, dir) {
   out(`触发：${clip(e.triggerText, 200) || '-'}`);
   out(`本条动作：${clip(actionSummary(e.outputActions), 300) || '无'}`);
   for (const line of chainLines) out(line);
+  const kb = kbLine(norm, e.execId);
+  if (kb) out(kb);
   out('节点（按执行顺序）：');
   for (const n of norm.nodes.slice(0, NODE_LINE_LIMIT)) out(nodeLine(n));
   if (norm.nodes.length > NODE_LINE_LIMIT) out(`  …另有 ${norm.nodes.length - NODE_LINE_LIMIT} 个节点，见 ${join(dir, 'nodes.jsonl')}`);

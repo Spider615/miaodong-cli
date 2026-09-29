@@ -427,3 +427,15 @@ test('md kb why：目标 FAQ 是执行之后才上传的——结论就是「执
   }
 });
 
+test('md exec 看一条执行：用到了知识库就单独一行说检索了几处、在哪，给出 md kb why；挂了工具没调的也说；没用到的不说（查 case 时结合知识库）', async () => {
+  const used = await md(['exec', X(21)]);
+  assert.equal(used.code, 0, used.stderr);
+  assert.match(used.stdout, /知识库：这次检索了 1 次（#2 回答生成），召回了什么、该召回的为什么没召回：md kb why e0000021-0000-4000-8000-000000000000/);
+  const silent = await md(['exec', X(25)]);
+  assert.equal(silent.code, 0, silent.stderr);
+  assert.match(silent.stdout, /知识库：#2 回答生成、#3 闲聊 挂了知识库工具，这次没调；用户原话在库里能搜到什么：md kb why e0000025-0000-4000-8000-000000000000/);
+  const none = await md(['exec', X(30)]);
+  assert.equal(none.code, 0, none.stderr);
+  assert.doesNotMatch(none.stdout, /知识库：/);
+});
+
