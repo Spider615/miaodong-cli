@@ -6,8 +6,9 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { buildBundle } from './build.mjs';
+import { isMain } from './scripts/is-main.mjs';
 
 const REPO = dirname(fileURLToPath(import.meta.url));
 // 桌面副本的标记。旧版 install 放的副本带 .md-cli-skill，也认
@@ -35,7 +36,7 @@ export async function installLocal({ root = REPO, home = homedir(), exportDir = 
   return { tag, logs };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMain(import.meta.url)) {
   const { logs } = await installLocal();
   for (const line of logs) console.log(line);
   console.log('验证：新开一个终端运行 md --version');

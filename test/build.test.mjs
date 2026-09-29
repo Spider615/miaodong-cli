@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, realpathSync, symlinkSync } from 'node:fs';
+import { cpSync, existsSync, symlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tempHome } from './helpers/run-cli.mjs';
@@ -12,10 +12,10 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 test('npm run build 只出开发构建 build/md.mjs，不碰 dist/md.mjs', () => {
   // 在临时目录里摆一份仓库布局（源码和依赖用软链），跑 build.mjs 的命令行入口：不动真仓库的 dist/ 和 build/。
-  // 用真实路径：macOS 的临时目录在软链 /var 下，脚本的入口判断（import.meta.url 对 argv[1]）会对不上
-  const root = realpathSync(tempHome());
+  // 故意不取真实路径：macOS 的临时目录在软链 /var 下，入口判断以前直接比 import.meta.url 和 argv[1]，在这里会静默什么都不做
+  const root = tempHome();
   cpSync(join(ROOT, 'build.mjs'), join(root, 'build.mjs'));
-  for (const name of ['src', 'vendor', 'node_modules', 'package.json']) symlinkSync(join(ROOT, name), join(root, name));
+  for (const name of ['src', 'vendor', 'scripts', 'node_modules', 'package.json']) symlinkSync(join(ROOT, name), join(root, name));
   const r = spawnSync(process.execPath, [join(root, 'build.mjs')], { encoding: 'utf-8' });
   assert.equal(r.status, 0, r.stderr);
   assert.ok(existsSync(join(root, 'build', 'md.mjs')), r.stdout);

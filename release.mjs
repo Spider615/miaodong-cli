@@ -4,9 +4,10 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { buildBundle } from './build.mjs';
 import { testNodeProblem } from './scripts/check-node.mjs';
+import { isMain } from './scripts/is-main.mjs';
 
 const REPO = dirname(fileURLToPath(import.meta.url));
 // 本机路径只查 dist/ 和 skill/：同事直接用到的就是这两处；文档和历史里的本机路径是有意留的（私有仓库）。
@@ -89,7 +90,7 @@ export function scanForLeaks(root = REPO, files = committableFiles(root)) {
   return hits;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMain(import.meta.url)) {
   const blockers = releaseBlockers();
   if (blockers.length) {
     for (const b of blockers) console.error(`❌ ${b}`);

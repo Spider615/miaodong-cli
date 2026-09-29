@@ -6,8 +6,9 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { testNodeProblem } from './check-node.mjs';
+import { isMain } from './is-main.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -60,7 +61,7 @@ export function syncReport(r) {
   return [`没有变化（${at}）`];
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMain(import.meta.url)) {
   // 同步完要跑测试：Node 不够新就先说清楚，什么都不动（审查 M3）
   const node = testNodeProblem();
   if (node) {

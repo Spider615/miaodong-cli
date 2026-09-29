@@ -14,7 +14,8 @@ import { build } from 'esbuild';
 import { chmodSync, mkdirSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { isMain } from './scripts/is-main.mjs';
 
 const KIT = dirname(fileURLToPath(import.meta.url));
 export const BUNDLE_PATH = join(KIT, 'dist', 'md.mjs');
@@ -67,7 +68,7 @@ export async function buildBundle({ outfile = BUNDLE_PATH } = {}) {
   return { outfile, tag, version };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMain(import.meta.url)) {
   const { outfile, tag, version } = await buildBundle({ outfile: DEV_BUNDLE_PATH });
   console.log(`已构建开发版 ${outfile}（${version}，${tag}）。要发给同事用 npm run release`);
 }
