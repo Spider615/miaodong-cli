@@ -195,8 +195,14 @@ export const push = {
       readback = await getCanvas(identity, orgId, botId);
     } catch (error) {
       appendLedger({ ...entry, readbackUpdatedAt: null, readbackFailed: true, problems: [`保存成功，回读失败：${error?.message ?? error}`] });
-      saveMeta(ws.dir, { ...ws.meta, lastPush: { at: pushedAt, backup, pushed } });
-      throw blocked(`已经保存到草稿，但回读失败：${error?.message ?? error}`, `这次推送已记进 md log。先 md status --remote 复查草稿是不是这次推的，不要直接重推；要撤回：md restore --ws ${ws.dir}`);
+      // 工作副本照推送成功处理，只是新基线用这次保存的内容（没读回来）：改动脚本已经移进 history，
+      // 还留着改后的状态会显示「有没推的改动」，重推卡在冲突、rebase 又没有脚本可重放（整支审查 4）
+      const savedBase = { canvas: toSave, sessions: ws.base.sessions, events: ws.base.events };
+      writeJson(join(ws.dir, 'base.json'), savedBase);
+      rmSync(join(ws.dir, 'after.json'), { force: true });
+      writeIndex(ws.dir, savedBase);
+      saveMeta(ws.dir, { ...ws.meta, source: { kind: 'draft' }, handEdited: false, draft: { updatedAt: null, version: null, hash: hashOf(toSave) }, lastPush: { at: pushedAt, backup, pushed } });
+      throw blocked(`已经保存到草稿，但回读失败：${error?.message ?? error}`, `这次推送已记进 md log，工作副本按推送的内容更新了。先 md status --remote 复查草稿是不是这次推的，不要重推；要撤回：md restore --ws ${ws.dir}；要和草稿对齐：md pull`);
     }
     const { problems, notes } = verifyReadback(toSave, readback, live.canvasId, ours);
     appendLedger({ ...entry, readbackUpdatedAt: readback.updatedAt, problems });

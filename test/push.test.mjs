@@ -194,7 +194,7 @@ test('我改的字段没写进去：照样报回读不一致', async () => {
 
 test('保存成功、回读失败（网络）：照样记进账本、留下推送快照，md log 看得到；报错说清已经保存了、别直接重推', async () => {
   bot.reset();
-  const { home } = await bot.pulled();
+  const { home, dir } = await bot.pulled();
   await bot.apply(home, PROMPT_FIX);
   const code = planCodeOf((await runCli(['push'], { home })).stdout);
   const original = bot.server.routes['GET /api/canvas/get'];
@@ -219,5 +219,11 @@ test('保存成功、回读失败（网络）：照样记进账本、留下推�
   assert.match(log.stdout, /推送 .*⚠️ 回读失败/);
   const remote = await runCli(['status', '--remote'], { home });
   assert.match(remote.stdout, /✅ .*推送的 1 个节点都还在/);
+  // 工作副本按推送的内容更新了基线：不再显示有没推的改动，重跑 md push 说没有改动，不会卡在冲突 / rebase 里（整支审查 4）
+  assert.equal(existsSync(join(dir, 'after.json')), false);
+  assert.match((await runCli(['status'], { home })).stdout, /无未推送改动/);
+  const again = await runCli(['push'], { home });
+  assert.equal(again.code, 5);
+  assert.match(again.stderr, /这个工作副本还没有改动/);
 });
 
