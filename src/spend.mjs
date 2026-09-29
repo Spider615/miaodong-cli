@@ -79,7 +79,8 @@ export function spendDecision({ estimate, externalCalls = [] }, { limits, today 
     if (today >= limits.perDay) reasons.push(`今天已到每日上限 ¥${limits.perDay}`);
   } else {
     if (estimate > limits.perCommand) reasons.push(`预计 ¥${estimate.toFixed(2)}，超过单次门槛 ¥${limits.perCommand}`);
-    if (today + estimate > limits.perDay) reasons.push(`今天已花 ¥${today.toFixed(2)}，加上这次超过每日上限 ¥${limits.perDay}`);
+    // 预估正好 ¥0 的不会让今天多花钱：今天已经超了上限也不为它确认（09-29 真机：一笔只有发文本的整条试跑被拦下）
+    if (estimate > 0 && today + estimate > limits.perDay) reasons.push(`今天已花 ¥${today.toFixed(2)}，加上这次超过每日上限 ¥${limits.perDay}`);
   }
   return { needApproval: reasons.length > 0, reasons };
 }

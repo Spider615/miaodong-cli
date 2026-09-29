@@ -234,16 +234,18 @@ test('本地工作副本改了能走到的节点还没推：提醒跑的是草�
   assert.match(r.stdout, /本地改了 1 个能走到的节点还没推/);
 });
 
-test('能走到的节点都不花钱（09-29 实测这种链路花费是 0）：预估 ¥0，今天到了每日上限也不用确认；有大模型的照旧要确认', async () => {
-  fake.reset();
+test('能走到的节点都不花钱（09-29 实测这种链路花费是 0）：预估 ¥0，今天已经超了每日上限也不用确认；有大模型的照旧要确认', async () => {
+  fake.reset({ cost: 0.3 });
   const h = home();
-  limits(h, { perCommand: 2, perDay: 0 });
+  limits(h, { perCommand: 2, perDay: 0.01 });
+  const first = await md(['trial', '--text', 'a', ...BOT], h);
+  assert.equal(first.code, 0, first.stderr);
   const free = await md(['trial', '--event', '延时回复', '--data', 'text=a', ...BOT], h);
   assert.equal(free.code, 0, free.stdout + free.stderr);
-  assert.match(free.stdout, /预计 ¥0（能走到的节点都不花钱）/);
-  assert.equal(posts().length, 1);
+  assert.match(free.stdout, /预计 ¥0（能走到的节点都不花钱） · 今天已花 ¥0\.30/);
+  assert.equal(posts().length, 2);
   const paid = await md(['trial', '--text', 'a', ...BOT], h);
   assert.equal(paid.code, 5);
-  assert.match(paid.stdout, /估不出花费；今天已到每日上限/);
-  assert.equal(posts().length, 1);
+  assert.match(paid.stdout, /超过每日上限/);
+  assert.equal(posts().length, 2);
 });
