@@ -1,11 +1,11 @@
 // 带执行记录的假秒懂：列表按请求体筛选、分页、新到旧排；详情按 execId 取，没有就回 CANVAS_EXEC_NOT_FOUND。
-// ignoreSession：列表不按会话筛（模拟接口没认 sessionId）；listFails：列表接口报 500
+// ignoreSession：列表不按会话筛（模拟接口没认 sessionId）；listFails：列表接口报 500；listStatus：列表接口回这个 HTTP 状态（比如 401 身份失效）
 import { ok, startFakeMiaodong } from './fake-miaodong.mjs';
 import { EXEC_BOT, X, chainRows, delayDetail, draftCanvas } from './exec-fixtures.mjs';
 
 export const EXEC_EVENTS = [{ eventId: 'ev-delay', name: '延时回复' }, { eventId: 'ev-send', name: '发送' }];
 
-export async function startExecServer({ rows = chainRows(), details = { [X(2)]: delayDetail() }, extraDetails = {}, ignoreSession = false, listFails = false } = {}) {
+export async function startExecServer({ rows = chainRows(), details = { [X(2)]: delayDetail() }, extraDetails = {}, ignoreSession = false, listFails = false, listStatus = 0 } = {}) {
   const all = { ...details, ...extraDetails };
   return startFakeMiaodong({
     'GET /api/bot/list': ({ query }) => ok(query.orgId === 'org-1' ? [{ id: EXEC_BOT, name: '太极2.0 质检革新版' }] : []),
@@ -14,6 +14,7 @@ export async function startExecServer({ rows = chainRows(), details = { [X(2)]: 
     'GET /api/canvas/event/list': () => ok(EXEC_EVENTS),
     'POST /api/canvas/history/list': ({ body }) => {
       if (listFails) return { status: 500, body: { code: -1, message: 'INTERNAL_ERROR' } };
+      if (listStatus) return { status: listStatus, body: { message: 'Unauthorized' } };
       let list = rows.filter((r) => {
         const t = Date.parse(r.createdAt);
         return t >= body.startTimestamp && t <= body.endTimestamp;

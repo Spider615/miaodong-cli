@@ -165,6 +165,14 @@ test('事件链查不到（列表接口出错）：照样显示这条执行，�
   });
 });
 
+test('查事件链时身份失效：照常报身份失效（退出码 3），不当成「事件链取不到」吞掉', async () => {
+  await withServer({ listStatus: 401 }, async (run) => {
+    const r = await run(['exec', X(2)]);
+    assert.equal(r.code, 3, r.stdout);
+    assert.match(r.stderr, /身份已失效/);
+  });
+});
+
 test('详情接口回的东西认不出（没有 canvasExec）：报认不出，不说找不到', async () => {
   await withServer({ extraDetails: { [X(8)]: { unexpected: true } } }, async (run) => {
     const one = await run(['exec', X(8), '--bot', '147bd600']);

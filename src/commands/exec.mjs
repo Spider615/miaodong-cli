@@ -82,7 +82,7 @@ async function searchExecs(args) {
   return EXIT.OK;
 }
 
-// 事件链要再查一次列表：查不到（接口出错、超时、身份过期）只影响这一行，这条执行的其余内容照样显示
+// 事件链要再查一次列表：查不到（接口出错、超时）只影响这一行，这条执行的其余内容照样显示；身份失效照常报（退出码 3，要重新取身份）
 async function chainOfExec(args, target, norm) {
   const e = norm.exec;
   if (e.testRun) return { lines: ['事件链：测试 / 试跑执行不在执行列表里，没有事件链'], eventName: '' };
@@ -93,7 +93,7 @@ async function chainOfExec(args, target, norm) {
   try {
     pool = await fetchSessionPool(target.identity, target.orgId, target.botId, e.sessionId, center, windowMs);
   } catch (error) {
-    if (!(error instanceof MdError)) throw error;
+    if (!(error instanceof MdError) || error.code === 'auth_expired') throw error;
     return { lines: [`事件链：取不到（${error.message}）${error.hint ? `→ ${error.hint}` : ''}`], eventName: '' };
   }
   const rowsById = new Map(pool.rows.map((r) => [r.execId, r]));
@@ -108,7 +108,8 @@ async function chainOfExec(args, target, norm) {
 // 事件名：事件链里有就用；没有（测试执行、事件链取不到）再查一次事件列表，取不到才只显示 id 开头
 async function eventLabel(target, event, known) {
   if (known) return known;
-  const events = await listEvents(target.identity, target.orgId, target.botId).catch(() => null);
+  // 取不到（接口不支持、出错）时 listEvents 回 null；身份失效照常报
+  const events = await listEvents(target.identity, target.orgId, target.botId);
   return (events ?? []).find((x) => x?.eventId === event.eventId)?.name || shortId(event.eventId);
 }
 
