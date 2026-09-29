@@ -32,22 +32,33 @@ export function summarizeCases(cases) {
   };
 }
 
-// 源 bot 的事件 id、会话变量 id → 目标 bot 的，一律按名字对（spec §6.2）。名字在目标里没有、或者有重名，就记下原因
+// 源 bot 的事件 id、会话变量 id → 目标 bot 的（spec §6.2）。目标里本来就有同一个 id（克隆出来的智能体）就原样用；
+// 别的按名字对。名字在目标里没有、有重名，或者源里就有重名（几个源 id 会并成同一个目标 id，会话数据的键被合掉），都记下原因
 export function buildIdMap({ sourceEvents, targetEvents, sourceVars, targetVars }) {
   const map = new Map();
   const unresolved = new Map();
   const pair = (source, target, idKey, kind) => {
     const byName = new Map();
+    const targetIds = new Set();
     for (const row of asArray(target)) {
       const name = String(row?.name ?? '');
-      byName.set(name, [...(byName.get(name) ?? []), String(row?.[idKey] ?? '')]);
+      const id = String(row?.[idKey] ?? '');
+      targetIds.add(id);
+      byName.set(name, [...(byName.get(name) ?? []), id]);
+    }
+    const sourceNames = new Map();
+    for (const row of asArray(source)) {
+      const name = String(row?.name ?? '');
+      sourceNames.set(name, (sourceNames.get(name) ?? 0) + 1);
     }
     for (const row of asArray(source)) {
       const id = String(row?.[idKey] ?? '');
       if (!id) continue;
       const name = String(row?.name ?? '');
       const hits = byName.get(name) ?? [];
-      if (hits.length === 1) map.set(id, hits[0]);
+      if (targetIds.has(id)) map.set(id, id);
+      else if (sourceNames.get(name) > 1) unresolved.set(id, `${kind}「${name}」在源里有 ${sourceNames.get(name)} 个同名，不知道对哪个`);
+      else if (hits.length === 1) map.set(id, hits[0]);
       else unresolved.set(id, `${kind}「${name}」${hits.length ? `在目标里有 ${hits.length} 个同名` : '在目标里没有'}`);
     }
   };
@@ -103,7 +114,19 @@ export function leftoverIds(testCase, ids) {
   return [...found];
 }
 
-// 事件、会话变量在这个智能体里存不存在。events / vars 取不到（null）时不查那一项
+// 断言里引用的 id：发事件断言的事件 id、写字段断言的会话变量 id（fieldId）。verifyPayload 和 actionContent 两份都看（spec §2.3）
+function assertionIds(assertion) {
+  const verify = assertion?.verifyPayload ?? {};
+  const payload = assertion?.actionContent?.payload ?? {};
+  const type = verify.type ?? assertion?.actionContent?.type;
+  const ids = (list) => [...new Set(list.map((x) => String(x ?? '')).filter(Boolean))];
+  if (type === 'canvas-event-action') return { events: ids([verify.eventId, payload.eventId]), vars: [] };
+  if (type === 'update-data') return { events: [], vars: ids([...asArray(verify.operations), ...asArray(payload.operations)].map((op) => op?.fieldId)) };
+  return { events: [], vars: [] };
+}
+
+// 事件、会话变量在这个智能体里存不存在。events / vars 取不到（null）时不查那一项。
+// kind：trigger（触发的事件）、vars（会话数据的键）会让用例空跑；assertion（断言里引用的）会让这条断言永远不过
 export function idProblems(cases, { events, vars }) {
   const eventIds = events ? new Set(events.map((e) => String(e?.eventId ?? ''))) : null;
   const varIds = vars ? new Set(vars.map((v) => String(v?.id ?? ''))) : null;
@@ -111,10 +134,16 @@ export function idProblems(cases, { events, vars }) {
   for (const c of cases) {
     const name = String(c?.name ?? c?.testCaseId ?? '?');
     const eventId = String(c?.triggerInputs?.eventId ?? '');
-    if (eventIds && c?.triggerType === 'canvas-event-trigger' && !eventIds.has(eventId)) rows.push({ name, reason: `事件 ${eventId.slice(0, 8)} 在这个智能体里不存在` });
+    if (eventIds && c?.triggerType === 'canvas-event-trigger' && !eventIds.has(eventId)) rows.push({ name, kind: 'trigger', reason: `事件 ${eventId.slice(0, 8)} 在这个智能体里不存在` });
     if (varIds) {
       const missing = Object.keys(c?.sessionMemoryCustomData ?? {}).filter((key) => !varIds.has(key));
-      if (missing.length) rows.push({ name, reason: `${missing.length} 个会话变量在这个智能体里不存在（${missing.slice(0, 3).map((k) => k.slice(0, 8)).join('、')}）` });
+      if (missing.length) rows.push({ name, kind: 'vars', reason: `${missing.length} 个会话变量在这个智能体里不存在（${missing.slice(0, 3).map((k) => k.slice(0, 8)).join('、')}）` });
+    }
+    for (const assertion of asArray(c?.canvasActionOutputAssertions)) {
+      const ids = assertionIds(assertion);
+      for (const id of eventIds ? ids.events.filter((x) => !eventIds.has(x)) : []) rows.push({ name, kind: 'assertion', reason: `发事件断言里的事件 ${id.slice(0, 8)} 在这个智能体里不存在` });
+      const gone = varIds ? ids.vars.filter((x) => !varIds.has(x)) : [];
+      if (gone.length) rows.push({ name, kind: 'assertion', reason: `写字段断言里的 ${gone.length} 个会话变量在这个智能体里不存在（${gone.slice(0, 3).map((k) => k.slice(0, 8)).join('、')}）` });
     }
   }
   return rows;

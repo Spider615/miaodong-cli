@@ -118,7 +118,22 @@ function formAssertions(form, events) {
     if (keys.length > 1) return failed('raw 要单独写一项');
     const list = Array.isArray(form.raw) ? form.raw : [form.raw];
     const bad = list.some((a) => !isObject(a) || typeof a?.verifyPayload?.type !== 'string' || a?.actionContent?.type !== a.verifyPayload.type);
-    return bad ? failed('raw 断言要有 verifyPayload 和 actionContent，两份的 type 一样') : { assertions: list, errors: [] };
+    if (bad) return failed('raw 断言要有 verifyPayload 和 actionContent，两份的 type 一样');
+    // 发事件断言没写 eventName 时秒懂按 eventId 补上：md 先补好，写进去和读回来才一样（不补的话先写的那条被当成没存对、整批撤回）
+    const assertions = [];
+    const errors = [];
+    for (const raw of list) {
+      const a = structuredClone(raw);
+      const payload = a.actionContent.payload;
+      if (a.actionContent.type === 'canvas-event-action' && isObject(payload) && payload.eventId && !payload.eventName) {
+        const hit = events ? events.find((e) => e?.eventId === payload.eventId) : null;
+        if (!events) errors.push(`取不到事件列表，没法给 raw 发事件断言补 eventName（秒懂会自己补，读回来就和写的不一样）；写上 eventName 再导`);
+        else if (!hit) errors.push(`raw 发事件断言的事件「${payload.eventId}」在这个智能体里没有`);
+        else payload.eventName = hit.name;
+      }
+      assertions.push(a);
+    }
+    return errors.length ? { assertions: [], errors } : { assertions, errors: [] };
   }
   return failed('认不出来。可以写字符串、{reply}、{handover: true}、{event, params}、{raw}');
 }

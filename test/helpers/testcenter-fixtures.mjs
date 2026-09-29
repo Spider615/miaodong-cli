@@ -8,6 +8,8 @@ export const SOURCE_BOT = EXEC_BOT;
 export const SAME_EXEC = X(11);
 export const CROSS_EXEC = X(12);
 export const LOST_EXEC = X(13);
+// 同一个智能体的执行，但发事件断言里的事件后来被删了（触发和会话变量都对得上）
+export const STALE_EXEC = X(14);
 
 export const botEvents = {
   [TARGET_BOT]: [
@@ -79,6 +81,7 @@ export const importable = {
   [SAME_EXEC]: importedCase(SAME_EXEC, { eventId: 'tev-delay', sendEventId: 'tev-send', hist: 'tv-hist', flag: 'tv-flag', text: '我想退款' }),
   [CROSS_EXEC]: importedCase(CROSS_EXEC, { eventId: 'sev-delay', sendEventId: 'sev-send', hist: 'sv-hist', flag: 'sv-flag', text: '课程怎么退' }),
   [LOST_EXEC]: importedCase(LOST_EXEC, { eventId: 'sev-only', sendEventId: 'sev-send', hist: 'sv-hist', flag: 'sv-flag', text: '只在源里有的事件' }),
+  [STALE_EXEC]: importedCase(STALE_EXEC, { eventId: 'tev-delay', sendEventId: 'tev-gone', hist: 'tv-hist', flag: 'tv-flag', text: '断言里的事件删了' }),
 };
 
 // md exec 保存的搜索文件：第一行是查询条件（带源智能体），后面每行一条执行

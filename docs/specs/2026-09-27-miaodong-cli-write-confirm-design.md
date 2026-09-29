@@ -28,6 +28,9 @@
 | `test drop` | `test-case/batch-delete`、`test-set/delete` | `test-drop.mjs:27 → 32 → 37` | `test-cli.test.mjs:384`（写日志为空） |
 | `kb import` | `qa/batch-create` 等 | `kb-import.mjs:164 → 169 → 172`（续跑）、`207 → 212 → 217` | `kb-cli-import.test.mjs:20`（写请求数不变） |
 | `kb revoke` | `qa/batch-delete` 等 | `kb-revoke.mjs:157 → 162 → 163` | `kb-cli-revoke.test.mjs:35`（写请求数不变） |
+| `test resume`（09-29 加） | `test-task/resume` | `test-resume.mjs`：预演 → 核对计划码 → 先记账再继续 | `test-cli.test.mjs` 的 resume 测试（`posts.resume` 为空） |
+
+09-29 加了第 7 个：`md test resume`（继续被暂停的回归任务）。它不改用例和测试集，但继续就是多花钱、而且多半是止损暂停之后，所以按要确认的做：每次先预演其余花费、给计划码，用户同意后才继续。归到要确认的，不用问用户（问的是反方向：往不用确认里放）。
 
 不用确认的命令会写这些接口：
 - `test import`：`test-set/create`、`test-case/import|create|update|batch-delete`、`scenario/attach-cases`、`test-set/delete`。后两类删除是导错时自动撤回这次导进来的。
@@ -82,8 +85,8 @@ vendor 里的整链路试跑 `startTrialRun`（POST `/api/canvas/exec`），`src
    - `kb-write.mjs` 整个算写，不用列。
 
    这样新接口标成写以后，忘了把封装函数加进清单也会报错。
-4. **会写秒懂的命令正好是这 11 个文件，两个方向都比。**
-   - 要确认的：`push`、`restore`、`test-edit`、`test-drop`、`kb-import`、`kb-revoke`。
+4. **会写秒懂的命令正好是这 12 个文件，两个方向都比。**
+   - 要确认的：`push`、`restore`、`test-edit`、`test-drop`、`kb-import`、`kb-revoke`、`test-resume`（09-29 加）。
    - 不用确认的：`test-import`、`test-import-file`、`test-run`、`trial`、`trial-flow`（`md trial --text / --event` 的实现，同属 `md trial`，09-29 加）。
 
    怎么判：

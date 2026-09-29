@@ -131,3 +131,17 @@ test('buildCase：vars 不能写「消息历史」，要用 history（md 会核�
 test('buildCase：触发类型写错时列出可选的值（审查 I4）', () => {
   assert.match(buildCase(row({ name: 't-1', trigger: 'receive-txt-message', input: {} }), ctx).errors.join(), /可选：input、receive-text-message、/);
 });
+
+test('raw 发事件断言没写 eventName：按事件列表补上（秒懂会自己补，不补的话先写的那条读回来对不上、整批被撤回）；事件不在这个智能体里报错', () => {
+  const raw = (eventId) => ({ verifyPayload: { type: 'canvas-event-action', eventId, params: {} }, actionContent: { type: 'canvas-event-action', payload: { eventId, params: {} } } });
+  const given = raw('tev-send');
+  const { assertions, errors } = buildExpect({ raw: given }, { events });
+  assert.deepEqual(errors, []);
+  assert.equal(assertions[0].actionContent.payload.eventName, '发送4.0');
+  assert.equal(given.actionContent.payload.eventName, undefined, '不改用户给的对象');
+  assert.match(buildExpect({ raw: raw('nope') }, { events }).errors.join(), /raw 发事件断言的事件「nope」在这个智能体里没有/);
+  assert.match(buildExpect({ raw: raw('tev-send') }, { events: null }).errors.join(), /取不到事件列表/);
+  const named = raw('tev-send');
+  named.actionContent.payload.eventName = '自己写的';
+  assert.equal(buildExpect({ raw: named }, { events }).assertions[0].actionContent.payload.eventName, '自己写的');
+});

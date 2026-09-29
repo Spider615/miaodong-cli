@@ -74,23 +74,30 @@ export async function basicInfo(identity, orgId, botId) {
   }
 }
 
-// 会话变量 / 事件列表在个别区版本不齐；取不到返回 null，由调用方说明，不中断拉取
-async function optionalArray(promise) {
-  try {
-    return asArray((await promise)?.data);
-  } catch (error) {
-    if (error instanceof MdError && error.code === 'auth_expired') throw error;
-    return null;
+// 会话变量 / 事件列表在个别区版本不齐；取不到返回 null，由调用方说明，不中断拉取。
+// 网络出错、超时、5xx 是偶发的，先重试两次再算取不到：md test run 的跑前检查偶发「取不到列表」就是一次超时，重试即过
+const RETRY_DELAYS_MS = [300, 1000];
+const transient = (error) => error instanceof MdError && (error.code === 'network' || (error.code === 'upstream' && error.status >= 500));
+
+async function optionalArray(fetchOnce) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return asArray((await fetchOnce())?.data);
+    } catch (error) {
+      if (error instanceof MdError && error.code === 'auth_expired') throw error;
+      if (!transient(error) || attempt >= RETRY_DELAYS_MS.length) return null;
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt]));
+    }
   }
 }
 
 export function listSessions(identity, orgId, botId) {
-  return optionalArray(request(identity, '/api/session-memory/list', { query: { botId, orgId } }));
+  return optionalArray(() => request(identity, '/api/session-memory/list', { query: { botId, orgId } }));
 }
 
 export function listEvents(identity, orgId, botId) {
   // 固定带 eventListFilter=all：不带时是否包含隐藏事件没有确认
-  return optionalArray(request(identity, '/api/canvas/event/list', { query: { botId, orgId, eventListFilter: 'all' } }));
+  return optionalArray(() => request(identity, '/api/canvas/event/list', { query: { botId, orgId, eventListFilter: 'all' } }));
 }
 
 // canvas/save 是全量覆盖、写编辑器草稿；nodes / edges 由 rawCanvas 推出（与老懂、kit 同一套契约）

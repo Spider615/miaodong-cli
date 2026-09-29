@@ -1,6 +1,6 @@
 // md test run <集>（spec §6.5）：跑前检查 → 预估 → 用户确认（§7）→ 建任务。建完不等：用 md test status --wait 盯着跑。
 
-import { boolArg, intArg, strArg } from '../args.mjs';
+import { boolArg, intArg, listArg, strArg } from '../args.mjs';
 import { EXIT, MdError } from '../errors.mjs';
 import { formatTime, note, out, shortId, targetLine } from '../output.mjs';
 import { formatCost } from '../execs.mjs';
@@ -12,7 +12,7 @@ import { codeFor, givenCode, roundCost, stopForConfirm } from '../confirm.mjs';
 import { createTask, listCases, pauseTask, recentTasks, taskDetail, taskItems } from '../testcenter.mjs';
 import { UNKNOWN_CASE_COST, preflight } from '../testcases.mjs';
 import { isNoop } from '../testresults.mjs';
-import { readSources, readTaskRecord, resolveTestSet, testTarget, writeTaskRecord } from '../test-common.mjs';
+import { pickCases, readSources, readTaskRecord, resolveTestSet, taskCaseCount, testTarget, writeTaskRecord } from '../test-common.mjs';
 import { envPollMs } from '../poll.mjs';
 
 const QUEUED = new Set(['pending', 'processing', 'running']);
@@ -30,7 +30,7 @@ const assertionResults = (item) => asArray(item?.canvasActionOutputAssertionResu
 const caseAssertions = (c) => asArray(c?.canvasActionOutputAssertions).length + asArray(c?.testNodeOutputAssertions).length;
 
 // 每条断言的判定费：先用这个集上次跑完反推出来的，再用这个智能体的，都没有就按 09-29 的实测值
-function judgeFee(t, testSetId) {
+export function judgeFee(t, testSetId) {
   const rows = readSpends().filter((r) => r.kind === 'test' && r.botId === t.botId && typeof r.judgePerAssertion === 'number' && r.judgePerAssertion >= 0);
   const hit = rows.filter((r) => r.testSetId === testSetId).at(-1) ?? rows.at(-1);
   return hit ? hit.judgePerAssertion : JUDGE_FEE_PER_ASSERTION;
@@ -75,8 +75,11 @@ export async function run(args) {
   const allowErrors = boolArg(args, 'allow-preflight-errors');
   const given = givenCode(args);
   const set = await resolveTestSet(t, args._[0]);
-  const cases = await listCases(t, set.testSetId);
-  if (!cases.length) throw new MdError('empty_set', `测试集「${set.name}」里没有用例`, { exitCode: EXIT.BLOCKED });
+  const all = await listCases(t, set.testSetId);
+  if (!all.length) throw new MdError('empty_set', `测试集「${set.name}」里没有用例`, { exitCode: EXIT.BLOCKED });
+  // --case：只跑挑出来的几条（先跑 1 条看看对不对）；跑前检查、预估、确认码都只算这几条
+  const picks = listArg(args, 'case');
+  const cases = picks.length ? pickCases(all, picks, { set, botId: t.botId }) : all;
 
   // 跑哪张画布：默认草稿；--version 用那个版本的 canvasId（spec §6.5）。跑前检查也对着这张画布做
   const draft = await getCanvas(t.identity, t.orgId, t.botId);
@@ -98,9 +101,14 @@ export async function run(args) {
   const estimate = unit === null ? null : unit * runsCount;
 
   out(targetLine({ ...t, versionLabel: label }));
-  out(`测试集「${set.name}」(${shortId(set.testSetId)})：${cases.length} 条 × ${rounds} 轮 = ${runsCount} 次 · 并发 ${concurrency}${pre.unreviewed ? ` · 未审核 ${pre.unreviewed} 条（照样会跑）` : ''}`);
+  const size = picks.length ? `挑出来的 ${cases.length} 条（集里共 ${all.length} 条）` : `${cases.length} 条`;
+  out(`测试集「${set.name}」(${shortId(set.testSetId)})：${size} × ${rounds} 轮 = ${runsCount} 次 · 并发 ${concurrency}${pre.unreviewed ? ` · 未审核 ${pre.unreviewed} 条（照样会跑）` : ''}`);
   if (pre.errors.length) {
-    out(`❌ 跑前检查：${pre.errors.length} 处对不上（这些用例会「成功」但什么都没执行）：`);
+    const why = [
+      pre.errors.some((e) => e.kind !== 'assertion') ? '触发、会话变量对不上的用例会「成功」但什么都没执行' : '',
+      pre.errors.some((e) => e.kind === 'assertion') ? '断言里引用的对不上，那条断言永远不过' : '',
+    ].filter(Boolean).join('；');
+    out(`❌ 跑前检查：${pre.errors.length} 处对不上（${why}）：`);
     for (const e of pre.errors.slice(0, 20)) out(`  - ${e.name}：${e.reason}`);
     if (pre.errors.length > 20) out(`  …另有 ${pre.errors.length - 20} 处`);
   }
@@ -135,7 +143,7 @@ export async function run(args) {
 
   let testTaskId;
   try {
-    testTaskId = await createTask(t, { testSetId: set.testSetId, canvasId, name, rounds, concurrency });
+    testTaskId = await createTask(t, { testSetId: set.testSetId, canvasId, name, rounds, concurrency, ...(picks.length ? { selectedTestCaseIds: cases.map((c) => c.testCaseId) } : {}) });
   } catch (error) {
     // 身份失效、企业到期、积分不足、明确被拒（业务错误、4xx）都是没建成：这一笔记 0，身份类原样报（退出码 3 让用户重新取身份，审查 M3）。
     // 结果不明（5xx、超时）的保留预留，让用户先看任务列表
@@ -186,14 +194,14 @@ export async function resolveTask(t, query) {
 
 // 进度：跑完的条目数、通过、空跑（spec §2.3：没有执行、花费为空）、正在跑的、已完成条目的花费和平均（空跑不进平均）。
 // 花费含断言判定费：逐条花费里没有这笔，按已判的断言数 × 每条断言的判定费补上（09-29 实测）
-function progressOf(detail, items, fee = JUDGE_FEE_PER_ASSERTION) {
+export function progressOf(detail, items, fee = JUDGE_FEE_PER_ASSERTION) {
   const done = items.filter((i) => i?.status && !['pending', 'processing'].includes(i.status));
   const costs = done.map((i) => i.costInCny).filter((c) => typeof c === 'number');
   const execSpent = costs.reduce((a, b) => a + b, 0);
   const judged = done.reduce((n, i) => n + assertionResults(i), 0);
   const judging = judged * fee;
   return {
-    total: Math.max(items.length, (Number(detail?.totalTestCaseCount) || 0) * (Number(detail?.repeatTimes) || 1)),
+    total: Math.max(items.length, taskCaseCount(detail) * (Number(detail?.repeatTimes) || 1)),
     done: done.length,
     inflight: items.filter((i) => i?.status === 'processing').length,
     passed: done.filter((i) => i.passed === true).length,
@@ -267,7 +275,7 @@ export async function status(args) {
     out(targetLine(t));
     if (!rows.length) out('没有任务');
     for (const x of rows) {
-      const total = (Number(x.totalTestCaseCount) || 0) * (Number(x.repeatTimes) || 1);
+      const total = taskCaseCount(x) * (Number(x.repeatTimes) || 1);
       out(`  ${formatTime(x.createdAt)} ${shortId(x.testTaskId)} ${x.name} · ${x.status} · ${x.processedTestCaseCount ?? 0}/${total} · 通过 ${x.passedTestCaseCount ?? 0} · ${typeof x.totalCostInCny === 'number' ? formatCost(x.totalCostInCny) : '花费跑完才有'}`);
     }
     return EXIT.OK;
@@ -291,7 +299,7 @@ export async function status(args) {
     const guard = stopLoss(t, readTaskRecord(t, task.testTaskId), detail, p);
     if (guard) {
       await pauseTask(t, task.testTaskId);
-      out(`⛔ ${guard}，已暂停任务。账本已按实际花费记；秒懂没有取消，重新 md test run 会把已经跑完的条目再花一次钱，新的预估按这次观察到的单价算`);
+      out(`⛔ ${guard}，已暂停任务。账本已按实际花费记。要接着跑剩下的 ${p.total - p.done} 条：md test resume ${shortId(task.testTaskId)} --bot ${shortId(t.botId)}（先预演其余花费，用户同意后带计划码继续）；重新 md test run 会把已经跑完的条目再花一次钱`);
       await refresh();
       break;
     }
@@ -333,6 +341,7 @@ export async function stop(args) {
   const p = progressOf(detail, await taskItems(t, task.testTaskId), judgeFee(t, detail?.testSetId));
   observe(t, detail, p);
   out(`已暂停任务 ${detail?.name ?? task.name}（${shortId(task.testTaskId)}）：${detail?.status}。秒懂没有取消，只能暂停；账本按已跑完的条目记实际花费（正在跑的按单价算进去）`);
+  out(`要接着跑：md test resume ${shortId(task.testTaskId)} --bot ${shortId(t.botId)}（先预演其余花费）`);
   out(statusLine(detail, p));
   return EXIT.OK;
 }

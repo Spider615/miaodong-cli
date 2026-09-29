@@ -71,3 +71,24 @@ test('caseDiffs：只比 update 会写的字段；关键字段（name、触发�
   assert.ok(CRITICAL_FIELDS.includes('canvasActionOutputAssertions'));
   assert.equal(fieldLabel('sessionMemoryCustomData'), '会话数据');
 });
+
+test('idProblems 也查断言里的 id：发事件断言的事件、写字段断言的会话变量在这个智能体里没有就记下，标成 assertion', () => {
+  const rows = idProblems([importable[CROSS_EXEC]], { events: botEvents[TARGET_BOT], vars: botVars[TARGET_BOT] });
+  assert.deepEqual(rows.filter((r) => r.kind === 'assertion').map((r) => r.reason), ['写字段断言里的 1 个会话变量在这个智能体里不存在（sv-flag）', '发事件断言里的事件 sev-send 在这个智能体里不存在']);
+  assert.deepEqual(rows.filter((r) => r.kind !== 'assertion').map((r) => r.kind), ['trigger', 'vars']);
+  assert.deepEqual(idProblems([importable[SAME_EXEC]], { events: botEvents[TARGET_BOT], vars: botVars[TARGET_BOT] }), []);
+});
+
+test('换 id：目标里本来就有这个 id（克隆出来的智能体）就原样用，不管重名；源里同名的几个不并成同一个目标 id', () => {
+  const m = buildIdMap({
+    sourceEvents: [{ eventId: 'e-same', name: '发送' }],
+    targetEvents: [{ eventId: 'e-same', name: '发送' }, { eventId: 'e-2', name: '发送' }],
+    sourceVars: [{ id: 'v-a', name: '历史' }, { id: 'v-b', name: '历史' }, { id: 'v-c', name: '意向' }],
+    targetVars: [{ id: 't-hist', name: '历史' }, { id: 't-int', name: '意向' }],
+  });
+  assert.equal(m.map.get('e-same'), 'e-same');
+  assert.equal(m.map.has('v-a'), false);
+  assert.equal(m.map.has('v-b'), false);
+  assert.match(m.unresolved.get('v-a'), /会话变量「历史」在源里有 2 个同名/);
+  assert.equal(m.map.get('v-c'), 't-int');
+});

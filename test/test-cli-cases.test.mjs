@@ -190,6 +190,18 @@ test('edit：预演之后集里的用例变了，原来的计划码对不上，�
   assert.equal(fake.state.posts.update, undefined);
 });
 
+test('edit：秒懂列用例的顺序变了（内容没变），预演给的计划码照样对得上', async () => {
+  reset();
+  const h = home();
+  await seedExternal(h);
+  const file = editFile(h);
+  const code = planCode((await md(['test', 'edit', '外部回归', file, '--bot', '179cd443'], h)).stdout);
+  fake.state.cases.reverse();
+  const r = await md(['test', 'edit', '外部回归', file, '--bot', '179cd443', '--confirm', code], h);
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(fake.state.posts.update.length, 2);
+});
+
 test('edit：脚本改了不能改的字段或把 name 改成重名，什么都不写，列出问题', async () => {
   reset();
   const h = home();
@@ -295,3 +307,43 @@ test('edit：只删断言 verifyPayload.params 里的一个参数，秒懂存的
   assert.deepEqual(Object.keys(saved.verifyPayload.params), ['text']);
   assert.deepEqual(Object.keys(saved.actionContent.payload.params), ['text']);
 });
+
+test('md test cases --scenario：按场景列用例（跨测试集），说清每条在哪个集；和集一起给就只看这个集的', async () => {
+  reset({ tree: scenarioTreeFixture() });
+  const h = home();
+  assert.equal((await md(['test', 'import', '外部回归', '--bot', '179cd443', '--from-file', jsonl(h, THREE)], h)).code, 0);
+  const r = await md(['test', 'cases', '--scenario', '咨询/课程', '--bot', '179cd443'], h);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /场景「咨询\/课程」：1 条用例/);
+  assert.match(r.stdout, /事件-01 · 测试集「外部回归」 · /);
+  const inSet = await md(['test', 'cases', '外部回归', '--scenario', '退款', '--bot', '179cd443'], h);
+  assert.match(inSet.stdout, /场景「退款」、测试集「外部回归」：1 条用例/);
+  const ambiguous = await md(['test', 'cases', '--scenario', '课程', '--bot', '179cd443'], h);
+  assert.equal(ambiguous.code, 4);
+  assert.match(ambiguous.stderr, /有 2 个同名/);
+});
+
+test('md test audit：拿本地的 cases.jsonl 和秒懂里存的逐条逐字段对账——缺的、多的、关键字段不一样的、没挂对场景的都列出来；只读', async () => {
+  reset({ tree: scenarioTreeFixture() });
+  const h = home();
+  const file = jsonl(h, THREE);
+  assert.equal((await md(['test', 'import', '外部回归', '--bot', '179cd443', '--from-file', file], h)).code, 0);
+  const clean = await md(['test', 'audit', '外部回归', '--from-file', file, '--bot', '179cd443'], h);
+  assert.equal(clean.code, 0, clean.stderr + clean.stdout);
+  assert.match(clean.stdout, /文件 3 条 · 秒懂 3 条 · 对上 3 条/);
+  assert.match(clean.stdout, /⚠️ dimension：1 条和文件不一样（这个区可能不保存这个字段）/);
+  const writes = fake.state.log.length;
+  const stored = casesIn('外部回归');
+  stored.find((c) => c.name === '图片-01').triggerInputs.imageUrl = 'https://x/被改了.jpg';
+  stored.find((c) => c.name === '事件-01').scenarioNodeId = null;
+  fake.state.cases = fake.state.cases.filter((c) => c.name !== '退款-01');
+  fake.state.cases.push({ ...structuredClone(stored[1]), name: '多出来的', testCaseId: 'e9999999-0000-4000-8000-000000000000' });
+  const r = await md(['test', 'audit', '外部回归', '--from-file', file, '--bot', '179cd443'], h);
+  assert.equal(r.code, 1);
+  assert.match(r.stdout, /秒懂里没有：第 1 行「退款-01」/);
+  assert.match(r.stdout, /文件里没有：「多出来的」/);
+  assert.match(r.stdout, /❌ 第 2 行「图片-01」：触发输入 和文件不一样/);
+  assert.match(r.stdout, /❌ 第 3 行「事件-01」：没挂在场景「咨询\/课程」上/);
+  assert.equal(fake.state.log.length, writes, '审计只读');
+});
+

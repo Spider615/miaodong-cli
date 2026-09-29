@@ -63,7 +63,8 @@ function showSpend(args) {
   for (const r of recent) {
     const estimate = typeof r.estimate === 'number' ? formatCost(r.estimate) : '估不出';
     const unknown = r.unknownRuns ? `（另有 ${r.unknownRuns} 次花费不知道，按 ${formatCost(r.assumed)} 记）` : '';
-    const actual = typeof r.actual === 'number' ? `${formatCost(r.actual)}${unknown}` : '还没有';
+    // 继续暂停的任务那一笔只记确认信息，钱记在原任务那一笔（md test resume）
+    const actual = r.chargedTo ? '记在原任务那一笔' : typeof r.actual === 'number' ? `${formatCost(r.actual)}${unknown}` : '还没有';
     out(`  ${formatTime(r.at)} ${KIND[r.kind] ?? r.kind} ${r.regionLabel ?? '-'} / ${r.botName ?? '-'}「${r.what ?? '-'}」×${r.count ?? 1} 预估 ${estimate} 实际 ${actual}（${APPROVED[r.approved] ?? r.approved ?? '-'}）`);
   }
   return EXIT.OK;

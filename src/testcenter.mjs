@@ -29,6 +29,8 @@ async function paged(t, path, extra, pageSize) {
 export const listTestSets = (t) => paged(t, '/test-set/list', {}, 100);
 export const listCases = (t, testSetId) => paged(t, '/test-case/list', { testSetId }, 200);
 export const taskItems = (t, testTaskId) => paged(t, '/test-task-item/list', { testTaskId }, 200);
+// 挂在某个场景节点上的用例（跨测试集）：控制台场景树点开节点就是这个接口（前端 1.19.11 核对：botId、scenarioNodeId、current、pageSize）
+export const scenarioCases = (t, scenarioNodeId) => paged(t, '/scenario/cases', { scenarioNodeId }, 100);
 
 // 最近的任务，新的在前。给了 testSetId 只看这个集的（服务端筛选生效，spec §2.3）
 export async function recentTasks(t, { testSetId, limit = 50 } = {}) {
@@ -106,12 +108,15 @@ export async function deleteCases(t, testCaseIds, { batch = 100 } = {}) {
   for (let i = 0; i < testCaseIds.length; i += batch) await post(t, '/test-case/batch-delete', { testCaseIds: testCaseIds.slice(i, i + batch) });
 }
 
-// 建任务：必填 testSetId、canvasId、name、testRound（spec §2.3，由空 body 的 400 校验列出）
-export async function createTask(t, { testSetId, canvasId, name, rounds, concurrency }) {
-  const payload = await post(t, '/test-task/create', { testSetId, canvasId, name, testRound: rounds, concurrency, botId: t.botId });
+// 建任务：必填 testSetId、canvasId、name、testRound（spec §2.3，由空 body 的 400 校验列出）。
+// 只跑几条时传 selectedTestCaseIds（控制台「执行用例」勾选几条就这么传，前端 1.19.11 核对）；不传是整个集
+export async function createTask(t, { testSetId, canvasId, name, rounds, concurrency, selectedTestCaseIds }) {
+  const payload = await post(t, '/test-task/create', { testSetId, canvasId, name, testRound: rounds, concurrency, botId: t.botId, ...(selectedTestCaseIds ? { selectedTestCaseIds } : {}) });
   const id = payload?.data?.testTaskId;
   if (!id) throw new MdError('upstream', '建任务没有返回 testTaskId');
   return id;
 }
 
 export const pauseTask = (t, testTaskId) => post(t, '/test-task/pause', { testTaskId });
+// 继续暂停的任务：控制台任务列表里暂停的任务有「继续」，调的就是这个（前端 1.19.11 核对，body 是 {testTaskId}；真机没实测）
+export const resumeTask = (t, testTaskId) => post(t, '/test-task/resume', { testTaskId });

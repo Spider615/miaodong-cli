@@ -26,10 +26,19 @@ export async function edit(args) {
   const { cases: after, log } = await runEditScript(file, before, { events, vars });
   const history = vars ? byName(vars, HISTORY_VAR, '会话变量').hit : null;
   const { changed, errors } = editChanges(before, after, { historyVarId: history?.id ?? null });
-  // 改出来的事件、会话变量要在这个智能体里有；列表取不到时这里不查，md test run 的跑前检查会拦
-  if (events && vars) for (const p of idProblems(changed.map((c) => c.after), { events, vars })) errors.push(`用例「${p.name}」：${p.reason}`);
+  // 改出来的事件、会话变量要在这个智能体里有：脚本改出新的对不上就拦；改之前就对不上的（比如事件后来删了）只提醒，
+  // 不因为它拦下只改别的字段的脚本。列表取不到时这里不查，md test run 的跑前检查会拦
+  const stale = [];
+  if (events && vars) {
+    for (const c of changed) {
+      const was = new Set(idProblems([c.before], { events, vars }).map((p) => p.reason));
+      for (const p of idProblems([c.after], { events, vars })) (was.has(p.reason) ? stale : errors).push(`用例「${p.name}」：${p.reason}`);
+    }
+  }
   out(targetLine(t));
   for (const line of log) out(`  · ${line}`);
+  for (const line of stale.slice(0, 10)) out(`⚠️ 改之前就对不上：${line}`);
+  if (stale.length > 10) out(`⚠️ 改之前就对不上的另有 ${stale.length - 10} 处`);
   if (errors.length) {
     out(`❌ ${errors.length} 处问题，什么都没改：`);
     for (const e of errors.slice(0, 30)) out(`  - ${e}`);
@@ -40,7 +49,9 @@ export async function edit(args) {
     out(`脚本没改测试集「${set.name}」里的任何用例`);
     return EXIT.OK;
   }
-  const code = confirmCode({ kind: 'test-edit', botId: t.botId, testSetId: set.testSetId, changes: hashOf(changed.map((c) => [c.before, c.after])) });
+  // 按用例 id 排好再算：秒懂列用例的顺序不固定，内容没变、顺序变了，计划码不该变
+  const byId = [...changed].sort((a, b) => String(a.before.testCaseId).localeCompare(String(b.before.testCaseId)));
+  const code = confirmCode({ kind: 'test-edit', botId: t.botId, testSetId: set.testSetId, changes: hashOf(byId.map((c) => [c.before, c.after])) });
   out(`测试集「${set.name}」(${shortId(set.testSetId)})：要改 ${changed.length} 条（共 ${before.length} 条）`);
   for (const c of changed.slice(0, 30)) out(`  ${c.before.name}${c.fields.includes('name') ? ` → ${c.after.name}` : ''}：${c.fields.map(fieldLabel).join('、')}`);
   if (changed.length > 30) out(`  …另有 ${changed.length - 30} 条`);

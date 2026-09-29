@@ -35,6 +35,29 @@ export async function resolveTestSet(t, query, sets = null) {
   throw new MdError('testset_ambiguous', `「${q}」匹配到 ${hits.length} 个测试集：${hits.slice(0, 10).map((s) => `${s.name}(${shortId(s.testSetId)})`).join('、')}`, { exitCode: EXIT.TARGET, hint: '用 id 前缀指定' });
 }
 
+// md test run --case：从集里挑几条用例。每个查询按 完整用例 id → id 前缀（至少 4 位）→ name 找，必须正好一条；挑出来的去重、按集里的顺序
+export function pickCases(cases, queries, { set, botId }) {
+  const picked = new Set();
+  for (const query of queries) {
+    const q = String(query).trim();
+    const exact = cases.filter((c) => c.testCaseId === q);
+    const byPrefix = exact.length ? exact : /^[0-9a-f-]{4,}$/i.test(q) ? cases.filter((c) => String(c.testCaseId).startsWith(q)) : [];
+    const hits = byPrefix.length ? byPrefix : cases.filter((c) => c.name === q);
+    if (!hits.length) throw new MdError('case_not_found', `测试集「${set.name}」里没有用例「${q}」`, { exitCode: EXIT.TARGET, hint: `md test cases ${shortId(set.testSetId)} --bot ${shortId(botId)} 看有哪些` });
+    if (hits.length > 1) {
+      throw new MdError('case_ambiguous', `「${q}」在测试集「${set.name}」里有 ${hits.length} 条${byPrefix.length ? '（id 前缀相同）' : '同名'}：${hits.slice(0, 5).map((c) => shortId(c.testCaseId)).join('、')}`, { exitCode: EXIT.TARGET, hint: '用用例 id（或更长的 id 前缀）指定' });
+    }
+    picked.add(hits[0].testCaseId);
+  }
+  return cases.filter((c) => picked.has(c.testCaseId));
+}
+
+// 任务有几条用例：优先看勾选的 selectedTestCaseIds（只跑几条时 totalTestCaseCount 是不是整个集的条数，没实测）
+export function taskCaseCount(detail) {
+  const picked = Array.isArray(detail?.selectedTestCaseIds) ? detail.selectedTestCaseIds.length : 0;
+  return picked || Number(detail?.totalTestCaseCount) || 0;
+}
+
 const sourcesFile = (t, testSetId) => join(testsDir(t, 'sources'), `${testSetId}.json`);
 
 // 早先的来源文件整个就是 execs（执行 id → 来源），读的时候认两种格式

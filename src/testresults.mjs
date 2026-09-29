@@ -48,7 +48,8 @@ export function itemRow(item, sources = {}) {
       ? '还没跑（任务被暂停或还在跑）'
       : noop
       ? '没有真正执行：触发器、事件或会话变量对不上（秒懂仍显示成功）'
-      : results.filter((r) => r?.passed === false).map((r) => `${describe(r)}：${r?.message || `期望「${clip(r?.expectedValue ?? '', 80)}」实际「${clip(r?.actualValue ?? '', 80)}」`}`).join('；'),
+      // 原因同秒懂页面：大模型判定的理由（llmReason），没有再看 message，都没有才写期望和实际
+      : results.filter((r) => r?.passed === false).map((r) => `${describe(r)}：${r?.llmReason || r?.message || `期望「${clip(r?.expectedValue ?? '', 80)}」实际「${clip(r?.actualValue ?? '', 80)}」`}`).join('；'),
     reply: replyOfItem(item),
     actions: asArray(item?.executedActions).map((a) => a?.summary || a?.type).filter(Boolean).join('；'),
     cost: typeof item?.costInCny === 'number' ? item.costInCny : null,

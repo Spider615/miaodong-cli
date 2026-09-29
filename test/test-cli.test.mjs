@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { runCli, tempHome } from './helpers/run-cli.mjs';
 import { seedIdentity } from './helpers/seed.mjs';
 import { startTestCenterServer } from './helpers/testcenter-server.mjs';
-import { CROSS_EXEC, LOST_EXEC, SAME_EXEC, SOURCE_BOT, TARGET_BOT, execSearchLines, importable, pluginCanvas } from './helpers/testcenter-fixtures.mjs';
+import { CROSS_EXEC, LOST_EXEC, SAME_EXEC, SOURCE_BOT, STALE_EXEC, TARGET_BOT, execSearchLines, importable, pluginCanvas } from './helpers/testcenter-fixtures.mjs';
 
 let fake;
 before(async () => { fake = await startTestCenterServer(); });
@@ -109,6 +109,33 @@ test('import：只给了 id、其实是别的智能体的执行 → 撤回这次
   assert.equal(fake.state.cases.length, 0);
 });
 
+test('import：同一个智能体的执行、只有断言里的事件后来删了 → 不当成别的智能体撤回，导进来并提醒（跑前检查会拦）', async () => {
+  reset();
+  const r = await md(['test', 'import', '断言过期', '--bot', '179cd443', '--from-execs', STALE_EXEC]);
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(fake.state.cases.length, 1);
+  assert.match(r.stdout, /1 条用例对不上这个智能体，md test run 的跑前检查会拦下它们/);
+  assert.match(r.stdout, /发事件断言里的事件 tev-gone 在这个智能体里不存在/);
+});
+
+test('edit：用例里本来就对不上的断言（事件后来删了）只提醒、不拦只改别的字段的脚本；脚本改出新的对不上才拦', async () => {
+  reset();
+  const h = home();
+  seedSet('过期', [STALE_EXEC]);
+  const rename = join(h, 'rename.mjs');
+  writeFileSync(rename, 'export default ({ cases }) => { for (const c of cases) c.name = `${c.name}-改`; };');
+  const ok = await md(['test', 'edit', '过期', rename, '--bot', '179cd443'], h);
+  assert.equal(ok.code, 0, ok.stderr);
+  assert.match(ok.stdout, /这是预演/);
+  assert.match(ok.stdout, /⚠️ 改之前就对不上.*发事件断言里的事件 tev-gone 在这个智能体里不存在/);
+  const broken = join(h, 'broken.mjs');
+  writeFileSync(broken, "export default ({ cases }) => { for (const c of cases) c.triggerInputs.eventId = 'tev-nope'; };");
+  const bad = await md(['test', 'edit', '过期', broken, '--bot', '179cd443'], h);
+  assert.equal(bad.code, 1);
+  assert.match(bad.stdout, /事件 tev-nope 在这个智能体里不存在/);
+  assert.equal(fake.state.posts.update, undefined);
+});
+
 test('import：从 md exec 保存的文件导入（来源是另一个智能体）→ 按名字换 id、全量回写不清掉名字、回读不剩源 id；换不了的列出来；记下线上回复', async () => {
   reset();
   const h = home();
@@ -175,8 +202,9 @@ test('run：跑前检查不过（跨智能体没换 id 的用例）→ 不建任
   const h = home();
   const r = await md(['test', 'run', '集', '--bot', '179cd443'], h);
   assert.equal(r.code, 5);
-  assert.match(r.stdout, /❌ 跑前检查：2 处对不上/);
-  assert.match(r.stderr, /跑前检查有 2 处对不上，没有建任务/);
+  assert.match(r.stdout, /❌ 跑前检查：4 处对不上（触发、会话变量对不上的用例会「成功」但什么都没执行；断言里引用的对不上，那条断言永远不过）/);
+  assert.match(r.stdout, /发事件断言里的事件 sev-send 在这个智能体里不存在/);
+  assert.match(r.stderr, /跑前检查有 4 处对不上，没有建任务/);
   assert.equal(fake.state.posts.taskCreate, undefined);
   assert.deepEqual(spendRows(h), []);
 });
@@ -215,6 +243,31 @@ test('run：这个集上次跑完的任务有平均花费 → 按它估；不超
   assert.match(r.stdout, /预计 ¥0\.020（上次跑完的任务「上次」真正执行的 1 条平均 ¥0\.020）/);
   assert.match(r.stdout, /排队：这个智能体上还有 1 个任务没跑完/);
   assert.equal(fake.state.posts.taskCreate.length, 1);
+});
+
+test('run --case：只跑挑出来的几条（名字、用例 id 或 id 前缀）——跑前检查、预估、任务、进度都只算这几条；找不到、重名的报错', async () => {
+  reset();
+  const set = seedSet('集', [SAME_EXEC, CROSS_EXEC, STALE_EXEC]);
+  seedFinished(set, 0.02);
+  const same = fake.state.cases.find((c) => c.name.includes(SAME_EXEC));
+  const h = home();
+  const r = await md(['test', 'run', '集', '--bot', '179cd443', '--case', same.testCaseId.slice(0, 8)], h);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /测试集「集」\(40000001\)：挑出来的 1 条（集里共 3 条） × 1 轮 = 1 次/);
+  assert.deepEqual(fake.state.posts.taskCreate[0].selectedTestCaseIds, [same.testCaseId]);
+  const task = fake.state.tasks.at(-1).testTaskId;
+  const st = await md(['test', 'status', task.slice(0, 8), '--bot', '179cd443', '--wait'], h, { MD_TEST_POLL_MS: '5' });
+  assert.match(st.stdout, / finished · 1\/1 · /);
+  const byName = await md(['test', 'run', '集', '--bot', '179cd443', '--case', same.name], h);
+  assert.equal(byName.code, 0, byName.stderr);
+  const missing = await md(['test', 'run', '集', '--bot', '179cd443', '--case', '没有这条']);
+  assert.equal(missing.code, 4);
+  assert.match(missing.stderr, /测试集「集」里没有用例「没有这条」[\s\S]*md test cases 40000001 --bot 179cd443/);
+  reset();
+  seedSet('重名', [SAME_EXEC, SAME_EXEC]);
+  const dup = await md(['test', 'run', '重名', '--bot', '179cd443', '--case', `调优中心导入(${SAME_EXEC})`]);
+  assert.equal(dup.code, 4);
+  assert.match(dup.stderr, /有 2 条同名/);
 });
 
 test('run：画布上有插件就要确认，哪怕很便宜；--version 跑那个版本的 canvasId', async () => {
@@ -479,6 +532,37 @@ test('止损暂停后：账本按观察到的花费记实际，「今天已花�
   assert.equal(again.code, 5, again.stdout);
   assert.match(again.stdout, /预计 ¥3\.04（上次盯着跑时观察到每条 ¥1\.01）/);
   assert.match(again.stdout, /确认码：/);
+});
+
+test('resume：止损暂停的任务接着跑剩下的——先预演（剩几条、按实际单价估其余花费、给计划码），什么都不写；带对的码才继续，额度跟着调，--wait 不会又立刻暂停', async () => {
+  reset({ perPoll: 1, itemCost: 1 });
+  seedFinished(seedSet('集', [SAME_EXEC]), 0.001);
+  const h = home();
+  assert.equal((await md(['test', 'run', '集', '--bot', '179cd443', '--rounds', '3'], h)).code, 0);
+  const task = taskOf('集-草稿');
+  const paused = await md(['test', 'status', task, '--bot', '179cd443', '--wait'], h, { MD_TEST_POLL_MS: '5' });
+  assert.match(paused.stdout, /要接着跑剩下的 2 条：md test resume 7\w{7} --bot 179cd443/);
+  const dry = await md(['test', 'resume', task.slice(0, 8), '--bot', '179cd443'], h);
+  assert.equal(dry.code, 0, dry.stderr);
+  assert.match(dry.stdout, /已跑完 1\/3 条，花了 ¥1\.01；剩下 2 条按每条 ¥1\.01 估要 ¥2\.02/);
+  assert.match(dry.stdout, /这是预演，什么都没写/);
+  const code = dry.stdout.match(/计划码：([0-9a-f]{8})/)?.[1];
+  assert.ok(code, dry.stdout);
+  assert.equal(fake.state.posts.resume, undefined);
+  const wrong = await md(['test', 'resume', task, '--bot', '179cd443', '--confirm', '00000000'], h);
+  assert.equal(wrong.code, 5);
+  assert.equal(fake.state.posts.resume, undefined);
+  const done = await md(['test', 'resume', task, '--bot', '179cd443', '--confirm', code], h);
+  assert.equal(done.code, 0, done.stderr);
+  assert.deepEqual(fake.state.posts.resume, [{ testTaskId: task }]);
+  assert.match((await md(['spend'], h)).stdout, /「继续 集-草稿.*」×2 预估 ¥2\.02 实际 记在原任务那一笔（用户确认）/);
+  const waited = await md(['test', 'status', task, '--bot', '179cd443', '--wait'], h, { MD_TEST_POLL_MS: '5' });
+  assert.doesNotMatch(waited.stdout, /已暂停任务/);
+  assert.match(waited.stdout, / finished · 3\/3 · /);
+  const again = await md(['test', 'resume', task, '--bot', '179cd443', '--confirm', code], h);
+  assert.equal(again.code, 0);
+  assert.match(again.stdout, /已经是 finished，只有暂停的任务能继续/);
+  assert.equal(fake.state.posts.resume.length, 1);
 });
 
 test('估价不被空跑稀释：上次跑完的任务按真正执行了的条目算单价；全是空跑（单价 0）就当估不出、要确认（审查 C1）', async () => {

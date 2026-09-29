@@ -81,3 +81,10 @@ test('toCsv：以 = + - @ 开头的格子前面加单引号，Excel 不会当公
   const csv = toCsv(['a'], [['=HYPERLINK("x")'], ['+1+1'], ['-2'], ['@SUM(A1)'], ['正常 -中间的减号']]);
   assert.match(csv, /\r\n"'=HYPERLINK\(""x""\)"\r\n'\+1\+1\r\n'-2\r\n'@SUM\(A1\)\r\n正常 -中间的减号\r\n$/);
 });
+
+test('没通过的断言：结论里带上判定的原因（llmReason，秒懂页面上的「原因」），没有才写期望和实际', () => {
+  const failed = (r) => itemRow(item({ passed: false, canvasActionOutputAssertionResult: [{ type: 'send-text-message', passed: false, assertionDetailedInfo: '发送 - 文本', expectedValue: '要提到退款', actualValue: '你好', ...r }] })).verdict;
+  assert.equal(failed({ llmReason: '回复没有提到退款', message: '' }), '发送 - 文本：回复没有提到退款');
+  assert.equal(failed({ message: '相似度不够' }), '发送 - 文本：相似度不够');
+  assert.equal(failed({}), '发送 - 文本：期望「要提到退款」实际「你好」');
+});

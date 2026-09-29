@@ -175,6 +175,7 @@ export async function startTestCenterServer({ itemCost = 0.02, perPoll = Infinit
       bump(state.tree);
       return ok({ attachedCount, scenarioPath: '' });
     },
+    'GET /api/test-center/scenario/cases': ({ query }) => page(state.cases.filter((c) => c.scenarioNodeId === query.scenarioNodeId), query),
     'GET /api/test-center/scenario/tree': () => (state.tree === null
       ? { status: 404, body: { statusCode: 404, message: 'Cannot GET /api/test-center/scenario/tree' } }
       : ok({ tree: state.tree, unclassifiedCount: 0, classifiedCount: 0 })),
@@ -184,13 +185,16 @@ export async function startTestCenterServer({ itemCost = 0.02, perPoll = Infinit
       if (typeof body.testSetId !== 'string' || typeof body.canvasId !== 'string' || typeof body.name !== 'string' || typeof body.testRound !== 'number') {
         return bad('testSetId must be a string；canvasId must be a string；name must be a string；testRound must be a number conforming to the specified constraints');
       }
-      const cases = state.cases.filter((c) => c.testSetId === body.testSetId);
+      const inSet = state.cases.filter((c) => c.testSetId === body.testSetId);
+      // 勾选了几条就只跑这几条（前端「执行用例」传 selectedTestCaseIds）；totalTestCaseCount 仍给整个集的条数——真实服务端给哪个没实测，md 不能靠它
+      const picked = Array.isArray(body.selectedTestCaseIds) && body.selectedTestCaseIds.length ? inSet.filter((c) => body.selectedTestCaseIds.includes(c.testCaseId)) : inSet;
+      const cases = picked;
       const testTaskId = id('7', ++state.n);
       const busy = state.tasks.some((x) => x.botId === query.botId && x.status === 'processing');
       state.tasks.push({
         testTaskId, botId: query.botId, testSetId: body.testSetId, name: body.name, canvasId: body.canvasId,
         canvasVersion: body.canvasId.startsWith('ver-') ? 'v1.0.215' : 'v1.0.216', repeatTimes: body.testRound, concurrency: body.concurrency ?? 1,
-        status: busy ? 'pending' : 'processing', totalTestCaseCount: cases.length, processedTestCaseCount: 0, passedTestCaseCount: 0,
+        status: busy ? 'pending' : 'processing', totalTestCaseCount: inSet.length, processedTestCaseCount: 0, passedTestCaseCount: 0,
         totalCostInCny: null, averageCostInCny: null, selectedTestCaseIds: cases.map((c) => c.testCaseId), createdAt: `2026-09-25T02:${String(state.n % 60).padStart(2, '0')}:00.000Z`,
       });
       state.items.set(testTaskId, cases.flatMap((c) => Array.from({ length: body.testRound }, () => ({
@@ -208,6 +212,13 @@ export async function startTestCenterServer({ itemCost = 0.02, perPoll = Infinit
       return ok(task ?? null);
     },
     'GET /api/test-center/test-task-item/list': ({ query }) => page(state.items.get(query.testTaskId) ?? [], query),
+    'POST /api/test-center/test-task/resume': ({ body }) => {
+      record('resume', body);
+      const task = state.tasks.find((x) => x.testTaskId === body.testTaskId);
+      if (!task || task.status !== 'paused') return bad('task is not paused');
+      task.status = 'processing';
+      return ok(null);
+    },
     'POST /api/test-center/test-task/pause': ({ body }) => {
       record('pause', body);
       const task = state.tasks.find((x) => x.testTaskId === body.testTaskId);
