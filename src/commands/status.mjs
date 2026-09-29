@@ -10,18 +10,40 @@ import { formatTime, out, shortId } from '../output.mjs';
 
 const matchesBot = (item, query) => !query || item.botName.toLowerCase().includes(query.toLowerCase()) || item.botId.startsWith(query);
 
+// 最近一次是回滚：回滚改回的节点（回滚前的草稿和回滚到的那份不一样的）还是回滚到的样子、回滚去掉的节点没再出现，就是正常
+function restoreCheck(entry, live) {
+  const restored = readJson(entry.backup, null)?.rawCanvas;
+  const before = readJson(entry.safety, null)?.rawCanvas;
+  if (!restored || !before) return `  ${entry.regionLabel} / ${entry.botName}：回滚的快照不见了（${!restored ? entry.backup : entry.safety}）`;
+  const expected = nodeMap(restored);
+  const prev = nodeMap(before);
+  const current = nodeMap(live.rawCanvas);
+  const touched = [...expected.keys()].filter((id) => !prev.has(id) || contentKey(prev.get(id)) !== contentKey(expected.get(id)));
+  const lost = touched.filter((id) => !current.has(id) || contentKey(current.get(id)) !== contentKey(expected.get(id)));
+  const revived = [...prev.keys()].filter((id) => !expected.has(id) && current.has(id));
+  if (lost.length || revived.length) {
+    return `  ⚠️ ${entry.regionLabel} / ${entry.botName}：${formatTime(entry.at)} 的回滚有 ${lost.length} 个节点又被改了、${revived.length} 个去掉的节点又回来了（多半是没刷新的编辑页自动保存）：${[...lost, ...revived].slice(0, 10).map(shortId).join('、')}`;
+  }
+  return `  ✅ ${entry.regionLabel} / ${entry.botName}：${formatTime(entry.at)} 回滚改回的 ${touched.length} 个节点都还在`;
+}
+
 async function remoteCheck(query) {
+  // 每个智能体看最近一次推送或回滚：回滚之后还拿之前的推送去比，会把回滚当成「推送被覆盖」
   const latest = new Map();
-  for (const entry of readLedger()) if (entry.kind === 'push' && matchesBot(entry, query)) latest.set(entry.botId, entry);
+  for (const entry of readLedger()) if ((entry.kind === 'push' || entry.kind === 'restore') && matchesBot(entry, query)) latest.set(entry.botId, entry);
   out('');
   if (latest.size === 0) {
     out('（账本里没有推送记录，无从核对）');
     return;
   }
-  out('核对最近一次推送是否还在草稿里：');
+  out('核对最近一次推送（或回滚）是否还在草稿里：');
   for (const entry of latest.values()) {
     const target = targetFromMeta(entry);
     const live = await getCanvas(target.identity, entry.orgId, entry.botId);
+    if (entry.kind === 'restore') {
+      out(restoreCheck(entry, live));
+      continue;
+    }
     const pushed = readJson(entry.pushed, null);
     if (!pushed) {
       out(`  ${entry.regionLabel} / ${entry.botName}：推送快照不见了（${entry.pushed}）`);
@@ -74,7 +96,7 @@ export const log = {
     }
     for (const e of entries) {
       const counts = e.kind === 'push' ? ` · 改 ${e.changed.length} 增 ${e.added.length} 删 ${e.removed.length} · 连线 +${e.edgesAdded} -${e.edgesRemoved}` : '';
-      out(`${formatTime(e.at)} ${e.kind === 'restore' ? '回滚' : '推送'} ${e.regionLabel} / ${e.botName} (${shortId(e.botId)})${counts}${e.problems?.length ? ' · ⚠️ 回读不一致' : ''}`);
+      out(`${formatTime(e.at)} ${e.kind === 'restore' ? '回滚' : '推送'} ${e.regionLabel} / ${e.botName} (${shortId(e.botId)})${counts}${e.readbackFailed ? ' · ⚠️ 回读失败' : e.problems?.length ? ' · ⚠️ 回读不一致' : ''}`);
       if (e.kind !== 'push') continue;
       const rows = [...e.changed.map((c) => ['~', c]), ...e.added.map((c) => ['+', c]), ...e.removed.map((c) => ['-', c])];
       for (const [mark, c] of rows.slice(0, 30)) out(`    ${mark} ${c.name} [${shortId(c.id)}]`);

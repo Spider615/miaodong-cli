@@ -46,7 +46,7 @@ description: 用 md 命令读写句子秒懂（JZ Insight，控制台域名形�
 6. `md push` 预演，把「你的改动」清单和计划码交给用户。
 7. **用户明确同意这次推送后**，再运行 `md push --ws … --confirm <计划码>`。
 8. 推送后用 `md trial <节点> --bot <智能体> --from-exec <执行id>` 复验，对照输出里的 prompt 文件确认跑的是新版。
-9. 按下面的格式回执。需要时用 `md status --remote` 核对推送是否被旧编辑页覆盖。
+9. 按下面的格式回执。需要时用 `md status --remote` 核对推送（或回滚）是否被旧编辑页覆盖。
 
 ## 知识库
 

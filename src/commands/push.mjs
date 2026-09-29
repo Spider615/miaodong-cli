@@ -174,23 +174,32 @@ export const push = {
     const backup = join(ensureDir(join(ws.dir, 'backups')), `${at}-draft.json`);
     writeJson(backup, { canvasId: live.canvasId, updatedAt: live.updatedAt, rawCanvas: live.rawCanvas });
     await saveCanvas(identity, orgId, live.canvasId, toSave);
-    const readback = await getCanvas(identity, orgId, botId);
-    const { problems, notes } = verifyReadback(toSave, readback, live.canvasId, ours);
 
+    // 保存成功就先留推送快照、准备账本，再回读：回读失败（网络）时这次推送也要记进账本，md log、md status --remote、md restore 才知道推了什么
     const historyDir = ensureDir(join(ws.dir, 'history', at));
     const pushed = join(historyDir, 'pushed.json');
     writeJson(pushed, { canvas: toSave });
     if (existsSync(join(ws.dir, 'transforms'))) renameSync(join(ws.dir, 'transforms'), join(historyDir, 'transforms'));
     const pick = (item) => ({ id: item.id, name: item.name ?? item.data?.name ?? '' });
-    appendLedger({
+    const entry = {
       at: pushedAt, kind: 'push',
       identityKey: target.identityKey, regionLabel: target.regionLabel, origin: identity.origin,
       orgId, orgName: target.orgName, botId, botName: target.botName,
       ws: ws.dir, mode, source: ws.meta.source,
       changed: ours.changed.map(pick), added: ours.added.map(pick), removed: ours.removed.map(pick),
       edgesAdded: ours.edgesAdded.length, edgesRemoved: ours.edgesRemoved.length,
-      backup, pushed, readbackUpdatedAt: readback.updatedAt, problems,
-    });
+      backup, pushed,
+    };
+    let readback;
+    try {
+      readback = await getCanvas(identity, orgId, botId);
+    } catch (error) {
+      appendLedger({ ...entry, readbackUpdatedAt: null, readbackFailed: true, problems: [`保存成功，回读失败：${error?.message ?? error}`] });
+      saveMeta(ws.dir, { ...ws.meta, lastPush: { at: pushedAt, backup, pushed } });
+      throw blocked(`已经保存到草稿，但回读失败：${error?.message ?? error}`, `这次推送已记进 md log。先 md status --remote 复查草稿是不是这次推的，不要直接重推；要撤回：md restore --ws ${ws.dir}`);
+    }
+    const { problems, notes } = verifyReadback(toSave, readback, live.canvasId, ours);
+    appendLedger({ ...entry, readbackUpdatedAt: readback.updatedAt, problems });
     // 推送后工作副本跟着草稿走：以回读结果为新基线，已推的改动脚本移进 history
     const newBase = { canvas: readback.rawCanvas, sessions: ws.base.sessions, events: ws.base.events };
     writeJson(join(ws.dir, 'base.json'), newBase);

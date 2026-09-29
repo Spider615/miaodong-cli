@@ -114,12 +114,13 @@ function brief(value) {
 }
 
 function edgeLabel(key, names) {
-  const [from, to] = key.split('->');
+  const [plain, nth] = key.split('@');
+  const [from, to] = plain.split('->');
   const nodeLabel = (part) => {
     const id = part.split('#')[0];
     return `${names.get(id) ?? '?'} [${shortId(id)}]`;
   };
-  return `${nodeLabel(from)} → ${nodeLabel(to)}`;
+  return `${nodeLabel(from)} → ${nodeLabel(to)}${nth ? `（两端一样的第 ${nth} 条）` : ''}`;
 }
 
 export function renderDiff(d, { names = new Map(), limit = 400 } = {}) {

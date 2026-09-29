@@ -46,6 +46,24 @@ test('md versions：版本表标出线上启用与灰度，用主画布 id 查�
   assert.equal(server.requests.find((q) => q.path === '/api/canvas/list-version').query.canvasId, 'main-1');
 });
 
+test('md versions：创建人是自己显示「我（名字）」，别人的只有 id（没有成员列表接口）显示「其他成员 id 前 8 位」，本来就是名字的照原样', async () => {
+  const original = server.routes['GET /api/canvas/list-version'];
+  server.routes['GET /api/canvas/list-version'] = () => ok([
+    { ...VERSIONS[0], createdBy: 'u1' },
+    { ...VERSIONS[1], createdBy: '8f3a2b1c-0000-4000-8000-000000000000' },
+    { ...VERSIONS[1], canvasId: 'ver-400', version: 'v1.0.400', createdBy: '胡同学' },
+  ], { page: { total: 3 } });
+  try {
+    const r = await runCli(['versions', '--bot', '太极2.0重构'], { home: homeWithIdentity() });
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout, /v1\.0\.402 .* 我（测试用户）$/m);
+    assert.match(r.stdout, /v1\.0\.401 .* 其他成员 8f3a2b1c$/m);
+    assert.match(r.stdout, /v1\.0\.400 .* 胡同学$/m);
+  } finally {
+    server.routes['GET /api/canvas/list-version'] = original;
+  }
+});
+
 test('basic-info 不支持时说明取不到，不报错', async () => {
   server.routes['GET /api/bot/basic-info'] = () => ({ status: 404, body: { message: 'Cannot GET', statusCode: 404 } });
   const r = await runCli(['versions', '--bot', '太极2.0重构'], { home: homeWithIdentity() });

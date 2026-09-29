@@ -66,3 +66,16 @@ test('只有别人改了：merged 与 theirs 一致 → noop', () => {
   const theirs = patch(sampleCanvas(), U(6), prompt('别人的'));
   assert.equal(mergeCanvas(sampleCanvas(), sampleCanvas(), theirs).noop, true);
 });
+
+test('两端和端口都一样的重复连线：草稿里有两条，合并后还是两条，不会被悄悄并成一条', () => {
+  const withDup = [...sampleCanvas(), edge(105, 1, 2)];
+  const count = (canvas) => canvas.filter((c) => c.source?.cell === U(1) && c.target?.cell === U(2)).length;
+  const m = mergeCanvas(withDup, patch(withDup, U(2), prompt('我的')), withDup);
+  assert.deepEqual(m.conflicts, []);
+  assert.equal(count(m.canvas), 2);
+  const theirsAdded = mergeCanvas(sampleCanvas(), patch(sampleCanvas(), U(2), prompt('我的')), withDup);
+  assert.equal(count(theirsAdded.canvas), 2, '别人加的重复连线也要留着');
+  const oursRemoved = mergeCanvas(withDup, withDup.filter((c) => c.id !== U(105)), withDup);
+  assert.equal(count(oursRemoved.canvas), 1, '我删掉其中一条就剩一条');
+});
+

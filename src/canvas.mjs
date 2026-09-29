@@ -35,8 +35,20 @@ export function nodeMap(canvas) {
   return new Map(canvas.filter((c) => isElement(c) && !isEdgeCell(c) && typeof c.id === 'string').map((c) => [c.id, c]));
 }
 
+// 连线按「源#端口→目标#端口」认（秒懂保存时连线 id 不稳）。两端和端口都一样的重复连线按在画布里的先后编号，
+// 第二条起加 @2、@3…：只按两端建表时后一条会盖掉前一条，合并、比较时重复的连线被悄悄并成一条（合并后推送就少了一条）
+export function keyedEdges(canvas) {
+  const seen = new Map();
+  return canvas.filter((c) => isElement(c) && isEdgeCell(c)).map((e) => {
+    const key = edgeKey(e);
+    const n = (seen.get(key) ?? 0) + 1;
+    seen.set(key, n);
+    return [n === 1 ? key : `${key}@${n}`, e];
+  });
+}
+
 export function edgeMap(canvas) {
-  return new Map(canvas.filter((c) => isElement(c) && isEdgeCell(c)).map((e) => [edgeKey(e), e]));
+  return new Map(keyedEdges(canvas));
 }
 
 export function compareNodes(aCanvas, bCanvas) {

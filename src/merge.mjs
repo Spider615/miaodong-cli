@@ -3,11 +3,11 @@
 // 这里一条路径同时覆盖内容与结构。规则：
 //   节点按 id：只有我改 → 用我的内容（位置 / 尺寸沿用草稿）；只有别人改 → 用别人的；
 //              双方都改且结果不同 → 冲突；删除与修改撞上 → 冲突。
-//   连线按「源#端口→目标#端口」：结果 = 草稿的连线 − 我删的 + 我加的。
+//   连线按「源#端口→目标#端口」（重复的按先后编号，见 canvas.mjs 的 keyedEdges）：结果 = 草稿的连线 − 我删的 + 我加的。
 //   合并后有连线端点不存在 → 冲突（例如我连到的节点被别人删了）。
 // 输出顺序以草稿为骨架，我新增的元素追加在后面，尽量不打乱编辑器里的层级。
 
-import { LAYOUT_KEYS, contentKey, edgeKey, edgeMap, isEdgeCell, nodeMap, stableStringify } from './canvas.mjs';
+import { LAYOUT_KEYS, contentKey, edgeKey, edgeMap, isEdgeCell, keyedEdges, nodeMap, stableStringify } from './canvas.mjs';
 import { nodeName } from './graph.mjs';
 
 function withLayoutFrom(ours, theirs) {
@@ -68,10 +68,12 @@ export function mergeCanvas(baseCanvas, oursCanvas, theirsCanvas) {
   const merged = [];
   const emittedNodes = new Set();
   const emittedEdges = new Set();
-  const emit = (cell) => {
+  // 每张画布按它自己的先后给重复连线编号：同一个连线对象可能同时在两张画布里、编号不同
+  const keysIn = (canvas) => new Map(keyedEdges(canvas).map(([key, edge]) => [edge, key]));
+  const emit = (keys) => (cell) => {
     if (!cell || typeof cell !== 'object') return;
     if (isEdgeCell(cell)) {
-      const key = edgeKey(cell);
+      const key = keys.get(cell);
       if (keptEdges.has(key) && !emittedEdges.has(key)) {
         merged.push(keptEdges.get(key));
         emittedEdges.add(key);
@@ -85,8 +87,8 @@ export function mergeCanvas(baseCanvas, oursCanvas, theirsCanvas) {
       emittedNodes.add(cell.id);
     }
   };
-  theirsCanvas.forEach(emit);
-  oursCanvas.forEach(emit);
+  theirsCanvas.forEach(emit(keysIn(theirsCanvas)));
+  oursCanvas.forEach(emit(keysIn(oursCanvas)));
 
   const ids = new Set(merged.filter((c) => !isEdgeCell(c)).map((c) => c.id));
   for (const edge of merged.filter((c) => isEdgeCell(c))) {

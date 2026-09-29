@@ -55,14 +55,22 @@ export const restore = {
     const safety = join(ensureDir(join(ws.dir, 'backups')), `${stamp()}-before-restore.json`);
     writeJson(safety, { canvasId: live.canvasId, updatedAt: live.updatedAt, rawCanvas: live.rawCanvas });
     await saveCanvas(identity, orgId, live.canvasId, backup.rawCanvas);
-    const readback = await getCanvas(identity, orgId, botId);
-    const { problems } = verifyReadback(backup.rawCanvas, readback, live.canvasId);
-    appendLedger({
+    // 保存成功后回读失败（网络）也要记进账本：md log、md status --remote 才知道回滚过
+    const entry = {
       at: new Date().toISOString(), kind: 'restore',
       identityKey: target.identityKey, regionLabel: target.regionLabel, origin: identity.origin,
       orgId, orgName: target.orgName, botId, botName: target.botName,
-      ws: ws.dir, backup: backupFile, safety, problems,
-    });
+      ws: ws.dir, backup: backupFile, safety,
+    };
+    let readback;
+    try {
+      readback = await getCanvas(identity, orgId, botId);
+    } catch (error) {
+      appendLedger({ ...entry, readbackFailed: true, problems: [`保存成功，回读失败：${error?.message ?? error}`] });
+      throw blocked(`已经保存到草稿，但回读失败：${error?.message ?? error}`, `这次回滚已记进 md log。先 md status --remote 复查；回滚前的草稿另存在 ${safety}`);
+    }
+    const { problems } = verifyReadback(backup.rawCanvas, readback, live.canvasId);
+    appendLedger({ ...entry, problems });
     const newBase = { canvas: readback.rawCanvas, sessions: ws.base.sessions, events: ws.base.events };
     writeJson(join(ws.dir, 'base.json'), newBase);
     writeIndex(ws.dir, ws.after ?? newBase);

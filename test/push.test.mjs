@@ -191,3 +191,33 @@ test('我改的字段没写进去：照样报回读不一致', async () => {
   assert.equal(r.code, 5);
   assert.match(r.stdout, /1 个你改的节点内容和推送的不一样/);
 });
+
+test('保存成功、回读失败（网络）：照样记进账本、留下推送快照，md log 看得到；报错说清已经保存了、别直接重推', async () => {
+  bot.reset();
+  const { home } = await bot.pulled();
+  await bot.apply(home, PROMPT_FIX);
+  const code = planCodeOf((await runCli(['push'], { home })).stdout);
+  const original = bot.server.routes['GET /api/canvas/get'];
+  let gets = 0;
+  bot.server.routes['GET /api/canvas/get'] = (req) => (++gets >= 2 ? { status: 500, body: { message: 'boom' } } : original(req));
+  let r;
+  try {
+    r = await runCli(['push', '--confirm', code], { home });
+  } finally {
+    bot.server.routes['GET /api/canvas/get'] = original;
+  }
+  assert.equal(r.code, 5, r.stderr);
+  assert.equal(bot.state.saves, 1);
+  assert.match(r.stderr, /已经保存到草稿，但回读失败/);
+  assert.match(r.stderr, /md status --remote/);
+  const ledger = readFileSync(join(home, 'md', 'ledger.jsonl'), 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
+  assert.equal(ledger.at(-1).kind, 'push');
+  assert.deepEqual(ledger.at(-1).changed.map((c) => c.id), [U(2)]);
+  assert.match(ledger.at(-1).problems.join(), /回读失败/);
+  assert.ok(existsSync(ledger.at(-1).pushed));
+  const log = await runCli(['log'], { home });
+  assert.match(log.stdout, /推送 .*⚠️ 回读失败/);
+  const remote = await runCli(['status', '--remote'], { home });
+  assert.match(remote.stdout, /✅ .*推送的 1 个节点都还在/);
+});
+

@@ -75,3 +75,20 @@ test('null 改成对象只是警告，不拦推送', () => {
   assert.ok(!r.errors.some((e) => /类型从/.test(e)), r.errors.join('\n'));
   assert.ok(r.warnings.some((w) => /类型从 null 变成了 object/.test(w)), r.warnings.join('\n'));
 });
+
+test('结构校验逐个节点报：两个节点都改坏了两个都报，不是只报第一个', () => {
+  const after = patchNode(patchNode(sampleCanvas(), U(2), (c) => { delete c.view; return c; }), U(6), (c) => { delete c.size; return c; });
+  const r = runCheck(env(sampleCanvas()), env(after));
+  assert.ok(r.errors.some((e) => /节点 00000002-.* 缺少 view/.test(e)), r.errors.join('\n'));
+  assert.ok(r.errors.some((e) => /节点 00000006-.* 缺少 view/.test(e)), r.errors.join('\n'));
+});
+
+test('改动范围里原本就有的问题不会盖住这次新引入的：触发器原本缺 nodePayload，同时把另一个节点改坏了，照样报错', () => {
+  const base = patchNode(sampleCanvas(), U(1), (c) => { delete c.data.nodePayload; return c; });
+  const after = patchNode(patchNode(base, U(1), (c) => { c.data.name = '收到文本（改名）'; return c; }), U(6), (c) => { delete c.size; return c; });
+  const r = runCheck(env(base), env(after));
+  assert.ok(r.errors.some((e) => /节点 00000006-/.test(e)), r.errors.join('\n'));
+  assert.ok(!r.errors.some((e) => /节点 00000001-/.test(e)), r.errors.join('\n'));
+  assert.ok(r.notes.some((n) => /原本就有.*00000001-/.test(n)), r.notes.join('\n'));
+});
+
