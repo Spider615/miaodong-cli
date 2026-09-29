@@ -4,7 +4,7 @@ import { boolArg, intArg, strArg } from '../args.mjs';
 import { EXIT, MdError } from '../errors.mjs';
 import { formatTime, note, out, shortId, targetLine } from '../output.mjs';
 import { formatCost } from '../execs.mjs';
-import { getCanvas, listEvents, listSessions, listVersions } from '../api.mjs';
+import { asArray, getCanvas, listEvents, listSessions, listVersions } from '../api.mjs';
 import { resolveVersion } from '../target.mjs';
 import { hashOf } from '../canvas.mjs';
 import { dayKey, loadLimits, readSpends, recordSpend, spendDecision, spentOn, updateSpend, withSpendLock } from '../spend.mjs';
@@ -21,15 +21,35 @@ const nowLabel = () => {
   return `${pad2(d.getMonth() + 1)}${pad2(d.getDate())}-${pad2(d.getHours())}${pad2(d.getMinutes())}`;
 };
 
+// 断言判定费（09-29 实测）：秒懂任务总额比逐条花费（test-task-item.costInCny）多出断言判定的钱——177 条、1052 条动作断言，
+// 总额 ¥68.96、逐条合计 ¥56.92，多 ¥12.04，约每条断言 ¥0.0114。逐条花费里没有这笔：只按逐条算，止损推算、「已完成的」
+// 和下次的估价都偏低约两成。跑的过程中按「已判的断言数 × 每条断言的判定费」补上；任务跑完用总额反推出实际的判定费记进账本
+export const JUDGE_FEE_PER_ASSERTION = 0.012;
+const assertionResults = (item) => asArray(item?.canvasActionOutputAssertionResult).length + asArray(item?.testNodeOutputAssertionResult).length;
+const caseAssertions = (c) => asArray(c?.canvasActionOutputAssertions).length + asArray(c?.testNodeOutputAssertions).length;
+
+// 每条断言的判定费：先用这个集上次跑完反推出来的，再用这个智能体的，都没有就按 09-29 的实测值
+function judgeFee(t, testSetId) {
+  const rows = readSpends().filter((r) => r.kind === 'test' && r.botId === t.botId && typeof r.judgePerAssertion === 'number' && r.judgePerAssertion >= 0);
+  const hit = rows.filter((r) => r.testSetId === testSetId).at(-1) ?? rows.at(-1);
+  return hit ? hit.judgePerAssertion : JUDGE_FEE_PER_ASSERTION;
+}
+
 // 每条每轮的单价（spec §6.5，审查 C1）。取下面两项里大的：
 // - 账本里这个集最近观察到的单价：md 看进度时记下的（包括被止损暂停的任务），之后换了模型也会被它纠正；
 // - 这个集上次跑完的任务：总花费 ÷ 真正执行了的条数（averageCostInCny 把空跑也算进分母，空跑多就被稀释，spec §2.3）。
 // 两项都没有才看导入来源里源执行的平均花费；都没有就估不出。单价是 0 也当估不出：多半是那次全空跑
 // （spec §1 那次「100 条 8.9 秒跑完、花费 ¥0」），拿它估价会让下一批不经确认就跑；真正免费的集每次多问一句
-async function unitCost(t, set) {
+// 只含执行花费的来源（旧账本里的单价、导入来源的执行花费）要补上断言判定费：按这个集每条用例的断言数算
+async function unitCost(t, set, cases) {
   const candidates = [];
+  const judging = cases.length ? (cases.reduce((n, c) => n + caseAssertions(c), 0) / cases.length) * judgeFee(t, set.testSetId) : 0;
   const seen = readSpends().filter((r) => r.kind === 'test' && r.botId === t.botId && r.testSetId === set.testSetId && typeof r.actualPerRun === 'number' && r.actualPerRun > 0).at(-1);
-  if (seen) candidates.push({ unit: seen.actualPerRun, basis: `上次盯着跑时观察到每条 ${formatCost(seen.actualPerRun)}` });
+  if (seen) {
+    // allIn：09-29 起记下的单价已经含判定费；之前的只有逐条花费
+    const unit = seen.allIn ? seen.actualPerRun : seen.actualPerRun + judging;
+    candidates.push({ unit, basis: `上次盯着跑时观察到每条 ${formatCost(unit)}${seen.allIn ? '' : '（加上断言判定）'}` });
+  }
   const last = (await recentTasks(t, { testSetId: set.testSetId, limit: 20 })).find((x) => x.status === 'finished');
   if (last && typeof last.totalCostInCny === 'number' && last.totalCostInCny > 0) {
     const executed = (await taskItems(t, last.testTaskId)).filter((i) => typeof i.costInCny === 'number' && !isNoop(i)).length;
@@ -41,8 +61,8 @@ async function unitCost(t, set) {
   if (candidates.length) return candidates.reduce((a, b) => (b.unit > a.unit ? b : a));
   const costs = Object.values(readSources(t, set.testSetId).execs).map((x) => x?.cost).filter((c) => typeof c === 'number' && c > 0);
   if (costs.length) {
-    const unit = costs.reduce((a, b) => a + b, 0) / costs.length;
-    return { unit, basis: `导入来源的 ${costs.length} 条执行平均 ${formatCost(unit)}` };
+    const avg = costs.reduce((a, b) => a + b, 0) / costs.length;
+    return { unit: avg + judging, basis: `导入来源的 ${costs.length} 条执行平均 ${formatCost(avg)}，加上断言判定约 ${formatCost(judging)}/条` };
   }
   return { unit: null, basis: '' };
 }
@@ -72,7 +92,7 @@ export async function run(args) {
   const [events, vars, recent] = await Promise.all([listEvents(t.identity, t.orgId, t.botId), listSessions(t.identity, t.orgId, t.botId), recentTasks(t, { limit: 20 })]);
   const pre = preflight(cases, { canvas, events, vars });
   const busy = recent.filter((x) => QUEUED.has(String(x.status)));
-  const { unit, basis } = await unitCost(t, set);
+  const { unit, basis } = await unitCost(t, set, cases);
   const runsCount = cases.length * rounds;
   const estimate = unit === null ? null : unit * runsCount;
 
@@ -163,24 +183,31 @@ export async function resolveTask(t, query) {
   throw new MdError('task_not_found', `${t.botName} 最近的任务里没有「${q}」`, { exitCode: EXIT.TARGET, hint: `md test status --bot ${shortId(t.botId)} 看最近的任务` });
 }
 
-// 进度：跑完的条目数、通过、空跑（spec §2.3：没有执行、花费为空）、正在跑的、已完成条目的花费和平均（空跑不进平均）
-function progressOf(detail, items) {
+// 进度：跑完的条目数、通过、空跑（spec §2.3：没有执行、花费为空）、正在跑的、已完成条目的花费和平均（空跑不进平均）。
+// 花费含断言判定费：逐条花费里没有这笔，按已判的断言数 × 每条断言的判定费补上（09-29 实测）
+function progressOf(detail, items, fee = JUDGE_FEE_PER_ASSERTION) {
   const done = items.filter((i) => i?.status && !['pending', 'processing'].includes(i.status));
   const costs = done.map((i) => i.costInCny).filter((c) => typeof c === 'number');
-  const spent = costs.reduce((a, b) => a + b, 0);
+  const execSpent = costs.reduce((a, b) => a + b, 0);
+  const judged = done.reduce((n, i) => n + assertionResults(i), 0);
+  const judging = judged * fee;
   return {
     total: Math.max(items.length, (Number(detail?.totalTestCaseCount) || 0) * (Number(detail?.repeatTimes) || 1)),
     done: done.length,
     inflight: items.filter((i) => i?.status === 'processing').length,
     passed: done.filter((i) => i.passed === true).length,
     noop: done.filter((i) => i.canvasExecAvailable === false && (i.costInCny === null || i.costInCny === undefined)).length,
-    spent,
-    unit: costs.length ? spent / costs.length : null,
+    costed: costs.length,
+    execSpent,
+    judged,
+    judging,
+    spent: execSpent + judging,
+    unit: costs.length ? execSpent / costs.length + (done.length ? judging / done.length : 0) : null,
   };
 }
 
 function statusLine(detail, p) {
-  const cost = typeof detail?.totalCostInCny === 'number' ? formatCost(detail.totalCostInCny) : `已完成的 ${formatCost(p.spent)}`;
+  const cost = typeof detail?.totalCostInCny === 'number' ? formatCost(detail.totalCostInCny) : `已完成的 ${formatCost(p.spent)}${p.judging ? `（含断言判定约 ${formatCost(p.judging)}）` : ''}`;
   return `${detail?.name ?? ''} ${detail?.status} · ${p.done}/${p.total} · 通过 ${p.passed}${p.noop ? ` · 空跑 ${p.noop}` : ''} · ${cost}`;
 }
 
@@ -190,7 +217,7 @@ function statusLine(detail, p) {
 function stopLoss(t, rec, detail, p) {
   if (!rec || TERMINAL.has(String(detail?.status)) || p.unit === null) return null;
   const projected = p.spent + (p.total - p.done) * p.unit;
-  const head = `按已跑完的 ${p.done} 条平均 ${formatCost(p.unit)} 推算，整个任务要 ${formatCost(projected)}`;
+  const head = `按已跑完的 ${p.done} 条平均 ${formatCost(p.unit)} 推算${p.judging ? '（含断言判定）' : ''}，整个任务要 ${formatCost(projected)}`;
   if (projected > rec.allowance) return `${head}，超过额度 ${formatCost(rec.allowance)}`;
   if (!rec.confirmed) {
     const limits = loadLimits();
@@ -210,16 +237,20 @@ function observe(t, detail, p) {
   const unit = p.unit ?? rec.unit ?? UNKNOWN_CASE_COST;
   const status = String(detail?.status);
   if (TERMINAL.has(status)) {
-    const actual = status === 'finished' && typeof detail.totalCostInCny === 'number' ? detail.totalCostInCny : p.spent + p.inflight * unit;
+    const total = status === 'finished' && typeof detail.totalCostInCny === 'number' ? detail.totalCostInCny : null;
+    const actual = total ?? p.spent + p.inflight * unit;
     if (rec.settled?.status === status && rec.settled?.actual === actual) return;
-    updateSpend(rec.spendId, { actual, runs: p.done, ...(p.unit !== null ? { actualPerRun: p.unit } : {}) });
+    // 跑完了：总额里含断言判定费，用它反推每条断言的判定费（下次看进度按它补），单价也按总额 ÷ 真正执行的条数记（和估价的算法一样）
+    const learned = total !== null && p.judged > 0 ? { judgePerAssertion: Math.max(0, total - p.execSpent) / p.judged } : {};
+    const perRun = total !== null && p.costed ? total / p.costed : p.unit;
+    updateSpend(rec.spendId, { actual, runs: p.done, allIn: true, ...(perRun !== null ? { actualPerRun: perRun } : {}), ...learned });
     writeTaskRecord(t, { ...rec, settled: { status, actual } });
     return;
   }
   const projected = p.spent + (p.total - p.done) * unit;
   const reserve = Math.max(rec.lastReserve ?? rec.reserve ?? 0, projected);
   if (reserve === rec.lastReserve && p.unit === rec.lastUnit) return;
-  updateSpend(rec.spendId, { reserve, ...(p.unit !== null ? { actualPerRun: p.unit } : {}) });
+  updateSpend(rec.spendId, { reserve, allIn: true, ...(p.unit !== null ? { actualPerRun: p.unit } : {}) });
   writeTaskRecord(t, { ...rec, lastReserve: reserve, lastUnit: p.unit });
 }
 
@@ -249,7 +280,7 @@ export async function status(args) {
   let p;
   const refresh = async () => {
     detail = await taskDetail(t, task.testTaskId);
-    p = progressOf(detail, await taskItems(t, task.testTaskId));
+    p = progressOf(detail, await taskItems(t, task.testTaskId), judgeFee(t, detail?.testSetId));
     observe(t, detail, p);
   };
   await refresh();
@@ -298,7 +329,7 @@ export async function stop(args) {
   await pauseTask(t, task.testTaskId);
   // 暂停了也是停下来：账本按已跑完的条目记实际（同 status 的 observe，审查 C1）
   const detail = await taskDetail(t, task.testTaskId);
-  const p = progressOf(detail, await taskItems(t, task.testTaskId));
+  const p = progressOf(detail, await taskItems(t, task.testTaskId), judgeFee(t, detail?.testSetId));
   observe(t, detail, p);
   out(`已暂停任务 ${detail?.name ?? task.name}（${shortId(task.testTaskId)}）：${detail?.status}。秒懂没有取消，只能暂停；账本按已跑完的条目记实际花费（正在跑的按单价算进去）`);
   out(statusLine(detail, p));

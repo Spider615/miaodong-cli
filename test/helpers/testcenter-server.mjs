@@ -7,6 +7,7 @@
 //   dropFields —— create 时把这些字段存成空对象或空数组（模拟关键字段被服务端丢掉）
 //   failCreateAt —— 第 N 次 create 起返回 502；treeDrift —— 每次挂场景额外给节点计数加几（模拟旧批次重复挂载）
 //   renameCreated —— create 时给 name 加的后缀（模拟服务端改写 name，按 name 找不到）
+//   assertions —— 每条跑完的条目带几条断言结果（默认 1）；judgeFee —— 任务跑完时总额另加的断言判定费（默认 0；逐条花费里没有它，09-29 实测）
 // 事件在目标智能体里不存在的用例会「空跑」：status success、passed false、没有执行、花费为空（spec §2.3 核对 6）
 import { ok, startFakeMiaodong } from './fake-miaodong.mjs';
 import { SOURCE_BOT, TARGET_BOT, botEvents, botVars, importable, targetCanvas } from './testcenter-fixtures.mjs';
@@ -26,7 +27,7 @@ const syncParams = (c) => {
 };
 
 export async function startTestCenterServer({ itemCost = 0.02, perPoll = Infinity, tree = [] } = {}) {
-  const state = { sets: [], cases: [], tasks: [], items: new Map(), posts: {}, log: [], canvas: null, itemCost, perPoll, tree, n: 0 };
+  const state = { sets: [], cases: [], tasks: [], items: new Map(), posts: {}, log: [], canvas: null, itemCost, perPoll, tree, assertions: 1, judgeFee: 0, n: 0 };
   // pageCap：服务端把每页封顶在多少条（比请求的 pageSize 小时，只能靠 page.total 判断读没读完）
   const page = (rows, query) => {
     const size = Math.min(Number(query.pageSize) || 20, state.pageCap ?? Infinity);
@@ -52,7 +53,7 @@ export async function startTestCenterServer({ itemCost = 0.02, perPoll = Infinit
         canvasExecAvailable: true,
         canvasExecId: id('d', ++state.n),
         executedActions: [{ type: 'send-text-message', nodeId: 'n-send', nodeName: '发送', summary: `回复：${c?.triggerInputs?.data?.text ?? ''}` }],
-        canvasActionOutputAssertionResult: [{ type: 'send-text-message', passed: true, assertionDetailedInfo: '发送 - 文本', expectedValue: '已为您登记', actualValue: '已为您登记退款' }],
+        canvasActionOutputAssertionResult: Array.from({ length: state.assertions ?? 1 }, () => ({ type: 'send-text-message', passed: true, assertionDetailedInfo: '发送 - 文本', expectedValue: '已为您登记', actualValue: '已为您登记退款' })),
       });
   }
 
@@ -68,7 +69,7 @@ export async function startTestCenterServer({ itemCost = 0.02, perPoll = Infinit
     task.processedTestCaseCount = done.length;
     task.passedTestCaseCount = done.filter((i) => i.passed).length;
     if (done.length === items.length) {
-      const total = done.reduce((sum, i) => sum + (i.costInCny ?? 0), 0);
+      const total = done.reduce((sum, i) => sum + (i.costInCny ?? 0), 0) + (state.judgeFee ?? 0);
       Object.assign(task, { status: 'finished', totalCostInCny: total, averageCostInCny: items.length ? total / items.length : null, taskDuration: 45000 });
     }
   }

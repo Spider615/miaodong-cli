@@ -17,7 +17,7 @@ function home() {
   return h;
 }
 const md = (args, h = home(), env = {}) => runCli(args, { home: h, env });
-const reset = (patch = {}) => Object.assign(fake.state, { sets: [], cases: [], tasks: [], items: new Map(), posts: {}, log: [], canvas: null, itemCost: 0.02, perPoll: Infinity, tree: [], ...patch });
+const reset = (patch = {}) => Object.assign(fake.state, { sets: [], cases: [], tasks: [], items: new Map(), posts: {}, log: [], canvas: null, itemCost: 0.02, perPoll: Infinity, tree: [], assertions: 1, judgeFee: 0, ...patch });
 
 // 直接往假秒懂里放一个测试集和若干导入好的用例（前缀 4 / a，和假秒懂自己生成的 id 不撞）
 function seedSet(name, execIds = [SAME_EXEC]) {
@@ -279,7 +279,8 @@ test('status --wait 止损：按已跑完的平均花费推算整个任务超过
   const task = taskOf('集-草稿');
   const r = await md(['test', 'status', task, '--bot', '179cd443', '--wait'], h, { MD_TEST_POLL_MS: '5' });
   assert.equal(r.code, 0, r.stderr);
-  assert.match(r.stdout, /⛔ 按已跑完的 1 条平均 ¥1\.00 推算，整个任务要 ¥3\.00，超过额度 ¥2\.00，已暂停任务/);
+  // 每条 ¥1 + 1 条断言的判定费 ¥0.012（09-29 实测，逐条花费里没有这笔）
+  assert.match(r.stdout, /⛔ 按已跑完的 1 条平均 ¥1\.01 推算（含断言判定），整个任务要 ¥3\.04，超过额度 ¥2\.00，已暂停任务/);
   assert.deepEqual(fake.state.posts.pause.at(-1), { testTaskId: task });
 });
 
@@ -318,7 +319,9 @@ test('stop：暂停后账本按已跑完的条目记实际，不再挂着预估�
   assert.doesNotMatch(r.stdout, /账本保留预估/);
   assert.match(r.stdout, /paused · 1\/3/);
   const [row] = spendRows(h);
-  assert.deepEqual([row.actual, row.runs], [0.02, 1]);
+  // 已跑完的 1 条：逐条花费 ¥0.02 + 1 条断言的判定费 ¥0.012
+  assert.ok(Math.abs(row.actual - 0.032) < 1e-9, JSON.stringify(row));
+  assert.equal(row.runs, 1);
 });
 
 const savedRows = (stdout) => readFileSync(stdout.match(/逐条明细：(\S+)/)[1], 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
@@ -471,10 +474,10 @@ test('止损暂停后：账本按观察到的花费记实际，「今天已花�
   const paused = await md(['test', 'status', task, '--bot', '179cd443', '--wait'], h, { MD_TEST_POLL_MS: '5' });
   assert.match(paused.stdout, /已暂停任务/);
   assert.match(paused.stdout, /重新 md test run 会把已经跑完的条目再花一次钱/);
-  assert.match((await md(['spend'], h)).stdout, /今天已花 ¥1\.00/);
+  assert.match((await md(['spend'], h)).stdout, /今天已花 ¥1\.01/);
   const again = await md(['test', 'run', '集', '--bot', '179cd443', '--rounds', '3'], h);
   assert.equal(again.code, 5, again.stdout);
-  assert.match(again.stdout, /预计 ¥3\.00（上次盯着跑时观察到每条 ¥1\.00）/);
+  assert.match(again.stdout, /预计 ¥3\.04（上次盯着跑时观察到每条 ¥1\.01）/);
   assert.match(again.stdout, /确认码：/);
 });
 
@@ -503,7 +506,8 @@ test('status 不带 --wait 也判断止损：超额度就暂停；自动放行�
   const h = home();
   await md(['test', 'run', '集', '--bot', '179cd443', '--rounds', '3'], h);
   const r = await md(['test', 'status', taskOf('集-草稿'), '--bot', '179cd443'], h);
-  assert.match(r.stdout, /⛔ 按已跑完的 1 条平均 ¥1\.00 推算，整个任务要 ¥3\.00，超过额度 ¥2\.00，已暂停任务/);
+  // 每条 ¥1 + 1 条断言的判定费 ¥0.012（09-29 实测，逐条花费里没有这笔）
+  assert.match(r.stdout, /⛔ 按已跑完的 1 条平均 ¥1\.01 推算（含断言判定），整个任务要 ¥3\.04，超过额度 ¥2\.00，已暂停任务/);
   reset({ perPoll: 1, itemCost: 1 });
   seedFinished(seedSet('集', [SAME_EXEC]), 0.001);
   const h2 = home();
@@ -635,4 +639,42 @@ test('import 撤回没删干净：不删集，说清还剩几条、怎么清理�
     assert.match(r.stderr, /还剩 1 条没删掉，用 md test drop/);
   });
   assert.equal(fake.state.sets.length, 1);
+});
+
+test('止损算上断言判定费：逐条花费推算没超额度、加上判定费超了，也要暂停（09-29：任务总额比逐条花费多 21%）', async () => {
+  reset({ perPoll: 1, itemCost: 0.64, assertions: 10 });
+  seedFinished(seedSet('集', [SAME_EXEC]), 0.001);
+  const h = home();
+  assert.equal((await md(['test', 'run', '集', '--bot', '179cd443', '--rounds', '3'], h)).code, 0);
+  const r = await md(['test', 'status', taskOf('集-草稿'), '--bot', '179cd443', '--wait'], h, { MD_TEST_POLL_MS: '5' });
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /⛔ 按已跑完的 1 条平均 ¥0\.760 推算（含断言判定），整个任务要 ¥2\.28，超过额度 ¥2\.00，已暂停任务/);
+});
+
+test('任务跑完：按秒懂总额反推每条断言的判定费、记下含判定费的单价；下一轮估价按它算（09-29）', async () => {
+  reset({ itemCost: 0.2, assertions: 2, judgeFee: 0.4 });
+  seedFinished(seedSet('集', [SAME_EXEC]), 0.001);
+  const h = home();
+  assert.equal((await md(['test', 'run', '集', '--bot', '179cd443', '--rounds', '2'], h)).code, 0);
+  const done = await md(['test', 'status', taskOf('集-草稿'), '--bot', '179cd443', '--wait'], h, { MD_TEST_POLL_MS: '5' });
+  assert.equal(done.code, 0, done.stderr);
+  const row = spendRows(h).find((x) => x.kind === 'test' && x.taskId);
+  assert.ok(Math.abs(row.actual - 0.8) < 1e-9, JSON.stringify(row));
+  assert.ok(Math.abs(row.judgePerAssertion - 0.1) < 1e-9, JSON.stringify(row));
+  assert.ok(Math.abs(row.actualPerRun - 0.4) < 1e-9, JSON.stringify(row));
+  const again = await md(['test', 'run', '集', '--bot', '179cd443', '--rounds', '2'], h);
+  assert.match(again.stdout, /预计 ¥0\.800（/);
+});
+
+test('只有导入来源的执行花费可参考时：估价按这个集每条用例的断言数补上判定费（执行记录里没有这笔）', async () => {
+  reset();
+  const h = home();
+  const file = join(h, 'src.jsonl');
+  writeFileSync(file, execSearchLines({ botId: TARGET_BOT, botName: '【测试测试测试】太极2.0 测试专用版', ids: [SAME_EXEC] }));
+  const imported = await md(['test', 'import', '回归-退款', '--bot', '179cd443', '--from-execs', file], h);
+  assert.equal(imported.code, 0, imported.stdout + imported.stderr);
+  const r = await md(['test', 'run', '回归-退款', '--bot', '179cd443'], h);
+  const m = r.stdout.match(/预计 ¥([\d.]+)（导入来源的 1 条执行平均 ¥([\d.]+)，加上断言判定约 ¥0\.024\/条）/);
+  assert.ok(m, r.stdout);
+  assert.ok(Math.abs(Number(m[1]) - (Number(m[2]) + 0.024)) < 0.0011, r.stdout);
 });
