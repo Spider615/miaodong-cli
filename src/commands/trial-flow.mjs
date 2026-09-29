@@ -19,8 +19,9 @@ import { UNKNOWN_RUN_COST, costSummary, draftVsLocal, nextRunCheck } from '../tr
 import { runFlowOnce, sessionExecsAfter } from '../trial-run.mjs';
 import {
   assertRunnable, buildEventData, buildSessionData, describeActions, entryNodes, eventSchedules, flowCostOf, flowPreflight,
-  followCommand, matchSession, reachableNodes, resolveEvent, scheduleLabel,
+  followCommand, isFreeNode, matchSession, reachableNodes, resolveEvent, scheduleLabel,
 } from '../flow-trial.mjs';
+import { nodeType } from '../graph.mjs';
 import { dayKey, loadLimits, readSpends, recordSpend, spendDecision, spentOn, updateSpend, withSpendLock } from '../spend.mjs';
 import { codeFor, givenCode, roundCost, stopForConfirm } from '../confirm.mjs';
 
@@ -154,8 +155,12 @@ export async function runFlowTrial(args) {
   const fixedSession = sessionQuery ? matchSession(readSessionRecords(target), sessionQuery, target.botId) : null;
 
   const unpushed = ws ? cells.filter((c) => draftVsLocal(c.id, draft.rawCanvas, ws).status === 'unpushed').length : 0;
-  const perRun = lastPerRun(target.botId, entry.key);
+  // 能走到的节点都不花钱（触发器、代码、规则、动作……）就是 ¥0（09-29 实测这种链路 totalCostInCny 是 0）：
+  // 不然每次第一次跑都「估不出」，今天到了上限就要为一笔 ¥0 的试跑去问用户。有一个要花钱的节点就照旧按账本估
+  const allFree = cells.every((c) => isFreeNode({ type: nodeType(c), category: c.data?.category }));
+  const perRun = allFree ? 0 : lastPerRun(target.botId, entry.key);
   const estimate = perRun === null ? null : perRun * times;
+  const basis = allFree ? '能走到的节点都不花钱' : `上次整条试跑这个入口 ${formatCost(perRun)}/次`;
   const shown = loadLimits();
   out(targetLine({ ...target, versionLabel: '草稿' }));
   out(`整条试跑：${entry.label} × ${times} · 草稿最后保存 ${formatTime(draft.updatedAt)}`);
@@ -163,7 +168,7 @@ export async function runFlowTrial(args) {
   out(`能走到 ${cells.length} 个节点（含事件那头），没有插件；会执行的动作：${describeActions(pre.actions) || '无'}（试跑会话没有联系人和接收人）`);
   if (entry.kind === 'event') out(`事件变量：${Object.keys(trigger.canvasEvent.data).join('、') || '（无）'}`);
   if (sessionData) out(`预置会话变量：${varPairs.map((p) => p.split('=')[0]).join('、')}`);
-  out(`花费：预计 ${estimate === null ? '估不出，先跑 1 次看实际' : `${formatCost(estimate)}（上次整条试跑这个入口 ${formatCost(perRun)}/次）`} · 今天已花 ${formatCost(spentOn(readSpends()))} / 上限 ${formatCost(shown.perDay)}`);
+  out(`花费：预计 ${estimate === null ? '估不出，先跑 1 次看实际' : `${formatCost(estimate)}（${basis}）`} · 今天已花 ${formatCost(spentOn(readSpends()))} / 上限 ${formatCost(shown.perDay)}`);
 
   // 确认 + 记一笔：和单节点试跑同一套（估不出、今天没到上限时先跑 1 次；锁里「查今天已花 → 判断 → 记一笔」）
   const given = givenCode(args);
@@ -180,7 +185,7 @@ export async function runFlowTrial(args) {
     const id = recordSpend({
       kind: 'flow', regionLabel: target.regionLabel, botId: target.botId, botName: target.botName, what: `整条试跑 ${entry.label}`, entry: entry.key,
       count: times, estimate, reserve: estimate ?? UNKNOWN_RUN_COST * (confirmed ? times : 1),
-      basis: perRun === null ? '估不出' : '上次同入口的实际单价', approved: confirmed ? 'confirm' : 'auto',
+      basis: perRun === null ? '估不出' : basis, approved: confirmed ? 'confirm' : 'auto',
       ...(confirmed ? { opKey: confirm.opKey, code: confirm.code } : {}),
     });
     return { id, confirmed, limits };
