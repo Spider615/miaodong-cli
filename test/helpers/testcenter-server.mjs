@@ -8,6 +8,8 @@
 //   failCreateAt —— 第 N 次 create 起返回 502；treeDrift —— 每次挂场景额外给节点计数加几（模拟旧批次重复挂载）
 //   renameCreated —— create 时给 name 加的后缀（模拟服务端改写 name，按 name 找不到）
 //   assertions —— 每条跑完的条目带几条断言结果（默认 1）；judgeFee —— 任务跑完时总额另加的断言判定费（默认 0；逐条花费里没有它，09-29 实测）
+//   resumeLag —— 继续之后头几次查 detail 状态还是 paused（秒懂晚一拍）；resumeStatus —— 继续接口直接回这个 HTTP 状态（400 拒绝、401 身份失效）
+//   omitSelected —— 任务详情里不带 selectedTestCaseIds（真实服务端带不带没实测）
 // 事件在目标智能体里不存在的用例会「空跑」：status success、passed false、没有执行、花费为空（spec §2.3 核对 6）
 import { ok, startFakeMiaodong } from './fake-miaodong.mjs';
 import { SOURCE_BOT, TARGET_BOT, botEvents, botVars, importable, targetCanvas } from './testcenter-fixtures.mjs';
@@ -208,15 +210,22 @@ export async function startTestCenterServer({ itemCost = 0.02, perPoll = Infinit
     'GET /api/test-center/test-task/list': ({ query }) => page(state.tasks.filter((x) => x.botId === query.botId && (!query.testSetId || x.testSetId === query.testSetId)).slice().reverse(), query),
     'GET /api/test-center/test-task/detail': ({ query }) => {
       const task = state.tasks.find((x) => x.testTaskId === query.testTaskId);
+      if (task?.resumeIn > 0 && --task.resumeIn === 0) task.status = 'processing';
       if (task) advance(task);
+      if (task && state.omitSelected) {
+        const { selectedTestCaseIds, ...rest } = task;
+        return ok(rest);
+      }
       return ok(task ?? null);
     },
     'GET /api/test-center/test-task-item/list': ({ query }) => page(state.items.get(query.testTaskId) ?? [], query),
     'POST /api/test-center/test-task/resume': ({ body }) => {
       record('resume', body);
+      if (state.resumeStatus) return { status: state.resumeStatus, body: { statusCode: state.resumeStatus, message: state.resumeStatus === 401 ? 'Unauthorized' : 'resume refused' } };
       const task = state.tasks.find((x) => x.testTaskId === body.testTaskId);
       if (!task || task.status !== 'paused') return bad('task is not paused');
-      task.status = 'processing';
+      if (state.resumeLag) task.resumeIn = state.resumeLag + 1;
+      else task.status = 'processing';
       return ok(null);
     },
     'POST /api/test-center/test-task/pause': ({ body }) => {

@@ -17,7 +17,7 @@ function home() {
   return h;
 }
 const md = (args, h = home(), env = {}) => runCli(args, { home: h, env });
-const reset = (patch = {}) => Object.assign(fake.state, { sets: [], cases: [], tasks: [], items: new Map(), posts: {}, log: [], canvas: null, itemCost: 0.02, perPoll: Infinity, tree: [], assertions: 1, judgeFee: 0, ...patch });
+const reset = (patch = {}) => Object.assign(fake.state, { sets: [], cases: [], tasks: [], items: new Map(), posts: {}, log: [], canvas: null, itemCost: 0.02, perPoll: Infinity, tree: [], assertions: 1, judgeFee: 0, resumeLag: 0, resumeStatus: 0, omitSelected: false, ...patch });
 
 // 直接往假秒懂里放一个测试集和若干导入好的用例（前缀 4 / a，和假秒懂自己生成的 id 不撞）
 function seedSet(name, execIds = [SAME_EXEC]) {
@@ -567,7 +567,7 @@ test('resume：止损暂停的任务接着跑剩下的——先预演（剩几�
   const done = await md(['test', 'resume', task, '--bot', '179cd443', '--confirm', code], h);
   assert.equal(done.code, 0, done.stderr);
   assert.deepEqual(fake.state.posts.resume, [{ testTaskId: task }]);
-  assert.match((await md(['spend'], h)).stdout, /「继续 集-草稿.*」×2 预估 ¥2\.02 实际 记在原任务那一笔（用户确认）/);
+  assert.match((await md(['spend'], h)).stdout, /「继续 集-草稿.*」×2 预估 ¥2\.02 实际 还没有（用户确认）/);
   const waited = await md(['test', 'status', task, '--bot', '179cd443', '--wait'], h, { MD_TEST_POLL_MS: '5' });
   assert.doesNotMatch(waited.stdout, /已暂停任务/);
   assert.match(waited.stdout, / finished · 3\/3 · /);
@@ -575,6 +575,113 @@ test('resume：止损暂停的任务接着跑剩下的——先预演（剩几�
   assert.equal(again.code, 0);
   assert.match(again.stdout, /已经是 finished，只有暂停的任务能继续/);
   assert.equal(fake.state.posts.resume.length, 1);
+});
+
+// 止损暂停一个 md 建的任务（1 条 × 3 轮，每条 ¥1），返回任务 id 和继续的计划码
+async function pausedTask(h) {
+  seedFinished(seedSet('集', [SAME_EXEC]), 0.001);
+  assert.equal((await md(['test', 'run', '集', '--bot', '179cd443', '--rounds', '3'], h)).code, 0);
+  const task = taskOf('集-草稿');
+  assert.match((await md(['test', 'status', task, '--bot', '179cd443', '--wait'], h, { MD_TEST_POLL_MS: '5' })).stdout, /已暂停任务/);
+  return task;
+}
+const resumeCode = async (h, task) => (await md(['test', 'resume', task, '--bot', '179cd443'], h)).stdout.match(/计划码：([0-9a-f]{8})/)?.[1];
+const todaySpent = async (h) => (await md(['spend'], h)).stdout.match(/今天已花 (¥[\d.]+)/)?.[1];
+// 把账本里建任务那几笔挪到昨天（模拟隔天才继续）
+function backdate(h) {
+  const file = join(h, 'md', 'spend.jsonl');
+  const yesterday = new Date(Date.now() - 86_400_000).toISOString();
+  const lines = readFileSync(file, 'utf-8').trim().split('\n').map((line) => JSON.parse(line)).map((row) => (row.at ? { ...row, at: yesterday } : row));
+  writeFileSync(file, `${lines.map((row) => JSON.stringify(row)).join('\n')}\n`);
+}
+
+test('resume 隔天才继续：继续的钱记在今天——今天已花含剩下的预留，原任务那一笔停在继续前；跑完两笔合起来等于任务总额（整支审查 1）', async () => {
+  reset({ perPoll: 1, itemCost: 1 });
+  const h = home();
+  const task = await pausedTask(h);
+  backdate(h);
+  assert.equal(await todaySpent(h), '¥0');
+  const done = await md(['test', 'resume', task, '--bot', '179cd443', '--confirm', await resumeCode(h, task)], h);
+  assert.equal(done.code, 0, done.stderr);
+  assert.equal(await todaySpent(h), '¥2.02');
+  await md(['test', 'status', task, '--bot', '179cd443', '--wait'], h, { MD_TEST_POLL_MS: '5' });
+  const rows = spendRows(h).filter((r) => r.kind === 'test' && r.taskId === task || r.what === '集');
+  const original = spendRows(h).find((r) => r.kind === 'test' && r.testSetId && !String(r.what).startsWith('继续'));
+  const resumed = spendRows(h).find((r) => String(r.what).startsWith('继续'));
+  assert.equal(Math.round(original.actual * 1000), 1012);
+  assert.equal(Math.round((original.actual + resumed.actual) * 1000), 3000, JSON.stringify(rows));
+});
+
+test('resume 被拒（4xx）：继续那一笔记 0、今天已花不变，本机任务记录不改；身份失效照常报、提示重新取身份（整支审查 2）', async () => {
+  reset({ perPoll: 1, itemCost: 1 });
+  const h = home();
+  const task = await pausedTask(h);
+  const before = await todaySpent(h);
+  fake.state.resumeStatus = 400;
+  const refused = await md(['test', 'resume', task, '--bot', '179cd443', '--confirm', await resumeCode(h, task)], h);
+  assert.equal(refused.code, 1, refused.stderr);
+  assert.doesNotMatch(refused.stderr, /可能已经继续了/);
+  assert.equal(await todaySpent(h), before);
+  assert.equal(spendRows(h).find((r) => String(r.what).startsWith('继续')).actual, 0);
+  fake.state.resumeStatus = 401;
+  const auth = await md(['test', 'resume', task, '--bot', '179cd443', '--confirm', await resumeCode(h, task)], h);
+  assert.equal(auth.code, 3, auth.stderr);
+  assert.match(auth.stderr, /重新取身份|md auth snippet/);
+  assert.equal(await todaySpent(h), before);
+});
+
+test('resume 不是 md 建的任务：今天只记剩下的预留，继续之前在页面上花的不算进 md 的账；被拒时什么都不留（整支审查 2）', async () => {
+  reset({ perPoll: 1, itemCost: 1 });
+  const h = home();
+  const set = seedSet('集', [SAME_EXEC]);
+  const testTaskId = '70000055-0000-4000-8000-000000000000';
+  fake.state.tasks.push({ testTaskId, botId: TARGET_BOT, testSetId: set, name: '页面上建的', canvasId: 'main-179c', repeatTimes: 3, status: 'paused', totalTestCaseCount: 1, selectedTestCaseIds: [fake.state.cases[0].testCaseId], createdAt: '2026-09-29T01:00:00.000Z' });
+  const item = (n, done) => ({ testTaskItemId: `9000005${n}-0000-4000-8000-000000000000`, testTaskId, testCaseId: fake.state.cases[0].testCaseId, testCaseName: fake.state.cases[0].name, status: done ? 'success' : 'pending', passed: done ? true : null, costInCny: done ? 1 : null, canvasExecAvailable: done, executedActions: [], canvasActionOutputAssertionResult: done ? [{ type: 'send-text-message', passed: true }] : [] });
+  fake.state.items.set(testTaskId, [item(1, true), item(2, false), item(3, false)]);
+  fake.state.resumeStatus = 400;
+  const refused = await md(['test', 'resume', testTaskId, '--bot', '179cd443', '--confirm', await resumeCode(h, testTaskId)], h);
+  assert.equal(refused.code, 1);
+  assert.equal(await todaySpent(h), '¥0');
+  fake.state.resumeStatus = 0;
+  const done = await md(['test', 'resume', testTaskId, '--bot', '179cd443', '--confirm', await resumeCode(h, testTaskId)], h);
+  assert.equal(done.code, 0, done.stderr);
+  assert.equal(await todaySpent(h), '¥2.02');
+});
+
+test('resume 后秒懂的状态晚一拍还是 paused：--wait 接着等，不当成已经停下、不把继续那一笔结算成 0（整支审查 3）', async () => {
+  reset({ perPoll: 1, itemCost: 1 });
+  const h = home();
+  const task = await pausedTask(h);
+  fake.state.resumeLag = 2;
+  assert.equal((await md(['test', 'resume', task, '--bot', '179cd443', '--confirm', await resumeCode(h, task)], h)).code, 0);
+  const waited = await md(['test', 'status', task, '--bot', '179cd443', '--wait'], h, { MD_TEST_POLL_MS: '5' });
+  assert.match(waited.stdout, / finished · 3\/3 · /);
+  const resumed = spendRows(h).find((r) => String(r.what).startsWith('继续'));
+  assert.equal(Math.round(resumed.actual * 1000), 1988);
+});
+
+test('暂停的任务在页面上点了继续：看进度时账本那一笔重新挂上预留，不再停在暂停时的实际（今天已花不少算；整支审查 3）', async () => {
+  reset({ perPoll: 1, itemCost: 1 });
+  const h = home();
+  const task = await pausedTask(h);
+  assert.equal(await todaySpent(h), '¥1.01');
+  const record = JSON.parse(readFileSync(join(h, 'md', 'tests', 'k1', '179cd443', 'tasks', `${task}.json`), 'utf-8'));
+  writeFileSync(join(h, 'md', 'tests', 'k1', '179cd443', 'tasks', `${task}.json`), JSON.stringify({ ...record, allowance: 100 }));
+  fake.state.tasks.find((x) => x.testTaskId === task).status = 'processing';
+  fake.state.perPoll = 0;
+  await md(['test', 'status', task, '--bot', '179cd443'], h);
+  assert.equal(await todaySpent(h), '¥3.04');
+});
+
+test('--case 的任务、任务详情不回带 selectedTestCaseIds：进度按 md 记下的条数算，不按整个集（整支审查：不下结论的第 3 条）', async () => {
+  reset({ omitSelected: true });
+  const set = seedSet('集', [SAME_EXEC, CROSS_EXEC, STALE_EXEC]);
+  seedFinished(set, 0.02);
+  const same = fake.state.cases.find((c) => c.name.includes(SAME_EXEC));
+  const h = home();
+  assert.equal((await md(['test', 'run', '集', '--bot', '179cd443', '--case', same.testCaseId], h)).code, 0);
+  const st = await md(['test', 'status', taskOf('集-草稿'), '--bot', '179cd443', '--wait'], h, { MD_TEST_POLL_MS: '5' });
+  assert.match(st.stdout, / finished · 1\/1 · /);
 });
 
 test('估价不被空跑稀释：上次跑完的任务按真正执行了的条目算单价；全是空跑（单价 0）就当估不出、要确认（审查 C1）', async () => {

@@ -193,15 +193,16 @@ export async function resolveTask(t, query) {
 }
 
 // 进度：跑完的条目数、通过、空跑（spec §2.3：没有执行、花费为空）、正在跑的、已完成条目的花费和平均（空跑不进平均）。
-// 花费含断言判定费：逐条花费里没有这笔，按已判的断言数 × 每条断言的判定费补上（09-29 实测）
-export function progressOf(detail, items, fee = JUDGE_FEE_PER_ASSERTION) {
+// 花费含断言判定费：逐条花费里没有这笔，按已判的断言数 × 每条断言的判定费补上（09-29 实测）。
+// cases：md 建任务时记下的条数（--case 只跑几条时，任务详情带不带 selectedTestCaseIds 没实测，不能靠它）
+export function progressOf(detail, items, fee = JUDGE_FEE_PER_ASSERTION, cases = null) {
   const done = items.filter((i) => i?.status && !['pending', 'processing'].includes(i.status));
   const costs = done.map((i) => i.costInCny).filter((c) => typeof c === 'number');
   const execSpent = costs.reduce((a, b) => a + b, 0);
   const judged = done.reduce((n, i) => n + assertionResults(i), 0);
   const judging = judged * fee;
   return {
-    total: Math.max(items.length, taskCaseCount(detail) * (Number(detail?.repeatTimes) || 1)),
+    total: Math.max(items.length, (cases ?? taskCaseCount(detail)) * (Number(detail?.repeatTimes) || 1)),
     done: done.length,
     inflight: items.filter((i) => i?.status === 'processing').length,
     passed: done.filter((i) => i.passed === true).length,
@@ -220,11 +221,20 @@ function statusLine(detail, p) {
   return `${detail?.name ?? ''} ${detail?.status} · ${p.done}/${p.total} · 通过 ${p.passed}${p.noop ? ` · 空跑 ${p.noop}` : ''} · ${cost}`;
 }
 
+// 任务停下来了没有。刚用 md test resume 继续的任务，秒懂的状态可能还没从 paused 变过来：这一阵的 paused 不算停下，
+// 不然 --wait 一看就结束、账本把继续那一笔结算成 0（整支审查 3）
+const RESUME_GRACE_MS = 60_000;
+export function stopped(detail, rec) {
+  const status = String(detail?.status);
+  if (!TERMINAL.has(status)) return false;
+  return !(status === 'paused' && rec?.resumedAt && Date.now() - Date.parse(rec.resumedAt) < RESUME_GRACE_MS);
+}
+
 // 止损（同 md trial 的逐次止损，审查 C1 / I2）：md 建的任务，按已完成条目的实际单价推算整个任务，
 // 超过额度（自动放行的是单次门槛；用户确认过的是确认的金额 + 一个单次门槛）就暂停；自动放行的还看每日上限。
 // 每次看进度都判断，不带 --wait 也判断
 function stopLoss(t, rec, detail, p) {
-  if (!rec || TERMINAL.has(String(detail?.status)) || p.unit === null) return null;
+  if (!rec || stopped(detail, rec) || String(detail?.status) === 'paused' || p.unit === null) return null;
   const projected = p.spent + (p.total - p.done) * p.unit;
   const head = `按已跑完的 ${p.done} 条平均 ${formatCost(p.unit)} 推算${p.judging ? '（含断言判定）' : ''}，整个任务要 ${formatCost(projected)}`;
   if (projected > rec.allowance) return `${head}，超过额度 ${formatCost(rec.allowance)}`;
@@ -236,31 +246,34 @@ function stopLoss(t, rec, detail, p) {
   return null;
 }
 
-// 账本跟着实际走（审查 C1）：每次看进度都把观察到的写回 md 建的那一笔——
+// 账本跟着实际走（审查 C1）：每次看进度都把观察到的写回 md 记着的那一笔——
 // 跑的过程中，预留 = max(原预留, 已花 + 没跑的 × 单价)，并记下观察到的单价（下次 md test run 按它估价）；
 // 任务停下来（跑完、暂停、失败）就记实际：跑完用秒懂给的总花费，别的按已完成条目的花费 + 正在跑的按单价。
-// 同样的结果只写一次；之后状态或花费变了（比如暂停的任务后来又跑完了），再按新结果记
+// 同样的结果只写一次；之后状态或花费变了（比如暂停的任务后来又跑完了），再按新结果记。
+// offset：继续过的任务，继续之前的花费记在别的笔里（原任务那一笔，或者不是 md 的账），这一笔只记继续之后的（md test resume）。
+// 结算过又跑起来了（页面上点了继续）：实际清掉、重新挂预留，不然账本看到有实际就不看预留，今天已花少算（整支审查 3）
 function observe(t, detail, p) {
   const rec = readTaskRecord(t, detail?.testTaskId);
   if (!rec?.spendId) return;
+  const offset = rec.offset ?? 0;
   const unit = p.unit ?? rec.unit ?? UNKNOWN_CASE_COST;
   const status = String(detail?.status);
-  if (TERMINAL.has(status)) {
+  if (stopped(detail, rec)) {
     const total = status === 'finished' && typeof detail.totalCostInCny === 'number' ? detail.totalCostInCny : null;
     const actual = total ?? p.spent + p.inflight * unit;
     if (rec.settled?.status === status && rec.settled?.actual === actual) return;
     // 跑完了：总额里含断言判定费，用它反推每条断言的判定费（下次看进度按它补），单价也按总额 ÷ 真正执行的条数记（和估价的算法一样）
     const learned = total !== null && p.judged > 0 ? { judgePerAssertion: Math.max(0, total - p.execSpent) / p.judged } : {};
     const perRun = total !== null && p.costed ? total / p.costed : p.unit;
-    updateSpend(rec.spendId, { actual, runs: p.done, allIn: true, ...(perRun !== null ? { actualPerRun: perRun } : {}), ...learned });
+    updateSpend(rec.spendId, { actual: Math.max(0, actual - offset), runs: p.done, allIn: true, ...(perRun !== null ? { actualPerRun: perRun } : {}), ...learned });
     writeTaskRecord(t, { ...rec, settled: { status, actual } });
     return;
   }
   const projected = p.spent + (p.total - p.done) * unit;
-  const reserve = Math.max(rec.lastReserve ?? rec.reserve ?? 0, projected);
-  if (reserve === rec.lastReserve && p.unit === rec.lastUnit) return;
-  updateSpend(rec.spendId, { reserve, allIn: true, ...(p.unit !== null ? { actualPerRun: p.unit } : {}) });
-  writeTaskRecord(t, { ...rec, lastReserve: reserve, lastUnit: p.unit });
+  const reserve = Math.max(rec.lastReserve ?? rec.reserve ?? 0, projected - offset);
+  if (!rec.settled && reserve === rec.lastReserve && p.unit === rec.lastUnit) return;
+  updateSpend(rec.spendId, { ...(rec.settled ? { actual: null } : {}), reserve, allIn: true, ...(p.unit !== null ? { actualPerRun: p.unit } : {}) });
+  writeTaskRecord(t, { ...rec, settled: null, lastReserve: reserve, lastUnit: p.unit });
 }
 
 // 网络抖动、秒懂偶尔 5xx：看进度时连续 3 次才放弃（09-25 真机上一次 DNS 解析失败就把 --wait 整个断掉了）
@@ -287,23 +300,24 @@ export async function status(args) {
   out(targetLine(t));
   let detail;
   let p;
+  const record = () => readTaskRecord(t, task.testTaskId);
   const refresh = async () => {
     detail = await taskDetail(t, task.testTaskId);
-    p = progressOf(detail, await taskItems(t, task.testTaskId), judgeFee(t, detail?.testSetId));
+    p = progressOf(detail, await taskItems(t, task.testTaskId), judgeFee(t, detail?.testSetId), record()?.cases ?? null);
     observe(t, detail, p);
   };
   await refresh();
   let last = '';
   let failures = 0;
   for (;;) {
-    const guard = stopLoss(t, readTaskRecord(t, task.testTaskId), detail, p);
+    const guard = stopLoss(t, record(), detail, p);
     if (guard) {
       await pauseTask(t, task.testTaskId);
       out(`⛔ ${guard}，已暂停任务。账本已按实际花费记。要接着跑剩下的 ${p.total - p.done} 条：md test resume ${shortId(task.testTaskId)} --bot ${shortId(t.botId)}（先预演其余花费，用户同意后带计划码继续）；重新 md test run 会把已经跑完的条目再花一次钱`);
       await refresh();
       break;
     }
-    if (!wait || TERMINAL.has(String(detail?.status)) || Date.now() - started >= timeoutMs) break;
+    if (!wait || stopped(detail, record()) || Date.now() - started >= timeoutMs) break;
     const line = statusLine(detail, p);
     if (line !== last) note(`${Math.round((Date.now() - started) / 1000)}s ${line}`);
     last = line;
@@ -319,7 +333,7 @@ export async function status(args) {
     }
   }
   out(statusLine(detail, p));
-  if (!TERMINAL.has(String(detail?.status))) {
+  if (!stopped(detail, record())) {
     out(wait ? `还没跑完（等了 ${Math.round(timeoutMs / 1000)} 秒）；接着等：md test status ${shortId(task.testTaskId)} --bot ${shortId(t.botId)} --wait` : '还没跑完；盯着跑加 --wait');
   } else {
     out(`看结果：md test results ${shortId(task.testTaskId)} --bot ${shortId(t.botId)} --out <文件.xlsx>`);
@@ -338,7 +352,7 @@ export async function stop(args) {
   await pauseTask(t, task.testTaskId);
   // 暂停了也是停下来：账本按已跑完的条目记实际（同 status 的 observe，审查 C1）
   const detail = await taskDetail(t, task.testTaskId);
-  const p = progressOf(detail, await taskItems(t, task.testTaskId), judgeFee(t, detail?.testSetId));
+  const p = progressOf(detail, await taskItems(t, task.testTaskId), judgeFee(t, detail?.testSetId), readTaskRecord(t, task.testTaskId)?.cases ?? null);
   observe(t, detail, p);
   out(`已暂停任务 ${detail?.name ?? task.name}（${shortId(task.testTaskId)}）：${detail?.status}。秒懂没有取消，只能暂停；账本按已跑完的条目记实际花费（正在跑的按单价算进去）`);
   out(`要接着跑：md test resume ${shortId(task.testTaskId)} --bot ${shortId(t.botId)}（先预演其余花费）`);
