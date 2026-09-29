@@ -145,3 +145,16 @@ test('exec-store：详情只存一份画布；缓存按 id 能找回；未结束
   saveDetail(dir, target, running);
   assert.equal(loadCachedDetail(dir), null);
 });
+
+test('normalizeDetail：分支名只在这个节点自己的分支里找——复制出来的规则中心共用 branchId、名字不同（09-29：兴趣岛画布 65–83 个共用、22–27 个名字冲突），不能显示成别的节点的名字', () => {
+  const ruleA = node(3, { name: '规则A', type: 'rule-center', payload: { branches: [{ branchId: 'br-x', name: 'D1' }], defaultBranchId: 'br-d' } });
+  const ruleB = node(4, { name: '规则B', type: 'rule-center', payload: { branches: [{ branchId: 'br-x', name: 'answer' }], defaultBranchId: 'br-d' } });
+  const detail = {
+    canvasExec: { execId: X(9), status: 'success', outputActions: [] },
+    canvas: { rawCanvas: [ruleA, ruleB] },
+    nodeResults: [{ nodeId: U(3), status: 'success', outputBranchId: 'br-x' }, { nodeId: U(4), status: 'success', outputBranchId: 'br-d' }],
+  };
+  const byId = new Map(normalizeDetail(detail).nodes.map((n) => [n.id, n.branch]));
+  assert.equal(byId.get(U(3)), 'D1');
+  assert.equal(byId.get(U(4)), '默认分支');
+});

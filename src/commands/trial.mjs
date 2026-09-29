@@ -186,7 +186,8 @@ export const trial = {
 
     const dir = ensureNewDir(join(mdHome(), 'trials', safe(target.identityKey), safe(target.botId.slice(0, 8)), `${stamp()}-${safe(shortId(node.id))}`));
     out(`结果和 prompt 存在 ${dir}（每跑完一次写一份；命令被中途打断也在这里）`);
-    const branches = buildBranchNameIndex(draft.rawCanvas);
+    // 只查这个节点自己的分支：复制出来的规则中心共用 branchId、名字不同，全局一张表会显示成别的节点的分支名
+    const branches = buildBranchNameIndex([cell]);
     const outputs = new Set();
     const runs = [];
     try {

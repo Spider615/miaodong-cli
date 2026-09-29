@@ -6,7 +6,7 @@ import { runCli, tempHome } from './helpers/run-cli.mjs';
 import { seedIdentity, seedWorkspace } from './helpers/seed.mjs';
 import { startTrialServer, trialDraft } from './helpers/trial-server.mjs';
 import { ASK, EXEC_BOT, X } from './helpers/exec-fixtures.mjs';
-import { U } from './helpers/fixtures.mjs';
+import { U, node } from './helpers/fixtures.mjs';
 import { ok } from './helpers/fake-miaodong.mjs';
 
 let fake;
@@ -328,4 +328,25 @@ test('规则、代码这类不花钱的节点：今天超了每日上限也不�
   const r = await md(['trial', '规则中心', '--bot', '147bd600', '--times', '2'], h);
   assert.equal(r.code, 0, r.stdout + r.stderr);
   assert.equal(fake.state.posts.length, 2);
+});
+
+test('单节点：分支名只在这个节点自己的分支里找（复制出来的规则中心共用 branchId，名字不同）', async () => {
+  reset();
+  const copied = node(9, { name: '复制的规则', type: 'rule-center', payload: { branches: [{ branchId: 'br-l3', name: '别的节点的分支' }], defaultBranchId: 'br-default' } });
+  const origCanvas = fake.server.routes['GET /api/canvas/get'];
+  const origPoll = fake.server.routes['GET /api/canvas/node/exec'];
+  fake.server.routes['GET /api/canvas/get'] = () => ok({ canvasId: 'main-1', rawCanvas: [...trialDraft(), copied], version: 'v1.0.403', updatedAt: '2026-09-24T01:00:00.000Z' });
+  fake.server.routes['GET /api/canvas/node/exec'] = async (rec) => {
+    const r = await origPoll(rec);
+    if (r.body?.data?.status === 'success') r.body.data.outputBranchId = 'br-l3';
+    return r;
+  };
+  try {
+    const r = await md(['trial', '规则中心', '--bot', '147bd600', '--input', 'x=1']);
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout, /→ 分支「L3」/);
+  } finally {
+    fake.server.routes['GET /api/canvas/get'] = origCanvas;
+    fake.server.routes['GET /api/canvas/node/exec'] = origPoll;
+  }
 });

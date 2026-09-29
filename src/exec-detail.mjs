@@ -47,11 +47,23 @@ export function orderExecuted(nodeIds, snapshot) {
   return [...order, ...unknown];
 }
 
+// 分支名按节点分开查：复制出来的规则中心共用 branchId、名字各不相同（09-29：兴趣岛画布 65–83 个共用、22–27 个名字冲突），
+// 全局一张 branchId → 名字的表会把别的节点的分支名显示出来（约 6% 的分支显示错）。每个节点只查它自己的分支
+export function nodeBranchNames(snapshot) {
+  const out = new Map();
+  for (const cell of asArray(snapshot)) {
+    if (!cell || typeof cell !== 'object' || typeof cell.id !== 'string') continue;
+    const names = buildBranchNameIndex([cell]);
+    if (names.size) out.set(cell.id, names);
+  }
+  return out;
+}
+
 export function normalizeDetail(detail) {
   const ce = detail?.canvasExec ?? {};
   const snapshot = asArray(detail?.canvas?.rawCanvas).length ? detail.canvas.rawCanvas : asArray(ce.rawCanvas);
   const meta = buildNodeMetaIndex(snapshot);
-  const branches = buildBranchNameIndex(snapshot);
+  const branches = nodeBranchNames(snapshot);
   const cells = new Map(snapshot.filter((c) => c && typeof c.id === 'string').map((c) => [c.id, c]));
   // 同一个节点可能跑多次（循环）：按 id 分组、组内保持秒懂返回的顺序，每一次都列出来（审查 I-5：以前后一次会盖掉前一次，出错的那次被显示成 ✅）
   const groups = new Map();
@@ -75,7 +87,7 @@ export function normalizeDetail(detail) {
         category: m?.category || '',
         status: String(r.status ?? ''),
         ms: Number(r.processDuration) || 0,
-        branch: r.outputBranchId ? branches.get(r.outputBranchId) ?? shortId(r.outputBranchId) : null,
+        branch: r.outputBranchId ? branches.get(id)?.get(r.outputBranchId) ?? shortId(r.outputBranchId) : null,
         model: cells.get(id)?.data?.nodePayload?.modelType ?? null,
         cost: typeof usageInfo?.costInCny === 'number' ? usageInfo.costInCny : null,
         error: r.errorMessage ? String(r.errorMessage) : null,
