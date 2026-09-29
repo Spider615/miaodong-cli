@@ -350,3 +350,36 @@ test('单节点：分支名只在这个节点自己的分支里找（复制出�
     fake.server.routes['GET /api/canvas/node/exec'] = origPoll;
   }
 });
+
+test('--plan：只预演——不发试跑请求、不记账；要确认时给的确认码，去掉 --plan 真跑时认', async () => {
+  reset({ cost: 0.0102 });
+  const h = home();
+  const args = ['trial', '回答生成', '--bot', '147bd600', '--from-exec', X(2)];
+  const free = await md([...args, '--plan'], h);
+  assert.equal(free.code, 0, free.stderr);
+  assert.match(free.stdout, /预计 ¥0\.010/);
+  assert.match(free.stdout, /--plan：只预演，没发请求，没记账/);
+  assert.match(free.stdout, /真跑时：不用确认/);
+  limits(h, { perCommand: 0.001, perDay: 10 });
+  const gated = await md([...args, '--plan'], h);
+  assert.equal(gated.code, 0, gated.stderr);
+  assert.match(gated.stdout, /真跑时：要用户确认（.*超过单次门槛/);
+  const code = gated.stdout.match(/加 --confirm ([0-9a-f]{8})/)?.[1];
+  assert.ok(code, gated.stdout);
+  assert.equal(fake.state.posts.length, 0);
+  assert.deepEqual(spends(h), []);
+  const ok = await md([...args, '--confirm', code], h);
+  assert.equal(ok.code, 0, ok.stderr);
+  assert.equal(fake.state.posts.length, 1);
+  const both = await md([...args, '--plan', '--confirm', code], h);
+  assert.equal(both.code, 2);
+  assert.match(both.stderr, /--plan 和 --confirm 不能一起给/);
+});
+
+test('--plan：估不出花费时说清楚真跑会先跑 1 次', async () => {
+  reset();
+  const r = await md(['trial', '回答生成', '--bot', '147bd600', '--plan']);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /真跑时：花费估不出，先跑 1 次看实际/);
+  assert.equal(fake.state.posts.length, 0);
+});

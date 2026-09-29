@@ -15,7 +15,7 @@ export const boolWord = (v) => (TRUTHY_WORDS.has(v.toLowerCase()) ? true : FALSY
  */
 export const BOOLEAN_FLAGS = new Set([
   'allow-check-errors', 'allow-plugin', 'allow-preflight-errors', 'base', 'canary', 'deep', 'down', 'failed', 'help', 'into',
-  'keep-platform-params', 'local', 'onto-draft', 'refresh', 'remote', 'replace-draft', 'reset', 'skip-rebuild', 'stdin', 'up', 'vs-draft', 'wait',
+  'keep-platform-params', 'local', 'onto-draft', 'plan', 'refresh', 'remote', 'replace-draft', 'reset', 'skip-rebuild', 'stdin', 'up', 'vs-draft', 'wait',
 ]);
 
 /**

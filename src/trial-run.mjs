@@ -5,11 +5,12 @@ import { getNodeTrialRun, startNodeTrialRun } from '../vendor/laodong/apps/api/l
 import { asArray } from './api.mjs';
 import { request } from './http.mjs';
 import { MdError } from './errors.mjs';
+import { envPollMs } from './poll.mjs';
 
 export const RUN_TIMEOUT_MS = 5 * 60_000;
 const MAX_POLL_ERRORS = 3;
 const sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const defaultPollMs = () => (Number(process.env.MD_POLL_MS) > 0 ? Number(process.env.MD_POLL_MS) : 2000);
+const defaultPollMs = () => envPollMs('MD_POLL_MS', 2000);
 // 只能调短（测试用）：调短只会更早带着 timedOut 返回，不会多跑、多花钱
 const defaultTimeoutMs = () => (Number(process.env.MD_TRIAL_TIMEOUT_MS) > 0 ? Math.min(Number(process.env.MD_TRIAL_TIMEOUT_MS), RUN_TIMEOUT_MS) : RUN_TIMEOUT_MS);
 

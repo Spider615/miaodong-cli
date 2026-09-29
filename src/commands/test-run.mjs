@@ -13,6 +13,7 @@ import { createTask, listCases, pauseTask, recentTasks, taskDetail, taskItems } 
 import { UNKNOWN_CASE_COST, preflight } from '../testcases.mjs';
 import { isNoop } from '../testresults.mjs';
 import { readSources, readTaskRecord, resolveTestSet, testTarget, writeTaskRecord } from '../test-common.mjs';
+import { envPollMs } from '../poll.mjs';
 
 const QUEUED = new Set(['pending', 'processing', 'running']);
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -163,7 +164,7 @@ export async function run(args) {
 }
 
 const TERMINAL = new Set(['finished', 'paused', 'failed', 'error', 'cancelled', 'canceled']);
-const pollMs = () => (Number(process.env.MD_TEST_POLL_MS) > 0 ? Number(process.env.MD_TEST_POLL_MS) : 15_000);
+const pollMs = () => envPollMs('MD_TEST_POLL_MS', 15_000);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // 找任务：完整 id、id 前缀（至少 4 位）、任务名，在最近 50 个里找；给了完整 id 却不在里面，就直接查 detail

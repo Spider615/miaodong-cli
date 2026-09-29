@@ -4,7 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { intArg, listArg, strArg } from '../args.mjs';
+import { boolArg, intArg, listArg, strArg } from '../args.mjs';
 import { EXIT, MdError, usage } from '../errors.mjs';
 import { asArray, getCanvas, listEvents, listSessions } from '../api.mjs';
 import { resolveBot, targetArgs } from '../target.mjs';
@@ -15,14 +15,14 @@ import { actionSummary, clip, formatCost, getExecDetail } from '../execs.mjs';
 import { NODE_LINE_LIMIT, nodeLine, normalizeDetail } from '../exec-detail.mjs';
 import { execDir, saveDetail } from '../exec-store.mjs';
 import { extractEmittedEvents } from '../exec-chain.mjs';
-import { UNKNOWN_RUN_COST, costSummary, draftVsLocal, nextRunCheck } from '../trial.mjs';
+import { UNKNOWN_RUN_COST, costSummary, draftVsLocal, nextRunCheck, planLines, spendPlan } from '../trial.mjs';
 import { runFlowOnce, sessionExecsAfter } from '../trial-run.mjs';
 import {
   actionLines, assertRunnable, buildEventData, buildSessionData, describeActions, entryNodes, eventSchedules, flowCostOf, flowPreflight,
   followCommand, graphFingerprint, isFreeNode, matchSession, paidProfile, reachableNodes, resolveEvent, scheduleLabel,
 } from '../flow-trial.mjs';
 import { nodeType } from '../graph.mjs';
-import { dayKey, loadLimits, readSpends, recordSpend, spendDecision, spentOn, updateSpend, withSpendLock } from '../spend.mjs';
+import { dayKey, loadLimits, readSpends, recordSpend, spentOn, updateSpend, withSpendLock } from '../spend.mjs';
 import { codeFor, givenCode, roundCost, stopForConfirm } from '../confirm.mjs';
 
 const safe = (value) => String(value).replace(/[^\w.@-]+/g, '_');
@@ -68,6 +68,13 @@ function lastPerRun(botId, entryKey, paidKey) {
   return hit ? hit.actualPerRun : null;
 }
 
+// --plan 只预演：和 --confirm 一起给说不通（预演不跑，码用不上）
+export function checkPlanFlag(args) {
+  const planOnly = boolArg(args, 'plan');
+  if (planOnly && givenCode(args) !== null) throw usage('--plan 和 --confirm 不能一起给', '--plan 只预演；用户同意后去掉 --plan、加 --confirm <码> 真跑');
+  return planOnly;
+}
+
 function checkFlags(args) {
   const text = strArg(args, 'text');
   const eventQuery = strArg(args, 'event');
@@ -83,7 +90,7 @@ function checkFlags(args) {
   const times = intArg(args, 'times', 1, 10);
   const sessionQuery = strArg(args, 'session');
   if (sessionQuery && times > 1) throw usage('--session 是接着同一个会话聊，只能跑 1 次', '要多跑几次看稳不稳：去掉 --session，每次新开会话');
-  return { text, eventQuery, times, sessionQuery };
+  return { text, eventQuery, times, sessionQuery, planOnly: checkPlanFlag(args) };
 }
 
 // 闸门（spec §4）：入口 → 可达范围 → 插件、不认识的类型拒跑。开跑前判一次，每次发请求前按最新草稿再判一次（审查 I2）
@@ -106,14 +113,14 @@ function gateFor(rawCanvas, entry, events) {
 
 // 事件那头（spec §5.3，审查 I3）：只说查到的。同会话后面有执行就列出来；查失败了就说不知道；
 // 没查到也不下「秒懂不会接着跑」的结论（还没实测过，延时的事件 md 也不等），只给「从事件入口接着跑」的命令并说清代价
-async function renderDownstream({ target, execId, sessionId, createdAt, outputActions, schedules, events }) {
+async function renderDownstream({ target, execId, sessionId, sinceMs, outputActions, schedules, events }) {
   const emitted = extractEmittedEvents(outputActions);
   if (!emitted.length) return;
   for (const ev of emitted) out(`   发出事件「${ev.eventName || shortId(ev.eventId)}」${scheduleLabel(schedules.get(ev.eventId))}`);
   let later = null;
   let failure = null;
   try {
-    later = await sessionExecsAfter(target.identity, target.orgId, { botId: target.botId, sessionId, execId, sinceMs: Date.parse(createdAt ?? '') || 0 });
+    later = await sessionExecsAfter(target.identity, target.orgId, { botId: target.botId, sessionId, execId, sinceMs });
   } catch (error) {
     if (error instanceof MdError && error.code === 'auth_expired') throw error;
     failure = error;
@@ -144,7 +151,7 @@ async function renderDownstream({ target, execId, sessionId, createdAt, outputAc
 }
 
 export async function runFlowTrial(args) {
-  const { text, eventQuery, times, sessionQuery } = checkFlags(args);
+  const { text, eventQuery, times, sessionQuery, planOnly } = checkFlags(args);
   const { target, ws } = await trialTarget(args);
   const draft = await getCanvas(target.identity, target.orgId, target.botId);
   const events = await listEvents(target.identity, target.orgId, target.botId);
@@ -193,13 +200,13 @@ export async function runFlowTrial(args) {
   const given = givenCode(args);
   // 确认码绑定能走到的那部分画布：拿到码之后草稿改了，码就对不上（审查 I2）
   const operation = (n, est) => ({ kind: 'flow', botId: target.botId, entry: entry.key, graph: gate.fingerprint, trigger, sessionData, session: fixedSession, times: n, estimate: roundCost(est), day: dayKey() });
+  if (planOnly) {
+    for (const line of planLines(spendPlan({ estimate, free: gate.free, operation: operation(times, estimate), rows: readSpends() }))) out(line);
+    return EXIT.OK;
+  }
   const plan = await withSpendLock(() => {
     const rows = readSpends();
-    const today = spentOn(rows);
-    const limits = loadLimits();
-    const probeFirst = estimate === null && today < limits.perDay;
-    const decision = spendDecision({ estimate, free: gate.free }, { limits, today });
-    const confirm = codeFor(operation(times, estimate), rows);
+    const { limits, probeFirst, decision, confirm } = spendPlan({ estimate, free: gate.free, operation: operation(times, estimate), rows });
     const confirmed = decision.needApproval && given === confirm.code;
     if (decision.needApproval && !confirmed && (given !== null || !probeFirst)) stopForConfirm({ ...confirm, given, reasons: decision.reasons });
     const id = recordSpend({
@@ -257,6 +264,8 @@ export async function runFlowTrial(args) {
       }
       const body = { canvasId: fresh.canvasId, sessionId, ...trigger, ...(sessionData ? { sessionMemoryData: sessionData } : {}) };
       let res;
+      // 结果里万一没有执行时间，找事件那头就从发请求这一刻算起：从 0 算会把同会话里更早的几轮当成事件那头（审查 M2）
+      const postedAt = Date.now();
       try {
         res = await runFlowOnce({ identity: target.identity, orgId: target.orgId, body });
       } catch (error) {
@@ -302,7 +311,7 @@ export async function runFlowTrial(args) {
       out(`   回复：${lines.reply || '没有发消息，也没有转人工'}`);
       if (lines.others) out(`   其它动作：${lines.others}`);
       if (result.canvasExec?.errorMessage) out(`   报错：${clip(String(result.canvasExec.errorMessage), 300)}`);
-      await renderDownstream({ target, execId, sessionId, createdAt: norm.exec.createdAt ?? result.canvasExec?.createdAt, outputActions: norm.exec.outputActions, schedules, events });
+      await renderDownstream({ target, execId, sessionId, sinceMs: Date.parse(norm.exec.createdAt ?? result.canvasExec?.createdAt ?? '') || postedAt, outputActions: norm.exec.outputActions, schedules, events });
     }
   } finally {
     // 花费不知道的那几次：按「历史单价和已跑单价取大的」记；都是 0 或没有，就按保守价 × 付费节点数（能走到的都不花钱时是 0）

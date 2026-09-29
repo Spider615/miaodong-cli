@@ -12,10 +12,11 @@ import { DATA_NOTE, formatTime, note, out, shortId, targetLine } from '../output
 import { clip, formatCost } from '../execs.mjs';
 import { locateExec } from '../exec-locate.mjs';
 import { normalizeDetail, promptText } from '../exec-detail.mjs';
-import { FREE_TYPES, UNKNOWN_RUN_COST, buildTrialInputs, classifyTrialNode, costOf, costSummary, draftVsLocal, inputDefs, nextRunCheck, parseInputPairs } from '../trial.mjs';
+import { FREE_TYPES, UNKNOWN_RUN_COST, buildTrialInputs, classifyTrialNode, costOf, costSummary, draftVsLocal, inputDefs, nextRunCheck, parseInputPairs, planLines, spendPlan } from '../trial.mjs';
 import { runNodeOnce } from '../trial-run.mjs';
-import { dayKey, loadLimits, readSpends, recordSpend, spendDecision, spentOn, updateSpend, withSpendLock } from '../spend.mjs';
+import { dayKey, loadLimits, readSpends, recordSpend, spentOn, updateSpend, withSpendLock } from '../spend.mjs';
 import { codeFor, givenCode, roundCost, stopForConfirm } from '../confirm.mjs';
+import { checkPlanFlag } from './trial-flow.mjs';
 import { buildBranchNameIndex } from '../../vendor/laodong/apps/api/lib/miaodong/badcase-normalize.ts';
 import { runFlowTrial, trialTarget } from './trial-flow.mjs';
 
@@ -72,9 +73,10 @@ export const trial = {
   summary: '试跑：单节点（用执行记录的原始输入复现、推草稿后复验）或整条链路（--text / --event，链路上有插件不跑）；跑的是草稿，超门槛要用户确认',
   usage: [
     'md trial <节点> (--bot <智能体> | --ws <工作副本>) [--from-exec <执行id>] [--input 键=值 …] [--inputs <文件.json>]',
-    '        [--times 1] [--keep-platform-params] [--allow-plugin] [--confirm <确认码>]',
-    'md trial --text "<用户消息>" (--bot … | --ws …) [--session <会话>] [--var 会话变量=值 …] [--times 1] [--confirm <确认码>]',
-    'md trial --event <事件名或id> [--data 事件变量=值 …] (--bot … | --ws …) [--session <会话>] [--var …] [--times 1] [--confirm <确认码>]',
+    '        [--times 1] [--keep-platform-params] [--allow-plugin] [--plan | --confirm <确认码>]',
+    'md trial --text "<用户消息>" (--bot … | --ws …) [--session <会话>] [--var 会话变量=值 …] [--times 1] [--plan | --confirm <确认码>]',
+    'md trial --event <事件名或id> [--data 事件变量=值 …] (--bot … | --ws …) [--session <会话>] [--var …] [--times 1] [--plan | --confirm <确认码>]',
+    '--plan：只预演（目标、输入或能走到的节点、预估、真跑时要不要确认和确认码），不发请求、不记账。',
     '跑的是秒懂上的草稿：本地改动要先 md push 才会生效。',
     '单节点只跑计算类节点；发消息、打标签、转人工、事件这类动作节点一律不跑。',
     '整条试跑：从入口（含事件那头）能走到插件或 md 不认识的节点就不跑（没法 mock 插件，走测试中心）；--session 只认 md 开过的试跑会话。',
@@ -87,6 +89,7 @@ export const trial = {
     if (!query) throw usage('缺节点：md trial <节点 id / id 前缀 / 名字> --bot <智能体>');
     const times = intArg(args, 'times', 1, 10);
     if (strArg(args, 'ws') && strArg(args, 'bot')) throw usage('--ws 和 --bot 只能给一个', '--ws 指定工作副本（智能体取它记的那个），--bot 指定智能体');
+    const planOnly = checkPlanFlag(args);
     const allowPlugin = boolArg(args, 'allow-plugin');
     const keepPlatform = boolArg(args, 'keep-platform-params');
     const { target, ws } = await trialTarget(args);
@@ -165,13 +168,13 @@ export const trial = {
     const external = cls.kind === 'plugin' ? cls.plugins : [];
     const given = givenCode(args);
     const operation = (n, est) => ({ kind: 'trial', botId: target.botId, nodeId: node.id, times: n, inputs: built.inputs, estimate: roundCost(est), external, day: dayKey() });
+    if (planOnly) {
+      for (const line of planLines(spendPlan({ estimate, external, free, operation: operation(times, estimate), rows: readSpends() }))) out(line);
+      return EXIT.OK;
+    }
     const plan = await withSpendLock(() => {
       const rows = readSpends();
-      const today = spentOn(rows);
-      const limits = loadLimits();
-      const probeFirst = estimate === null && !external.length && today < limits.perDay;
-      const decision = spendDecision({ estimate, externalCalls: external, free }, { limits, today });
-      const confirm = codeFor(operation(times, estimate), rows);
+      const { limits, probeFirst, decision, confirm } = spendPlan({ estimate, external, free, operation: operation(times, estimate), rows });
       const confirmed = decision.needApproval && given === confirm.code;
       if (decision.needApproval && !confirmed && (given !== null || !probeFirst)) stopForConfirm({ ...confirm, given, reasons: decision.reasons });
       const id = recordSpend({

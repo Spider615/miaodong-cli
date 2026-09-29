@@ -10,6 +10,7 @@ import { textKey } from './kb-package.mjs';
 import { WRITE_BATCH, createParagraph, docDetailRaw, downloadOriginal, listFaqRows, reviewFaqs } from './kb-write.mjs';
 import { batchesOf, chunks, createTracked, deleteTracked, describe, log, orphanRows, paragraphsOf, rowsOf, save, trimmed, writeDoc } from './kb-ops.mjs';
 import { out } from './output.mjs';
+import { envPollMs } from './poll.mjs';
 
 export const IMPORT_STEPS = ['snapshot', 'backup', 'canary', 'faqs', 'docs', 'verify', 'review', 'index', 'delete'];
 export const STEP_NAMES = {
@@ -18,7 +19,7 @@ export const STEP_NAMES = {
 };
 export const SELF_SCORE = 0.99; // 用自己的问题做语义搜索，要搜到自己、分数不低于它
 const INDEX_CONCURRENCY = 4;
-const pollMs = () => Number(process.env.MD_KB_POLL_MS) || 5000;
+const pollMs = () => envPollMs('MD_KB_POLL_MS', 5000);
 const waitMs = () => (Number(process.env.MD_KB_WAIT_S) || 480) * 1000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

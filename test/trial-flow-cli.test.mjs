@@ -172,6 +172,27 @@ test('用户消息恰好是 0 / no / false：原样当消息发，不当成开�
   assert.deepEqual(posts()[0].receiveTextMessage, { text: '0', customAttrs: [] });
 });
 
+test('--plan：闸门照查、预估照算，不发启动请求、不记账、不记会话', async () => {
+  fake.reset();
+  const h = home();
+  const r = await md(['trial', '--text', '我想退款', ...BOT, '--plan'], h);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /能走到 7 个节点/);
+  assert.match(r.stdout, /--plan：只预演，没发请求，没记账/);
+  assert.equal(posts().length, 0);
+  assert.equal(existsSync(join(h, 'md', 'spend.jsonl')), false);
+  assert.equal(readdirSync(join(h, 'md')).includes('trials'), false);
+});
+
+test('结果里没有执行时间：按本机发请求的时间找事件那头，同会话里更早的执行不算（审查 M2）', async () => {
+  const earlier = { execId: 'earlier-exec-001', createdAt: new Date(Date.now() - 10 * 60_000).toISOString(), status: 'success', outputActions: [{ type: 'send-text-message', payload: { text: '上一轮的回复' } }] };
+  fake.reset({ createdAt: undefined, later: [earlier] });
+  const r = await md(['trial', '--text', '我想退款', ...BOT], home());
+  assert.equal(r.code, 0, r.stderr);
+  assert.doesNotMatch(r.stdout, /earlier-exec-001/);
+  assert.match(r.stdout, /跑完时查了同一会话：还没有别的执行/);
+});
+
 test('花费：估不出先跑 1 次；按上次同入口的实际单价超单次门槛就给确认码、不跑；带对的码才跑', async () => {
   fake.reset({ cost: 0.3 });
   const h = home();

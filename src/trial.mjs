@@ -6,6 +6,8 @@ import { asArray } from './api.mjs';
 import { contentKey, nodeMap } from './canvas.mjs';
 import { usage } from './errors.mjs';
 import { formatCost } from './execs.mjs';
+import { codeFor } from './confirm.mjs';
+import { loadLimits, spendDecision, spentOn } from './spend.mjs';
 
 export const TRIAL_ALLOWED = new Set([
   'llm-completion', 'javascript-code', 'rule-center', 'query-knowledge-base', 'query-knowledge-child', 'query-sql-db',
@@ -134,4 +136,26 @@ export function nextRunCheck({ runs, remaining, perRun, confirmed, confirmedEsti
   if (projected > limits.perCommand) reasons.push(`按已跑的实际推算整条命令要 ${formatCost(projected)}，超过单次门槛 ${formatCost(limits.perCommand)}`);
   if (othersToday + projected > limits.perDay) reasons.push(`今天别的花费 ${formatCost(othersToday)}，加上这条命令超过每日上限 ${formatCost(limits.perDay)}`);
   return reasons.length ? { ok: false, reasons, rest, projected } : { ok: true, projected };
+}
+
+// 这一笔真跑时会怎样：要不要用户确认、确认码、估不出时是不是先跑 1 次。真跑（在记账锁里）和 --plan 用同一份判断：
+// --plan 不记账，账本不变，它给的确认码真跑时就对得上
+export function spendPlan({ estimate, external = [], free = false, operation, rows }) {
+  const today = spentOn(rows);
+  const limits = loadLimits();
+  return {
+    limits,
+    probeFirst: estimate === null && !external.length && today < limits.perDay,
+    decision: spendDecision({ estimate, externalCalls: external, free }, { limits, today }),
+    confirm: codeFor(operation, rows),
+  };
+}
+
+// md trial --plan 的结论：前面的预演信息（目标、输入 / 能走到的节点、预估）已经打过了
+export function planLines({ probeFirst, decision, confirm }) {
+  const lines = ['（--plan：只预演，没发请求，没记账）'];
+  if (!decision.needApproval) lines.push('真跑时：不用确认，直接跑（去掉 --plan）。');
+  else if (probeFirst) lines.push('真跑时：花费估不出，先跑 1 次看实际；按实际推算其余几次超了门槛才停下要确认。');
+  else lines.push(`真跑时：要用户确认（${decision.reasons.join('；')}）。把预估单独告诉用户，同意后同一条命令去掉 --plan、加 --confirm ${confirm.code}`);
+  return lines;
 }

@@ -19,11 +19,12 @@ import { listFaqs, listFiles } from './kb.mjs';
 import { appendLog, claimedIds, saveState } from './kb-import-store.mjs';
 import { textKey } from './kb-package.mjs';
 import { WRITE_BATCH, createFaqs, createManualDoc, createParagraph, deleteDoc, deleteFaqs, listParagraphRows } from './kb-write.mjs';
+import { envPollMs } from './poll.mjs';
 
 const OPS = { faq: { create: 'batch-create', delete: 'batch-delete' }, doc: { create: 'manual-create', delete: 'file-delete' } };
 const SHOW = 10;
 export const SETTLE_POLLS = 8; // 发完没认全，再列几次（间隔最多 1 秒：列表延迟 8 秒以内都认得上；都认上了就不再列）
-const settleMs = () => Math.min(Number(process.env.MD_KB_POLL_MS) || 1000, 1000);
+const settleMs = () => envPollMs('MD_KB_POLL_MS', 1000);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export const trimmed = (s) => String(s ?? '').trim();
 export const chunks = (xs, n) => Array.from({ length: Math.ceil(xs.length / n) }, (_, i) => xs.slice(i * n, i * n + n));
