@@ -5,8 +5,7 @@ import { join } from 'node:path';
 import { boolArg, intArg, listArg, strArg } from '../args.mjs';
 import { EXIT, MdError, usage } from '../errors.mjs';
 import { asArray, getCanvas } from '../api.mjs';
-import { resolveBot, targetArgs } from '../target.mjs';
-import { latestWorkspaceFor, loadWorkspace, stamp, targetFromMeta } from '../workspace.mjs';
+import { stamp } from '../workspace.mjs';
 import { resolveNode } from '../graph.mjs';
 import { ensureNewDir, mdHome } from '../home.mjs';
 import { DATA_NOTE, formatTime, note, out, shortId, targetLine } from '../output.mjs';
@@ -18,17 +17,9 @@ import { runNodeOnce } from '../trial-run.mjs';
 import { dayKey, loadLimits, readSpends, recordSpend, spendDecision, spentOn, updateSpend, withSpendLock } from '../spend.mjs';
 import { codeFor, givenCode, roundCost, stopForConfirm } from '../confirm.mjs';
 import { buildBranchNameIndex } from '../../vendor/laodong/apps/api/lib/miaodong/badcase-normalize.ts';
+import { runFlowTrial, trialTarget } from './trial-flow.mjs';
 
 const safe = (value) => String(value).replace(/[^\w.@-]+/g, '_');
-
-async function trialTarget(args) {
-  if (strArg(args, 'ws')) {
-    const ws = loadWorkspace(args);
-    return { target: targetFromMeta(ws.meta), ws };
-  }
-  const target = await resolveBot(targetArgs(args));
-  return { target, ws: latestWorkspaceFor(target.botId) };
-}
 
 const modelOf = (cell) => (typeof cell?.data?.nodePayload?.modelType === 'string' ? cell.data.nodePayload.modelType : null);
 
@@ -78,15 +69,20 @@ function readInputsFile(file) {
 }
 
 export const trial = {
-  summary: '单节点试跑：用执行记录里的原始输入复现、推草稿后复验（跑的是草稿；超门槛和调插件要用户确认）',
+  summary: '试跑：单节点（用执行记录的原始输入复现、推草稿后复验）或整条链路（--text / --event，链路上有插件不跑）；跑的是草稿，超门槛要用户确认',
   usage: [
     'md trial <节点> (--bot <智能体> | --ws <工作副本>) [--from-exec <执行id>] [--input 键=值 …] [--inputs <文件.json>]',
     '        [--times 1] [--keep-platform-params] [--allow-plugin] [--confirm <确认码>]',
-    '跑的是秒懂上的草稿：本地改动要先 md push 才会生效。只跑计算类节点；发消息、打标签、转人工、事件这类动作节点一律不跑。',
+    'md trial --text "<用户消息>" (--bot … | --ws …) [--session <会话>] [--var 会话变量=值 …] [--times 1] [--confirm <确认码>]',
+    'md trial --event <事件名或id> [--data 事件变量=值 …] (--bot … | --ws …) [--session <会话>] [--var …] [--times 1] [--confirm <确认码>]',
+    '跑的是秒懂上的草稿：本地改动要先 md push 才会生效。',
+    '单节点只跑计算类节点；发消息、打标签、转人工、事件这类动作节点一律不跑。',
+    '整条试跑：从入口（含事件那头）能走到插件或 md 不认识的节点就不跑（没法 mock 插件，走测试中心）；--session 只认 md 开过的试跑会话。',
     '预估超单次门槛、今天累计超每日上限、会真的调用插件时，md 不跑，只给预估和确认码（退出码 5）：单独问用户，同意后同一条命令加 --confirm <码>。',
     '估不出花费时先跑 1 次，按实际推算其余几次，超门槛就停下给其余几次的确认码。md spend 看门槛和花费。',
   ].join('\n'),
   async run(args) {
+    if (args.text !== undefined || args.event !== undefined) return runFlowTrial(args);
     const query = args._[0];
     if (!query) throw usage('缺节点：md trial <节点 id / id 前缀 / 名字> --bot <智能体>');
     const times = intArg(args, 'times', 1, 10);

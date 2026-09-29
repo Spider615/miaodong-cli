@@ -7,7 +7,7 @@ import { formatCost } from '../execs.mjs';
 import { dayKey, loadLimits, readSpends, saveLimits, spentOn } from '../spend.mjs';
 import { confirmCode, givenCode } from '../confirm.mjs';
 
-const KIND = { trial: '试跑', test: '测试' };
+const KIND = { trial: '试跑', flow: '整条试跑', test: '测试' };
 const APPROVED = { auto: '自动', confirm: '用户确认' };
 
 function moneyArg(args, key) {
