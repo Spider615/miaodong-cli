@@ -1,8 +1,10 @@
 // 自检只报「这次新引入的」问题：真实画布上原本就有几百条风险（实测 779 条），全报等于没报。
 // - 类型突变：数组被改成对象这类改坏，老懂的校验器和风险分析都查不出来（实测），这里单独查；
-// - 悬空：连线端点、节点引用指向不存在的节点，只报 after 有而 base 没有的；
+// - 悬空：连线端点、端口不存在，节点引用指向不存在的节点，逐条查，只报 after 有而 base 没有的。连线只在这里查：
+//   老懂的校验器也查连线，但按每次校验的范围汇总成一句，和这里的逐条报重复（逐节点校验时同一条还会按节点各报一遍）；
 // - 结构校验：用老懂的「按改动范围校验」，逐个节点校验：老懂的校验器一次只回第一个错误，整个范围一起校验时，
-//   只报得出第一个；范围内原本就不合格的（触发器没有 nodePayload 等）还会盖住别的节点新引入的错误。原本就有的不算新问题；
+//   只报得出第一个；范围内原本就不合格的（触发器没有 nodePayload 等）还会盖住别的节点新引入的错误。原本就有的不算新问题。
+//   交给它的画布去掉了连线，只查节点外壳和节点输入的引用；
 // - 风险：前后各跑一遍全图（D 组可达性是全图语义），按「code|rule|节点|连线|路径」多重集比对。
 //   key 不含 message：message 里带节点名，改个名就会全变成「新风险」。
 
@@ -50,7 +52,8 @@ export function newRisks(baseEnv, afterEnv) {
 // 调用方只关心「新出现的」：拿两份画布各算一遍，做集合差。
 export function graphProblems(env) {
   const nodes = new Map(env.canvas.filter((c) => c && typeof c === 'object' && !isEdgeCell(c)).map((c) => [c.id, c]));
-  const hasPort = (node, port) => !Array.isArray(node.ports?.items) || node.ports.items.some((p) => p?.id === port);
+  // 和老懂校验器一样严：端口要写、节点要有端口列表、列表里要有这个端口
+  const hasPort = (node, port) => typeof port === 'string' && port !== '' && Array.isArray(node.ports?.items) && node.ports.items.some((p) => p?.id === port);
   const problems = [];
   for (const edge of edgesOf(env.canvas)) {
     const source = nodes.get(edge.source?.cell);
@@ -87,12 +90,13 @@ export function runCheck(baseEnv, afterEnv) {
   if (!scope) {
     notes.push('有节点缺 id，跳过结构校验');
   } else {
-    // 同一条连线两头都在范围里时两个节点都会报它：去重
+    const nodesOnly = (env) => ({ ...env, canvas: env.canvas.filter((c) => !(c && typeof c === 'object' && isEdgeCell(c))) });
+    const [afterNodes, baseNodes] = [nodesOnly(afterEnv), nodesOnly(baseEnv)];
     const found = { errors: new Set(), notes: new Set(), warnings: new Set() };
     for (const id of scope) {
       const one = new Set([id]);
-      const afterReport = validateWorkflowJsonCandidateWithWarnings(afterEnv, one);
-      const baseReport = validateWorkflowJsonCandidateWithWarnings(baseEnv, one);
+      const afterReport = validateWorkflowJsonCandidateWithWarnings(afterNodes, one);
+      const baseReport = validateWorkflowJsonCandidateWithWarnings(baseNodes, one);
       if (afterReport.hardError) {
         if (afterReport.hardError === baseReport.hardError) found.notes.add(`改动范围内原本就有的问题（不是这次引入的）：${afterReport.hardError}`);
         else found.errors.add(afterReport.hardError);

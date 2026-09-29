@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { runCheck } from '../src/check.mjs';
 import { runCli, tempHome } from './helpers/run-cli.mjs';
 import { seedWorkspace } from './helpers/seed.mjs';
-import { U, sampleCanvas, sampleEvents, sampleSessions } from './helpers/fixtures.mjs';
+import { U, edge, sampleCanvas, sampleEvents, sampleSessions } from './helpers/fixtures.mjs';
 
 const env = (canvas) => ({ canvas, sessions: sampleSessions, events: sampleEvents });
 const patchNode = (canvas, id, fn) => canvas.map((c) => (c.id === id ? fn(structuredClone(c)) : c));
@@ -90,5 +90,20 @@ test('改动范围里原本就有的问题不会盖住这次新引入的：触�
   assert.ok(r.errors.some((e) => /节点 00000006-/.test(e)), r.errors.join('\n'));
   assert.ok(!r.errors.some((e) => /节点 00000001-/.test(e)), r.errors.join('\n'));
   assert.ok(r.notes.some((n) => /原本就有.*00000001-/.test(n)), r.notes.join('\n'));
+});
+
+test('悬空连线每条只报一次：连线由本工具自己查（逐条），结构校验只查节点，不再按节点各报一遍（整支审查 6）', () => {
+  const after = sampleCanvas().filter((c) => c.id !== U(3) && c.id !== U(4)).map((c) => (c.id === U(2) ? patchNode([c], U(2), (x) => { x.data.nodePayload.systemPrompt = 'x'; return x; })[0] : c));
+  const r = runCheck(env(sampleCanvas()), env(after));
+  assert.equal(r.errors.filter((e) => /00000003-/.test(e)).length, 1, r.errors.join('\n'));
+  assert.equal(r.errors.filter((e) => /00000004-/.test(e)).length, 1, r.errors.join('\n'));
+  assert.equal(r.errors.length, 2, r.errors.join('\n'));
+});
+
+test('连线端口查得和结构校验一样严：端口没写、节点没有端口列表都算端口不存在', () => {
+  const noPort = [...sampleCanvas(), { ...edge(105, 6, 3), target: { cell: U(3) } }];
+  assert.ok(runCheck(env(sampleCanvas()), env(noPort)).errors.some((e) => /的端口不存在/.test(e)));
+  const bare = [...patchNode(sampleCanvas(), U(900), (c) => c), edge(106, 1, 900)];
+  assert.ok(runCheck(env(sampleCanvas()), env(bare)).errors.some((e) => /的端口不存在/.test(e)));
 });
 
