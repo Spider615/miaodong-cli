@@ -69,6 +69,28 @@ export async function runEditScript(file, cases, ctx) {
   return { cases: copy, log };
 }
 
+// 秒懂保存用例时，把断言的 actionContent.payload.params 同步成 verifyPayload.params（09-29 实测：脚本只删了 verifyPayload
+// 里的参数，存完两处都没了；库里两处始终是整份相同的拷贝）。写之前照样同步一遍，计划、写入、回读比对都按秒懂会存的样子——
+// 不然回读必定「不一致」（09-29：删 62 条空的 urls 参数，报了 62 处误报）。
+// 脚本改了 actionContent 那份、又和 verifyPayload 对不上（也不是原来就有的那份）：秒懂会按 verifyPayload 覆盖，改动不会生效，算错
+export function syncAssertionParams(after, before) {
+  const list = Array.isArray(after?.canvasActionOutputAssertions) ? after.canvasActionOutputAssertions : null;
+  if (!list) return { testCase: after, errors: [] };
+  const original = new Set((Array.isArray(before?.canvasActionOutputAssertions) ? before.canvasActionOutputAssertions : [])
+    .map((x) => stableStringify(x?.actionContent?.payload?.params)));
+  const errors = [];
+  const synced = list.map((x, i) => {
+    const verify = x?.verifyPayload?.params;
+    const payload = x?.actionContent?.payload;
+    if (!isObject(verify) || !isObject(payload) || stableStringify(payload.params) === stableStringify(verify)) return x;
+    if (!original.has(stableStringify(payload.params))) {
+      errors.push(`用例「${after.name}」第 ${i + 1} 条断言改了 actionContent.payload.params，和 verifyPayload.params 对不上：秒懂保存时会按 verifyPayload.params 覆盖，这个改动不会生效（要改断言参数就改 verifyPayload.params，两份会自动同步）`);
+    }
+    return { ...x, actionContent: { ...x.actionContent, payload: { ...payload, params: structuredClone(verify) } } };
+  });
+  return { testCase: { ...after, canvasActionOutputAssertions: synced }, errors };
+}
+
 const SHAPES = [['triggerInputs', isObject, '对象'], ['sessionMemoryCustomData', isObject, '对象'], ['testNodeOutputAssertions', Array.isArray, '数组'], ['canvasActionOutputAssertions', Array.isArray, '数组']];
 
 // 改前改后逐条比：只看 update 会写的字段。别的字段变了、条数或 id 变了、name 改空或改出重名、形状不对都算错（spec §6.4）。
@@ -79,11 +101,13 @@ export function editChanges(before, after, { historyVarId = null } = {}) {
   const byId = new Map(after.map((c) => [c?.testCaseId, c]));
   const changed = [];
   for (const b of before) {
-    const a = byId.get(b.testCaseId);
-    if (!a) {
+    const found = byId.get(b.testCaseId);
+    if (!found) {
       errors.push(`用例「${b.name}」不见了（testCaseId 被改或被删）`);
       continue;
     }
+    const { testCase: a, errors: paramErrors } = syncAssertionParams(found, b);
+    errors.push(...paramErrors);
     const locked = Object.keys({ ...b, ...a }).filter((k) => !WRITABLE_FIELDS.includes(k) && stableStringify(a[k]) !== stableStringify(b[k]));
     if (locked.length) errors.push(`用例「${b.name}」改了不能改的字段：${locked.join('、')}（只能改 ${WRITABLE_FIELDS.join('、')}）`);
     const fields = WRITABLE_FIELDS.filter((k) => stableStringify(a[k]) !== stableStringify(b[k]));

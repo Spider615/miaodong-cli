@@ -17,6 +17,13 @@ const WRITABLE = ['name', 'dimension', 'triggerType', 'triggerInputs', 'sessionM
 // 服务端的触发类型枚举（spec §2.3 核对 8）
 const TRIGGERS = ['input', 'receive-text-message', 'receive-image-message', 'receive-audio-message', 'receive-video-message', 'receive-file-message', 'receive-other-message', 'receive-intent-comment', 'receive-note-message', 'receive-share-note-comment-message', 'receive-email-message', 'custom-attr-event', 'tag-event', 'join-room', 'new-friend', 'canvas-event-trigger', 'bot-receive-text-message', 'write-message', 'contact-lead-filled', 'wecom-contact-bind'];
 const isObj = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+// 秒懂保存用例时把断言的 actionContent.payload.params 同步成 verifyPayload.params（09-29 实测：只删 verifyPayload 里的参数，存完两处都没了）
+const syncParams = (c) => {
+  for (const a of Array.isArray(c?.canvasActionOutputAssertions) ? c.canvasActionOutputAssertions : []) {
+    if (isObj(a?.verifyPayload?.params) && isObj(a?.actionContent?.payload)) a.actionContent.payload.params = structuredClone(a.verifyPayload.params);
+  }
+  return c;
+};
 
 export async function startTestCenterServer({ itemCost = 0.02, perPoll = Infinity, tree = [] } = {}) {
   const state = { sets: [], cases: [], tasks: [], items: new Map(), posts: {}, log: [], canvas: null, itemCost, perPoll, tree, n: 0 };
@@ -112,8 +119,9 @@ export async function startTestCenterServer({ itemCost = 0.02, perPoll = Infinit
       const c = state.cases.find((x) => x.testCaseId === body.testCaseId);
       if (!c) return bad('test case not found');
       // 全量覆盖：没传的可写字段清空（spec §2.3）
-      for (const key of WRITABLE) c[key] = body[key] ?? (key === 'name' ? '' : null);
+      for (const key of WRITABLE) c[key] = structuredClone(body[key] ?? (key === 'name' ? '' : null));
       if (!state.keepDimension) c.dimension = ''; // 兴趣岛不保存 dimension（核对 8）
+      syncParams(c);
       return ok(null);
     },
     'POST /api/test-center/test-case/batch-delete': ({ body }) => {

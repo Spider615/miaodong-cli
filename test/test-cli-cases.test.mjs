@@ -275,3 +275,23 @@ test('import --from-file --into：先写的 1 条被丢时只撤回这 1 条；�
   assert.match(lost.stderr, /按 name 找不到：秒懂没存下 md 写的内容，没法撤回：集里可能多了一条/);
   assert.deepEqual(casesIn('外部回归').map((c) => c.name).sort(), ['旧-01', '退款-01（服务端改了名）']);
 });
+
+test('edit：只删断言 verifyPayload.params 里的一个参数，秒懂存的时候两处一起删——回读不能报「不一致」（09-29 误报 62 处）', async () => {
+  reset();
+  const h = home();
+  const seeded = await md(['test', 'import', '外部回归', '--bot', '179cd443', '--from-file', jsonl(h, [
+    { name: '退款-01', text: '我想退款', expect: { event: '发送4.0', params: { text: '应说明退款流程', urls: '应带退款链接' } } },
+  ], 'seed-urls.jsonl')], h);
+  assert.equal(seeded.code, 0, seeded.stdout + seeded.stderr);
+  const file = editFile(h, `export default ({ cases }) => {
+  for (const c of cases) for (const a of c.canvasActionOutputAssertions) delete a.verifyPayload.params.urls;
+};`, 'drop-urls.mjs');
+  const code = planCode((await md(['test', 'edit', '外部回归', file, '--bot', '179cd443'], h)).stdout);
+  assert.ok(code);
+  const r = await md(['test', 'edit', '外部回归', file, '--bot', '179cd443', '--confirm', code], h);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.doesNotMatch(r.stdout, /读回来和改的不一样/);
+  const saved = casesIn('外部回归')[0].canvasActionOutputAssertions[0];
+  assert.deepEqual(Object.keys(saved.verifyPayload.params), ['text']);
+  assert.deepEqual(Object.keys(saved.actionContent.payload.params), ['text']);
+});

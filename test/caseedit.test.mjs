@@ -74,3 +74,16 @@ test('h.pick：带 g 标志的正则也不漏（审查 M9）', () => {
   const h = createEditHelpers([stored(1), stored(2), stored(3)], ctx, []);
   assert.equal(h.pick(/退款/g).length, 3);
 });
+
+test('editChanges：断言两处 params 照秒懂的做法同步（actionContent 跟着 verifyPayload）；只改了 actionContent 那份的算错（09-29 回读误报）', () => {
+  const assertion = (params) => ({ verifyPayload: { type: 'canvas-event-action', eventId: 'tev-send', params: structuredClone(params) }, actionContent: { type: 'canvas-event-action', payload: { eventId: 'tev-send', eventName: '发送4.0', params: structuredClone(params) } } });
+  const b = stored(1, { canvasActionOutputAssertions: [assertion({ text: { verifyType: 'llm', value: '应说明退款' }, urls: { verifyType: 'llm', value: '' } })] });
+  const onlyVerify = structuredClone(b);
+  delete onlyVerify.canvasActionOutputAssertions[0].verifyPayload.params.urls;
+  const r = editChanges([b], [onlyVerify]);
+  assert.deepEqual(r.errors, []);
+  assert.deepEqual(Object.keys(r.changed[0].after.canvasActionOutputAssertions[0].actionContent.payload.params), ['text']);
+  const onlyAction = structuredClone(b);
+  delete onlyAction.canvasActionOutputAssertions[0].actionContent.payload.params.urls;
+  assert.match(editChanges([b], [onlyAction]).errors.join(), /actionContent\.payload\.params[^；]*不会生效/);
+});
