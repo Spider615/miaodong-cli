@@ -6,7 +6,7 @@
 import { request } from './http.mjs';
 import { asArray } from './api.mjs';
 import { MdError, usage } from './errors.mjs';
-import { formatTime } from './output.mjs';
+import { cut, formatTime } from './output.mjs';
 import { extractTriggerTextFromSnapshot } from '../vendor/laodong/apps/api/lib/miaodong/badcase-normalize.ts';
 
 export const PAGE_SIZE = 100;
@@ -59,8 +59,7 @@ export function resolveAlias(aliases, value, flag) {
 }
 
 export function clip(value, max) {
-  const text = String(value ?? '').replace(/\s+/g, ' ').trim();
-  return text.length > max ? `${text.slice(0, max)}…` : text;
+  return cut(String(value ?? '').replace(/\s+/g, ' ').trim(), max);
 }
 
 export function formatCost(cost) {

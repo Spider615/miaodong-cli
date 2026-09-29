@@ -1,6 +1,10 @@
 import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ACTION_ALIASES, TRIGGER_ALIASES, actionSummary, actionTexts, buildSearchBody, clip, formatCost, formatRow, resolveAlias, scanSummary, searchExecutions, summarizeRow } from '../src/execs.mjs';
+import { cut } from '../src/output.mjs';
 import { ok, startFakeMiaodong } from './helpers/fake-miaodong.mjs';
 import { ASK, REPLY, X, chainRows } from './helpers/exec-fixtures.mjs';
 
@@ -135,3 +139,18 @@ test('searchExecutions：不用本地筛时按 --limit 取页', async () => {
   assert.deepEqual(pages, [1, 2]);
   assert.equal(r.stop, 'limit');
 });
+
+test('截断不劈开 emoji：截在一对代理项中间时整个字符不要（终端里显示成乱码）', () => {
+  assert.equal(clip('ab😀cd', 3), 'ab…');
+  assert.equal(clip('ab😀cd', 4), 'ab😀…');
+  assert.equal(cut('{"a":"😀😀"}', 7), '{"a":"…');
+  assert.equal(cut('短', 7), '短');
+});
+
+test('截断文字一律走 output.mjs 的 cut（或 execs.mjs 的 clip）：别处不再自己 slice 再加省略号', () => {
+  const SRC = fileURLToPath(new URL('../src/', import.meta.url));
+  const files = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((d) => (d.isDirectory() ? files(join(dir, d.name)) : d.name.endsWith('.mjs') ? [join(dir, d.name)] : []));
+  const offenders = files(SRC).filter((f) => /\$\{\w+\.slice\(0, [^)]+\)\}…/.test(readFileSync(f, 'utf-8')));
+  assert.deepEqual(offenders.map((f) => f.slice(SRC.length)), []);
+});
+

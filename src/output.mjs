@@ -27,6 +27,13 @@ export async function finish(code) {
   process.exit(code);
 }
 
+// 超过 max 个字就截断加省略号。截在一对代理项（emoji 等）中间时整个字符不要：半个字符在终端里是乱码
+export function cut(text, max) {
+  if (text.length <= max) return text;
+  const head = text.slice(0, max);
+  return `${/[\uD800-\uDBFF]$/.test(head) ? head.slice(0, -1) : head}…`;
+}
+
 export function formatTime(value) {
   if (value === null || value === undefined || value === '') return '-';
   const date = new Date(value);

@@ -42,7 +42,7 @@ test('kb api：语义搜索只回已审核、0.8 以上的，带分数；文字�
   const text = await searchFaqs(who(server), 'org-1', KB_FAQ, '课程可以退吗', { mode: 'text' });
   assert.deepEqual(text.map((f) => f.id), [7004]);
   const similar = await checkSimilarity(who(server), 'org-1', KB_FAQ, '课程可以退吗');
-  assert.deepEqual(similar[0], { id: 7004, question: '课程可以退吗', answer: '开课七天内可以全额退。', reviewed: false, generated: false, duplicateStatus: 'normal', similarity: 1 });
+  assert.deepEqual(similar[0], { id: 7004, question: '课程可以退吗', answer: '开课七天内可以全额退。', reviewed: false, generated: false, duplicateStatus: 'normal', similarity: 1, createdAt: null });
 });
 
 test('kb api：段落列表同时带数字 id 和 knowledgeBaseId（缺了服务端回 400，spec §2.2 第 2 条）；文件详情', async () => {
@@ -68,3 +68,15 @@ test('kb api：字段认不出时不猜——审核状态、各类条数缺了�
   assert.equal(normalizeFaq({ qaId: 1, reviewed: true }).reviewed, true);
   assert.deepEqual(normalizeKb({ id: 'k', name: 'n' }), { id: 'k', name: 'n', faqCount: null, fileCount: null, webCount: null, videoCount: null, model: '' });
 });
+
+test('FAQ 的上传时间（createdTime）：毫秒、秒、日期串都认成毫秒；认不出是 null', async () => {
+  const { normalizeFaq } = await import('../src/kb.mjs');
+  const at = (createdTime) => normalizeFaq({ id: 1, question: 'q', createdTime }).createdAt;
+  assert.equal(at(1759100000000), 1759100000000);
+  assert.equal(at(1759100000), 1759100000000);
+  assert.equal(at('1759100000000'), 1759100000000);
+  assert.equal(at('2026-09-29T00:00:00.000Z'), Date.parse('2026-09-29T00:00:00.000Z'));
+  assert.equal(at('不是时间'), null);
+  assert.equal(at(undefined), null);
+});
+

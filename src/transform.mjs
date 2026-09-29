@@ -11,6 +11,7 @@ import { pathToFileURL } from 'node:url';
 import { EXIT, MdError, usage } from './errors.mjs';
 import { isEdgeCell, stableStringify } from './canvas.mjs';
 import { businessNodes, edgesOf, nodeName, resolveNode } from './graph.mjs';
+import { cut } from './output.mjs';
 
 export class TransformError extends MdError {
   constructor(message) {
@@ -73,8 +74,7 @@ function countOccurrences(text, find) {
 }
 
 function preview(text) {
-  const flat = String(text).replace(/\s+/g, ' ');
-  return flat.length > 30 ? `${flat.slice(0, 30)}…` : flat;
+  return cut(String(text).replace(/\s+/g, ' '), 30);
 }
 
 export function createHelpers(ctx, log) {

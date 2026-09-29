@@ -10,7 +10,7 @@ import { clip } from '../execs.mjs';
 import { PAGE_SIZE, SEARCH_SIZE, SEMANTIC_FLOOR, checkSimilarity, firstPerFaq, listFaqs, listFiles, listKbs, listParagraphs, searchFaqs } from '../kb.mjs';
 import { diagnose, drifted, sameText } from '../kb-diagnose.mjs';
 import { retrievalsOf } from '../kb-retrieval.mjs';
-import { DATA_NOTE, out, shortId, targetLine } from '../output.mjs';
+import { DATA_NOTE, formatTime, out, shortId, targetLine } from '../output.mjs';
 
 const fmt = (n) => (typeof n === 'number' ? n.toFixed(3) : '?');
 const unit = (t) => (typeof t === 'number' && t > 1 ? t / 100 : t); // 知识库查询节点的门槛写成 80，工具调用写成 0.8
@@ -19,6 +19,8 @@ const isFaqHit = (h) => h.type === 'qa';
 const hitLine = (h) => (isFaqHit(h) ? `#${h.faqId} ${fmt(h.score)}` : `#${h.faqId ?? '?'}（${h.type}）${fmt(h.score)}`);
 const hasT = (r) => typeof r.threshold === 'number';
 const thresholdText = (r) => (hasT(r) ? `门槛 ${fmt(r.threshold)}` : '门槛没记录');
+// FAQ 的上传时间晚于这次执行：执行的时候库里还没有它。上传时间或执行时间认不出就不下这个结论
+const addedAfter = (faq, execAt) => typeof faq?.createdAt === 'number' && typeof execAt === 'number' && faq.createdAt > execAt;
 
 // 这次执行里的检索，按节点的每一次运行归成一处：一处里可能有好几次工具调用
 function groups({ calls, kbNodes, silent }) {
@@ -238,6 +240,8 @@ async function reportRetrieval(ctx, r, userText, expect) {
   const byUser = !r.noReplay && userText && !sameText(userText, r.query) ? await replay(ctx, kbIds, userText) : byQuery;
   if (r.kind === 'call' && !r.noReplay && drifted(r, byQuery.rows)) {
     out('  ⚠️ 知识库在这次执行之后改过：用同样的查询重放，结果和记录不一样，下面的结论要打折扣');
+    const late = firstPerFaq(byQuery.rows).filter((f) => addedAfter(f, ctx.execAt));
+    if (late.length) out(`    其中 ${late.slice(0, 5).map((f) => `#${f.id}`).join('、')}${late.length > 5 ? ` 等 ${late.length} 条` : ''} 是执行之后才上传的`);
   }
   if (!expect) {
     await candidates(ctx, r, kbIds, byQuery.rows, userText);
@@ -258,6 +262,12 @@ async function reportRetrieval(ctx, r, userText, expect) {
     replay: t.kind === 'faq' ? { query: place(byQuery, t.item.id, r.threshold), user: place(byUser, t.item.id, r.threshold) } : {},
     userText,
   });
+  // 这一条是执行之后才上传的：没召回的原因就是当时库里没有它；按现在的库推出来的原因只能当补充
+  if (t.kind === 'faq' && addedAfter(t.item, ctx.execAt)) {
+    out(`结论：执行之后才上传的 —— 这一条上传于 ${formatTime(t.item.createdAt)}，执行在 ${formatTime(ctx.execAt)}：执行的时候库里还没有它`);
+    for (const x of reasons.filter((y) => y.code !== 'unknown')) out(`补充（按现在的库推的）：${x.title} —— ${x.detail}`);
+    return { callIndex: r.callIndex, recalled: false, title: '执行之后才上传的' };
+  }
   out(`结论：${reasons[0].title} —— ${reasons[0].detail}`);
   for (const x of reasons.slice(1)) out(`补充：${x.title} —— ${x.detail}`);
   return { callIndex: r.callIndex, recalled: false, title: reasons[0].title };
@@ -293,7 +303,7 @@ export async function why(args) {
   // 取不到文本时，老懂的取法会退化成「[canvas-event-trigger]」这类占位符：当作取不到，不拿它去重放
   const raw = norm.exec.triggerText || '';
   const userText = /^\[[\w-]+\]$/.test(raw) ? '' : raw;
-  const ctx = { identity: target.identity, orgId: target.orgId, kbs: null, faqs: new Map() };
+  const ctx = { identity: target.identity, orgId: target.orgId, kbs: null, faqs: new Map(), execAt: Date.parse(norm.exec.createdAt ?? '') || null };
   out(`${targetLine({ ...target, versionLabel: norm.version || undefined })} · 执行 ${shortId(execId)}`);
   out(DATA_NOTE);
   out(`用户原话：${userText ? clip(userText, 200) : '（取不到：这次不是文本消息触发的）'}`);

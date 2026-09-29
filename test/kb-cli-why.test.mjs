@@ -409,3 +409,21 @@ test('md kb why：关键词匹配到的超过 20 条时照实报条数（整支�
     await s.close();
   }
 });
+
+test('md kb why：目标 FAQ 是执行之后才上传的——结论就是「执行的时候库里还没有它」，按现在的库推的原因降成补充；「改过」的提醒点出是哪几条', async () => {
+  const late = { id: 7005, kb: KB_FAQ, question: '课程退款要多久', answer: '三个工作日。', isReviewed: true, createdTime: new Date().toISOString() };
+  const early = faqs().map((f) => ({ ...f, createdTime: '2026-01-01T00:00:00.000Z' }));
+  const srv = await startKbServer({ details: { [X(72)]: kbExec(72, '课程退款要多久', [toolCall(KB_FAQ, '课程退款要多久', { threshold: 0.6 })]) }, faqRows: [...early, late] });
+  try {
+    const r = await runCli(['kb', 'why', X(72), '--expect', '7005'], { home: home(srv.origin) });
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout, /⚠️ 知识库在这次执行之后改过[^\n]*\n\s+其中 #7005 是执行之后才上传的/);
+    assert.match(r.stdout, /结论：执行之后才上传的 —— 这一条上传于 \S+ \S+，执行在 \S+ \S+：执行的时候库里还没有它/);
+    assert.doesNotMatch(r.stdout, /结论：(?!执行之后才上传的)/);
+    const old = await runCli(['kb', 'why', X(72), '--expect', '7001'], { home: home(srv.origin) });
+    assert.doesNotMatch(old.stdout, /结论：执行之后才上传的/);
+  } finally {
+    srv.close();
+  }
+});
+

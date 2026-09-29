@@ -4,7 +4,7 @@
 
 import { contentKey, edgeMap, isVisualOnlyCell, nodeMap, stableStringify, stripLayout } from './canvas.mjs';
 import { nodeName, nodeType } from './graph.mjs';
-import { shortId } from './output.mjs';
+import { cut, shortId } from './output.mjs';
 
 export const kindOf = (value) => (Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value);
 
@@ -110,8 +110,7 @@ export function nameMapOf(...canvases) {
 
 function brief(value) {
   if (value === undefined) return '（无）';
-  const text = JSON.stringify(value);
-  return text.length > 80 ? `${text.slice(0, 80)}…` : text;
+  return cut(JSON.stringify(value), 80);
 }
 
 function edgeLabel(key, names) {
