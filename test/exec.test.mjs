@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { runCli, tempHome } from './helpers/run-cli.mjs';
 import { seedIdentity } from './helpers/seed.mjs';
 import { startExecServer } from './helpers/exec-server.mjs';
-import { EXEC_BOT, REPLY, X, chainRows, detailOf } from './helpers/exec-fixtures.mjs';
+import { EXEC_BOT, REPLY, X, at, chainRows, detailOf } from './helpers/exec-fixtures.mjs';
 
 let server;
 before(async () => {
@@ -13,10 +13,18 @@ before(async () => {
 });
 after(() => server.close());
 
-function home() {
+function home(srv = server) {
   const h = tempHome();
-  seedIdentity(h, { key: 'k1', label: '测试区', origin: server.origin, token: 't', orgs: [{ id: 'org-1', name: '兴趣岛平台' }], currentOrgId: 'org-1' });
+  seedIdentity(h, { key: 'k1', label: '测试区', origin: srv.origin, token: 't', orgs: [{ id: 'org-1', name: '兴趣岛平台' }], currentOrgId: 'org-1' });
   return h;
+}
+async function withServer(options, fn) {
+  const srv = await startExecServer(options);
+  try {
+    return await fn((args) => runCli(args, { home: home(srv) }));
+  } finally {
+    srv.close();
+  }
 }
 const md = (args, h = home()) => runCli(args, { home: h });
 const lastList = () => server.requests.filter((q) => q.path === '/api/canvas/history/list').at(-1).body;
@@ -130,6 +138,42 @@ test('测试执行：说明没有事件链，不去查列表', async () => {
   assert.match(r.stdout, /测试执行/);
   assert.match(r.stdout, /不在执行列表里，没有事件链/);
   assert.equal(count('/api/canvas/history/list'), lists);
+});
+
+test('测试执行的事件名：按事件列表显示名字，不只显示 id 开头几位', async () => {
+  const r = await md(['exec', X(9)]);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, / · 事件「发送」 · /);
+});
+
+test('事件链只认同一会话：列表接口没按会话筛时，别的会话里载荷一样的执行不会被串进来', async () => {
+  const foreign = { ...chainRows().find((r) => r.execId === X(3)), execId: X(7), sessionId: '66f00000000000000000ffff', createdAt: at(60) };
+  await withServer({ rows: [...chainRows(), foreign], ignoreSession: true }, async (run) => {
+    const r = await run(['exec', X(2)]);
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout, /→ e0000003 /);
+    assert.doesNotMatch(r.stdout, /e0000007/);
+  });
+});
+
+test('事件链查不到（列表接口出错）：照样显示这条执行，事件链那行说取不到和原因', async () => {
+  await withServer({ listFails: true }, async (run) => {
+    const r = await run(['exec', X(2)]);
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout, /事件链：取不到（秒懂接口报错 .*HTTP 500/);
+    assert.match(r.stdout, /节点（按执行顺序）：/);
+  });
+});
+
+test('详情接口回的东西认不出（没有 canvasExec）：报认不出，不说找不到', async () => {
+  await withServer({ extraDetails: { [X(8)]: { unexpected: true } } }, async (run) => {
+    const one = await run(['exec', X(8), '--bot', '147bd600']);
+    assert.equal(one.code, 1, one.stderr);
+    assert.match(one.stderr, /认不出/);
+    assert.doesNotMatch(one.stderr, /找不到执行/);
+    const all = await run(['exec', X(8)]);
+    assert.match(all.stderr, /认不出/);
+  });
 });
 
 test('md exec <id> --node：输入、prompt 全文文件、工具调用', async () => {

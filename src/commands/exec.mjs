@@ -4,8 +4,8 @@
 import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { boolArg, intArg, strArg } from '../args.mjs';
-import { EXIT, usage } from '../errors.mjs';
-import { getCanvas, listVersions } from '../api.mjs';
+import { EXIT, MdError, usage } from '../errors.mjs';
+import { getCanvas, listEvents, listVersions } from '../api.mjs';
 import { resolveBot, resolveVersion, targetArgs } from '../target.mjs';
 import { DATA_NOTE, formatTime, note, out, shortId, targetLine } from '../output.mjs';
 import { parseDuration, timeWindow } from '../timewin.mjs';
@@ -82,27 +82,40 @@ async function searchExecs(args) {
   return EXIT.OK;
 }
 
+// 事件链要再查一次列表：查不到（接口出错、超时、身份过期）只影响这一行，这条执行的其余内容照样显示
+async function chainOfExec(args, target, norm) {
+  const e = norm.exec;
+  if (e.testRun) return { lines: ['事件链：测试 / 试跑执行不在执行列表里，没有事件链'], eventName: '' };
+  if (!e.event && !extractEmittedEvents(e.outputActions).length) return { lines: ['事件链：无（这条没有收发事件）'], eventName: '' };
+  const windowMs = args['chain-window'] !== undefined ? parseDuration(strArg(args, 'chain-window')) : DEFAULT_CHAIN_WINDOW_MS;
+  const center = Date.parse(e.createdAt ?? '') || Date.now();
+  let pool;
+  try {
+    pool = await fetchSessionPool(target.identity, target.orgId, target.botId, e.sessionId, center, windowMs);
+  } catch (error) {
+    if (!(error instanceof MdError)) throw error;
+    return { lines: [`事件链：取不到（${error.message}）${error.hint ? `→ ${error.hint}` : ''}`], eventName: '' };
+  }
+  const rowsById = new Map(pool.rows.map((r) => [r.execId, r]));
+  if (!rowsById.has(e.execId)) rowsById.set(e.execId, { outputActions: e.outputActions, totalCostInCny: e.cost });
+  const chain = chainOf(e.execId, pool.rows, chainExecFromDetail(norm));
+  if (!chain) return { lines: ['事件链：取不到'], eventName: '' };
+  const lines = renderChain(chain, rowsById, { windowLabel: `执行时间前后 ${Math.round(windowMs / 60_000)} 分钟`, truncatedBefore: pool.truncatedBefore, truncatedAfter: pool.truncatedAfter });
+  if (pool.foreign) lines.push(`  （列表接口回了 ${pool.foreign} 条别的会话的执行，已排除）`);
+  return { lines, eventName: chain.target?.triggeredBy?.eventName ?? '' };
+}
+
+// 事件名：事件链里有就用；没有（测试执行、事件链取不到）再查一次事件列表，取不到才只显示 id 开头
+async function eventLabel(target, event, known) {
+  if (known) return known;
+  const events = await listEvents(target.identity, target.orgId, target.botId).catch(() => null);
+  return (events ?? []).find((x) => x?.eventId === event.eventId)?.name || shortId(event.eventId);
+}
+
 async function showExec(args, target, norm, dir) {
   const e = norm.exec;
-  let chainLines;
-  let eventName = '';
-  if (e.testRun) {
-    chainLines = ['事件链：测试 / 试跑执行不在执行列表里，没有事件链'];
-  } else if (!e.event && !extractEmittedEvents(e.outputActions).length) {
-    chainLines = ['事件链：无（这条没有收发事件）'];
-  } else {
-    const windowMs = args['chain-window'] !== undefined ? parseDuration(strArg(args, 'chain-window')) : DEFAULT_CHAIN_WINDOW_MS;
-    const center = Date.parse(e.createdAt ?? '') || Date.now();
-    const pool = await fetchSessionPool(target.identity, target.orgId, target.botId, e.sessionId, center, windowMs);
-    const rowsById = new Map(pool.rows.map((r) => [r.execId, r]));
-    if (!rowsById.has(e.execId)) rowsById.set(e.execId, { outputActions: e.outputActions, totalCostInCny: e.cost });
-    const chain = chainOf(e.execId, pool.rows, chainExecFromDetail(norm));
-    eventName = chain?.target?.triggeredBy?.eventName ?? '';
-    chainLines = chain
-      ? renderChain(chain, rowsById, { windowLabel: `执行时间前后 ${Math.round(windowMs / 60_000)} 分钟`, truncatedBefore: pool.truncatedBefore, truncatedAfter: pool.truncatedAfter })
-      : ['事件链：取不到'];
-  }
-  const trigger = e.event ? `事件「${eventName || shortId(e.event.eventId)}」` : e.triggerType || '-';
+  const { lines: chainLines, eventName } = await chainOfExec(args, target, norm);
+  const trigger = e.event ? `事件「${await eventLabel(target, e.event, eventName)}」` : e.triggerType || '-';
   out(targetLine(target));
   out(DATA_NOTE);
   out(`执行 ${e.execId} · ${formatTime(e.createdAt)} · ${trigger} · ${e.status} · 节点 ${norm.nodes.length} 个 · ${(e.ms / 1000).toFixed(1)}s · ${formatCost(e.cost)}${e.testRun ? ' · 测试执行' : ''}`);

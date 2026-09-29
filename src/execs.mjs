@@ -32,7 +32,8 @@ export async function listExecutions(identity, orgId, body) {
   return { rows: asArray(payload?.data), total: Number.isFinite(total) ? total : null };
 }
 
-// 找不到时秒懂回业务错误 CANVAS_EXEC_NOT_FOUND；这里统一成 null，由调用方决定报什么
+// 找不到时秒懂回业务错误 CANVAS_EXEC_NOT_FOUND（或没有 data）；这里统一成 null，由调用方决定报什么。
+// 回了东西却没有 canvasExec 是格式认不出，照实报错：以前也当成找不到，接口一改所有执行都会报「找不到」
 export async function getExecDetail(identity, orgId, execId, botId) {
   let payload;
   try {
@@ -42,7 +43,11 @@ export async function getExecDetail(identity, orgId, execId, botId) {
     throw error;
   }
   const data = payload?.data;
-  return data?.canvasExec ? data : null;
+  if (data === null || data === undefined) return null;
+  if (!data.canvasExec || typeof data.canvasExec !== 'object') {
+    throw new MdError('exec_detail_shape', `执行 ${execId} 的详情格式认不出（没有 canvasExec）`, { hint: '秒懂的接口可能改了：把执行 id 和 md --version 告诉维护 md 的人' });
+  }
+  return data;
 }
 
 export function resolveAlias(aliases, value, flag) {

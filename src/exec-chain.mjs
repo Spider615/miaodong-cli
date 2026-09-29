@@ -27,18 +27,24 @@ async function fetchRange(identity, orgId, botId, sessionId, start, end) {
 }
 
 // 以本条为界分两段查。列表是新到旧：只查一整段时，翻页上限先丢掉的恰好是本条之前的上游（审查 I-3）；
-// 分段后，前一段离本条最近的先回来，截断时丢的是离得最远的
+// 分段后，前一段离本条最近的先回来，截断时丢的是离得最远的。
+// 回来的每条再按 sessionId 复核：接口万一没认会话条件，别的会话里载荷一样的执行会被当成上下游串进来（foreign 是排除了几条）
 export async function fetchSessionPool(identity, orgId, botId, sessionId, centerMs, windowMs) {
   const before = await fetchRange(identity, orgId, botId, sessionId, centerMs - windowMs, centerMs);
   const after = await fetchRange(identity, orgId, botId, sessionId, centerMs, centerMs + windowMs);
   const seen = new Set();
   const rows = [];
+  let foreign = 0;
   for (const row of [...before.rows, ...after.rows]) {
     if (seen.has(row?.execId)) continue;
     seen.add(row?.execId);
+    if (row?.sessionId !== undefined && row.sessionId !== sessionId) {
+      foreign++;
+      continue;
+    }
     rows.push(row);
   }
-  return { rows, truncated: before.truncated || after.truncated, truncatedBefore: before.truncated, truncatedAfter: after.truncated };
+  return { rows, foreign, truncated: before.truncated || after.truncated, truncatedBefore: before.truncated, truncatedAfter: after.truncated };
 }
 
 export function chainExecFromDetail(norm) {
