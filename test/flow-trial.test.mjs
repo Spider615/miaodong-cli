@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { U, edge, node } from './helpers/fixtures.mjs';
 import {
   assertRunnable, buildEventData, buildSessionData, describeActions, entryNodes, eventSchedules, flowCostOf, flowPreflight,
-  followCommand, matchSession, reachableNodes, resolveEvent, scheduleLabel, typedValue,
+  actionLines, followCommand, graphFingerprint, matchSession, paidProfile, reachableNodes, resolveEvent, scheduleLabel, typedValue,
 } from '../src/flow-trial.mjs';
 
 const text = (n) => node(n, { name: '收到文本', type: 'receive-text-message', category: 'trigger' });
@@ -137,10 +137,56 @@ test('eventSchedules / scheduleLabel / followCommand：延时写进说明；接�
   assert.equal(scheduleLabel(schedules.get('ev-a')), '（延时 10 秒）');
   assert.equal(scheduleLabel(schedules.get('ev-b')), '');
   const short = followCommand({ eventId: 'ev-a', eventName: '延时回复', params: { text: "我想'退款'", n: 2 } }, { bot: '147bd600', session: 'sess-1234' });
-  assert.equal(short.command, `md trial --event '延时回复' --bot 147bd600 --session sess-1234 --data 'text=我想'\\''退款'\\''' --data n=2`);
+  assert.equal(short.command, `md trial --event ev-a --bot 147bd600 --session sess-1234 --data 'text=我想'\\''退款'\\''' --data n=2`);
   assert.equal(short.clipped, false);
   const long = followCommand({ eventId: 'ev-a', eventName: '', params: { text: 'x'.repeat(300) } }, { bot: 'b', session: 's' });
   assert.equal(long.clipped, true);
   assert.match(long.command, /--event ev-a /);
   assert.ok(long.command.length < 300);
+});
+
+
+test('reachableNodes：打标签会触发「标签变化」触发器、改自定义属性会触发「自定义属性变化」触发器，这两条连锁也算（保守，审查 I4）', () => {
+  const canvas = [text(1), act(2, 'tag-user'), node(3, { name: '标签变化', type: 'tag-event', category: 'trigger' }), plugin(4),
+    act(5, 'update-custom-attr'), node(6, { name: '属性变化', type: 'custom-attr-event', category: 'trigger' }), llm(7),
+    edge(101, 1, 2), edge(102, 3, 4), edge(103, 1, 5), edge(104, 6, 7)];
+  const reached = reachableNodes(canvas, [U(1)]).map((c) => c.id);
+  assert.ok(reached.includes(U(4)) && reached.includes(U(7)), reached.join(','));
+  assert.throws(() => assertRunnable(flowPreflight(reachableNodes(canvas, [U(1)]))), (e) => e.code === 'trial_flow_plugin');
+});
+
+test('flowPreflight：不管什么类型，挂了知识库以外工具的都算插件（审查 M5）', () => {
+  const pre = flowPreflight([node(2, { name: '搜一搜', type: 'chat-search', payload: { tools: [{ type: 'query_kb' }, { type: 'plugin', name: '查订单' }] } })]);
+  assert.deepEqual(pre.plugins.map((p) => p.calls), [['查订单']]);
+});
+
+test('paidProfile：要花钱的节点按类型和模型记成一个指纹（顺序无关），并数一数有几个', () => {
+  const a = paidProfile([text(1), llm(2, { modelType: 'doubao' }), node(3, { type: 'rule-center' }), act(4, 'send-text-message'), llm(5, { modelType: 'gemini' })]);
+  const b = paidProfile([llm(5, { modelType: 'gemini' }), llm(2, { modelType: 'doubao' })]);
+  assert.equal(a.key, b.key);
+  assert.equal(a.count, 2);
+  assert.notEqual(a.key, paidProfile([llm(2, { modelType: 'doubao' })]).key);
+  assert.deepEqual(paidProfile([text(1), act(2, 'send-text-message'), act(3, 'update-data')]), { key: '', count: 0 });
+});
+
+test('graphFingerprint：能走到的节点内容、连线变了就变；只挪位置不变', () => {
+  const canvas = [text(1), llm(2), act(3, 'send-text-message'), edge(101, 1, 2), edge(102, 2, 3)];
+  const fp = (c) => graphFingerprint(c, reachableNodes(c, [U(1)]));
+  const base = fp(canvas);
+  assert.equal(fp(canvas.map((c) => (c.id === U(2) ? { ...c, position: { x: 999, y: 999 } } : c))), base);
+  assert.notEqual(fp(canvas.map((c) => (c.id === U(2) ? { ...c, data: { ...c.data, nodePayload: { ...c.data.nodePayload, systemPrompt: '改了' } } } : c))), base);
+  assert.notEqual(fp([...canvas, plugin(4), edge(103, 3, 4)]), base);
+});
+
+test('followCommand：给了事件声明的变量表，就只带这些变量（平台会往参数里加字段）；缺了的列出来（审查 M3）', () => {
+  const r = followCommand({ eventId: 'ev-a', eventName: '延时回复', params: { text: '你好', userLastMsgId: 'm-1', empty: '' } }, { bot: 'b', session: 's', variables: ['text', 'count', 'empty'] });
+  assert.equal(r.command, "md trial --event ev-a --bot b --session s --data 'text=你好'");
+  assert.deepEqual(r.missing, ['count', 'empty']);
+});
+
+test('actionLines：发图片、语音、素材也算回复；什么都没发才说没有；其它动作单列（审查 M4）', () => {
+  assert.deepEqual(actionLines([{ type: 'send-image-message', payload: {} }]), { reply: '发图片', others: '' });
+  assert.deepEqual(actionLines([{ type: 'send-text-message', payload: { text: '你好' } }, { type: 'handover', payload: {} }, { type: 'update-data', payload: { operations: [{}] } }]),
+    { reply: '发文本「你好」；转人工', others: '写 1 个字段' });
+  assert.deepEqual(actionLines([{ type: 'canvas-event-action', payload: { eventId: 'e' } }]), { reply: '', others: '' });
 });

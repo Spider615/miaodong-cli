@@ -29,6 +29,10 @@ const spends = (h) => {
 };
 const limits = (h, spend) => { mkdirSync(join(h, 'md'), { recursive: true }); writeFileSync(join(h, 'md', 'config.json'), JSON.stringify({ spend })); };
 const codeIn = (stdout) => stdout.match(/确认码：([0-9a-f]{8})/)?.[1];
+const seedSpend = (h, amount) => {
+  mkdirSync(join(h, 'md'), { recursive: true });
+  writeFileSync(join(h, 'md', 'spend.jsonl'), `${JSON.stringify({ id: `seed-${amount}`, at: new Date().toISOString(), kind: 'test', botId: 'other', actual: amount })}\n`, { flag: 'a' });
+};
 
 test('--from-exec：用那次执行里这个节点的输入，去掉平台参数；记账本；结果和 prompt 落盘', async () => {
   reset();
@@ -315,4 +319,13 @@ test('跑的过程中把这一笔的预留更新成按实际推算的整条命�
   assert.equal(r.code, 0, r.stderr);
   const lines = readFileSync(join(h, 'md', 'spend.jsonl'), 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
   assert.ok(lines.some((l) => l.reserve === 1.5 && l.kind === undefined), JSON.stringify(lines));
+});
+
+test('规则、代码这类不花钱的节点：今天超了每日上限也不用确认，--times 2 一口气跑完（审查 I1）', async () => {
+  reset();
+  const h = home();
+  seedSpend(h, 20);
+  const r = await md(['trial', '规则中心', '--bot', '147bd600', '--times', '2'], h);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.equal(fake.state.posts.length, 2);
 });

@@ -1,6 +1,6 @@
 import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCli, tempHome } from './helpers/run-cli.mjs';
 import { seedIdentity, seedWorkspace } from './helpers/seed.mjs';
@@ -29,6 +29,13 @@ const spends = (h) => {
   return [...byId.values()];
 };
 const limits = (h, spend) => { mkdirSync(join(h, 'md'), { recursive: true }); writeFileSync(join(h, 'md', 'config.json'), JSON.stringify({ spend })); };
+// 今天已经花了 amount（别的命令记的一笔）
+const seedSpend = (h, amount) => {
+  mkdirSync(join(h, 'md'), { recursive: true });
+  appendFileSync(join(h, 'md', 'spend.jsonl'), `${JSON.stringify({ id: `seed-${amount}`, at: new Date().toISOString(), kind: 'test', botId: 'other', actual: amount })}\n`);
+};
+// 没有大模型的文本链路：收到文本 → 规则中心 → 发送文本 / 触发延时回复 ⇢ 写意向
+const freeText = () => [...flowDraft().filter((c) => ![U(2), U(101), U(102)].includes(c.id)), edge(108, 1, 3)];
 
 test('--text：请求体、按执行顺序的路径、回复、事件那头接着跑的命令；记账；结果落盘；md exec 不联网能看；md spend 认得', async () => {
   fake.reset();
@@ -46,10 +53,12 @@ test('--text：请求体、按执行顺序的路径、回复、事件那头接�
   assert.match(r.stdout, new RegExp(order.join('[\\s\\S]*')));
   assert.match(r.stdout, /回复：发文本「回复：我想退款」/);
   assert.match(r.stdout, /发出事件「延时回复」（延时 10 秒）/);
-  assert.match(r.stdout, /这次试跑没有接着跑事件那头/);
+  assert.match(r.stdout, /跑完时查了同一会话：还没有别的执行/);
+  assert.match(r.stdout, /这个事件是延时的，md 没等/);
+  assert.match(r.stdout, /如果秒懂其实会自己跑，这样会多跑一遍/);
   const sid = sessionOf(r.stdout);
   assert.ok(body.sessionId.startsWith(sid));
-  assert.ok(r.stdout.includes(`md trial --event '延时回复' --bot f10b0000 --session ${sid} --data 'text=我想退款'`), r.stdout);
+  assert.ok(r.stdout.includes(`md trial --event ev-delay-0001 --bot f10b0000 --session ${sid} --data 'text=我想退款'`), r.stdout);
   const [row] = spends(h);
   assert.deepEqual([row.kind, row.entry, row.actual, row.approved], ['flow', 'text', 0.0123, 'auto']);
   const dir = r.stdout.match(/结果存在 (\S+)（/)[1];
@@ -248,4 +257,105 @@ test('能走到的节点都不花钱（09-29 实测这种链路花费是 0）：
   assert.equal(paid.code, 5);
   assert.match(paid.stdout, /超过每日上限/);
   assert.equal(posts().length, 2);
+});
+
+
+test('账本里这个入口记过 ¥0（当时链路不花钱），后来加了大模型、花费又报不出来：不能按 ¥0 一路跑下去，花费不知道按保守价记（审查 C1）', async () => {
+  const h = home();
+  fake.reset({ canvas: freeText(), cost: 0, tokenCount: {} });
+  const first = await md(['trial', '--text', 'a', ...BOT], h);
+  assert.equal(first.code, 0, first.stderr);
+  fake.reset({ cost: 0, tokenCount: { doubao: { prompt: 100 } } });
+  const r = await md(['trial', '--text', 'a', ...BOT, '--times', '3'], h);
+  assert.equal(r.code, 5, r.stdout + r.stderr);
+  assert.equal(posts().length, 1);
+  assert.match(r.stdout, /估不出/);
+  const row = spends(h).at(-1);
+  assert.ok(row.assumed >= 0.7, JSON.stringify(row));
+});
+
+test('有大模型的链路某次恰好走了不花钱的分支（¥0）：其余几次仍按保守价推算，超门槛就停（审查 C1）', async () => {
+  fake.reset({ cost: 0, tokenCount: {} });
+  const h = home();
+  limits(h, { perCommand: 1, perDay: 10 });
+  const r = await md(['trial', '--text', 'a', ...BOT, '--times', '3'], h);
+  assert.equal(r.code, 5, r.stdout + r.stderr);
+  assert.equal(posts().length, 1);
+  assert.match(r.stdout, /其余 2 次/);
+});
+
+test('能走到的节点都不花钱：今天超了上限，--times 2 也一口气跑完，中途不停（审查 I1）', async () => {
+  fake.reset();
+  const h = home();
+  seedSpend(h, 5);
+  limits(h, { perCommand: 2, perDay: 1 });
+  const r = await md(['trial', '--event', '延时回复', '--data', 'text=a', ...BOT, '--times', '2'], h);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.equal(posts().length, 2);
+});
+
+test('--times 中途草稿被接上了插件：下一次发请求前重新判闸门，拒跑，不再发（审查 I2）', async () => {
+  fake.reset({ onPost: (n) => { if (n === 1) fake.state.canvas = [...flowDraft(), node(10, { name: '新接的插件', type: 'plugin-calculation' }), edge(107, 4, 10)]; } });
+  const r = await md(['trial', '--text', 'a', ...BOT, '--times', '2']);
+  assert.equal(r.code, 5, r.stdout + r.stderr);
+  assert.equal(posts().length, 1);
+  assert.match(r.stderr, /新接的插件/);
+});
+
+test('--times 中途能走到的节点被改了（还能跑）：也停下，说清楚草稿变了、剩几次没跑（审查 I2）', async () => {
+  const edited = () => flowDraft().map((c) => (c.id === U(2) ? { ...c, data: { ...c.data, nodePayload: { ...c.data.nodePayload, systemPrompt: '改过了' } } } : c));
+  fake.reset({ onPost: (n) => { if (n === 1) fake.state.canvas = edited(); } });
+  const r = await md(['trial', '--text', 'a', ...BOT, '--times', '3']);
+  assert.equal(r.code, 5, r.stdout + r.stderr);
+  assert.equal(posts().length, 1);
+  assert.match(r.stderr, /草稿.*改过.*剩下的 2 次没跑/);
+});
+
+test('确认码绑定能走到的画布：拿到码之后草稿改了，这个码就对不上（审查 I2）', async () => {
+  fake.reset({ cost: 0.3 });
+  const h = home();
+  const first = await md(['trial', '--text', 'a', ...BOT], h);
+  assert.equal(first.code, 0, first.stderr);
+  limits(h, { perCommand: 0.5, perDay: 10 });
+  const blocked = await md(['trial', '--text', 'a', ...BOT, '--times', '2'], h);
+  const code = codeIn(blocked.stdout);
+  assert.ok(code, blocked.stdout);
+  fake.state.canvas = flowDraft().map((c) => (c.id === U(2) ? { ...c, data: { ...c.data, nodePayload: { ...c.data.nodePayload, systemPrompt: '改过了' } } } : c));
+  const r = await md(['trial', '--text', 'a', ...BOT, '--times', '2', '--confirm', code], h);
+  assert.equal(r.code, 5, r.stdout + r.stderr);
+  assert.match(r.stderr, /对不上/);
+  assert.equal(posts().length, 1);
+});
+
+test('事件那头：查同一会话失败时，不说「还没有」，说查不到、不知道（审查 I3）', async () => {
+  fake.reset({ laterStatus: 500 });
+  const r = await md(['trial', '--text', '我想退款', ...BOT]);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /查同一会话后面的执行失败[^\n]*不知道事件那头有没有跑/);
+  assert.doesNotMatch(r.stdout, /还没有别的执行/);
+});
+
+test('接着跑的命令只带事件声明过的变量：平台加的字段不带，缺的说出来（审查 M3）', async () => {
+  fake.reset({ events: [{ eventId: 'ev-delay-0001', name: '延时回复', variables: [{ name: 'text', type: 'string' }, { name: 'contactId', type: 'string' }] }, { eventId: 'ev-plugin-002', name: '查用户', variables: [] }] });
+  const r = await md(['trial', '--text', '我想退款', ...BOT]);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /--data 'text=我想退款'/);
+  assert.match(r.stdout, /事件参数里没有 contactId/);
+});
+
+test('跑起来之后身份失效（查结果 401）：这一次按花费不知道记进账本，并打出执行 id（审查 M1）', async () => {
+  fake.reset({ pollStatus: 401 });
+  const h = home();
+  const r = await md(['trial', '--text', 'a', ...BOT], h);
+  assert.equal(r.code, 3, r.stdout + r.stderr);
+  assert.ok((r.stdout + r.stderr).includes(FX(1)), r.stdout + r.stderr);
+  assert.equal(spends(h)[0].unknownRuns, 1);
+});
+
+test('没跑完（时限在测试里调短）：标出「没跑完」，不下「没有发消息」「事件那头」的结论（审查 M4）', async () => {
+  fake.reset({ runningPolls: 100000 });
+  const r = await runCli(['trial', '--text', 'a', ...BOT], { home: home(), env: { MD_TRIAL_TIMEOUT_MS: '50' } });
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /没跑完/);
+  assert.doesNotMatch(r.stdout, /没有发消息|还没有别的执行/);
 });

@@ -2,7 +2,9 @@
 // --var / --data 的值怎么转、一次花了多少、--session 认不认、事件那头怎么接着跑。
 
 import { asArray } from './api.mjs';
+import { contentKey, edgeKey, hashOf, isEdgeCell } from './canvas.mjs';
 import { EXIT, MdError, usage } from './errors.mjs';
+import { actionTexts, clip } from './execs.mjs';
 import { buildIndex, businessNodes, nodeName, nodeType } from './graph.mjs';
 import { shortId } from './output.mjs';
 import { FREE_TYPES, TRIAL_ALLOWED, classifyTrialNode } from './trial.mjs';
@@ -23,7 +25,11 @@ export function entryNodes(canvas, entry) {
   return nodes.filter((n) => nodeType(n) === 'canvas-event-trigger' && n.data?.nodePayload?.eventId === entry.eventId);
 }
 
-// 从入口出发能走到的节点（含入口）：沿连线和事件跳转（buildIndex 的 event 边）；
+// 动作会触发的别的触发器：打标签 → 「标签变化」，改自定义属性 → 「自定义属性变化」。试跑会话没有联系人，
+// 大概率不会真触发，但没实测过；按会触发算（保守，审查 I4），那头能走到插件就拒跑
+const CASCADES = { 'tag-user': 'tag-event', 'smart-tag': 'tag-event', 'update-custom-attr': 'custom-attr-event' };
+
+// 从入口出发能走到的节点（含入口）：沿连线和事件跳转（buildIndex 的 event 边），以及上面这两种连锁；
 // 可达节点的子节点（x6 的 parent / children、循环体的 parentLoopBodyNodeId）也算，循环体里的节点不能漏
 export function reachableNodes(canvas, startIds, events = []) {
   const cells = asArray(canvas);
@@ -39,6 +45,8 @@ export function reachableNodes(canvas, startIds, events = []) {
     link(c.parent, c.id);
     link(c.data?.parentLoopBodyNodeId, c.id);
     for (const child of asArray(c.children)) link(c.id, typeof child === 'string' ? child : child?.id);
+    const cascade = CASCADES[nodeType(c)];
+    if (cascade) for (const t of nodes.values()) if (nodeType(t) === cascade) link(c.id, t.id);
   }
   const seen = new Set(startIds);
   const queue = [...startIds];
@@ -53,6 +61,10 @@ export function reachableNodes(canvas, startIds, events = []) {
   return [...seen].map((id) => nodes.get(id)).filter(Boolean);
 }
 
+// 挂了知识库查询以外的工具（插件、HTTP……）：不管节点是什么类型，都会调外部系统（审查 M5）
+const externalTools = (cell) => asArray(cell.data?.nodePayload?.tools).filter((t) => String(t?.type ?? t?.toolType ?? '') !== 'query_kb');
+const toolName = (t) => String(t?.name ?? t?.toolName ?? t?.pluginName ?? t?.configParams?.name ?? (String(t?.type ?? t?.toolType ?? '') || '外部工具'));
+
 // 判定（spec §4.2）：插件、md 不认识的类型、会执行的动作（按类型计数）。触发器只是入口，不判
 export function flowPreflight(cells) {
   const plugins = [];
@@ -62,8 +74,10 @@ export function flowPreflight(cells) {
     if (cell.data?.category === 'trigger') continue;
     const type = nodeType(cell);
     const cls = classifyTrialNode(cell);
-    if (cls.kind === 'plugin' || type === 'plugin-action') {
-      plugins.push({ id: cell.id, name: nodeName(cell), type, calls: cls.kind === 'plugin' ? cls.plugins : [nodeName(cell)] });
+    const tools = externalTools(cell);
+    if (cls.kind === 'plugin' || type === 'plugin-action' || tools.length) {
+      const calls = cls.kind === 'plugin' ? cls.plugins : tools.length ? tools.map(toolName) : [nodeName(cell)];
+      plugins.push({ id: cell.id, name: nodeName(cell), type, calls });
       continue;
     }
     if (TRIAL_ALLOWED.has(type)) continue;
@@ -185,6 +199,38 @@ export function resolveEvent(events, query) {
   throw new MdError('event_not_found', `这个智能体没有事件「${q}」`, { exitCode: EXIT.TARGET, hint: `有这些事件：${list.map((e) => e.name).slice(0, 30).join('、') || '（没有）'}` });
 }
 
+// 要花钱的节点（按类型证明不了免费的）：「类型:模型」排序连起来当指纹，账本里的单价只认同一个指纹——
+// 链路里加了、换了大模型，旧单价（包括当时不花钱记下的 ¥0）就不能拿来估（审查 C1）
+export function paidProfile(cells) {
+  const paid = asArray(cells).filter((c) => !isFreeNode({ type: nodeType(c), category: c.data?.category }));
+  return { key: paid.map((c) => `${nodeType(c)}:${c.data?.nodePayload?.modelType ?? ''}`).sort().join(','), count: paid.length };
+}
+
+// 能走到的那部分画布的指纹：节点内容（不含位置）和从它们出发的连线。开跑前判过闸门的是这一份；
+// 每次发请求前再算一遍，变了就停（审查 I2：旧标签页自动保存会把插件接回来）
+export function graphFingerprint(canvas, cells) {
+  const ids = new Set(asArray(cells).map((c) => c.id));
+  const nodes = asArray(cells).map((c) => contentKey(c)).sort();
+  const edges = asArray(canvas).filter((c) => c && typeof c === 'object' && isEdgeCell(c) && ids.has(c.source?.cell)).map((e) => edgeKey(e)).sort();
+  return hashOf({ nodes, edges });
+}
+
+// 回复和其它动作（审查 M4）：发图片、语音、素材也算回复；发事件另外说，不算在这里
+export function actionLines(outputActions) {
+  const list = asArray(outputActions);
+  const texts = actionTexts(list);
+  const reply = [];
+  const others = [];
+  list.forEach((action, i) => {
+    const t = texts[i];
+    const type = String(action?.type ?? '');
+    if (t.kind === 'reply' || t.kind === 'handover') reply.push(clip(t.text, 1500));
+    else if (type.startsWith('send-')) reply.push(FLOW_ACTIONS.get(type) ?? type);
+    else if (t.kind === 'other') others.push(t.text);
+  });
+  return { reply: reply.join('；'), others: others.join('、') };
+}
+
 // 不花钱的节点：触发器、代码 / 规则 / 计算器，以及除智能标签以外的动作（智能标签可能要调模型）
 export function isFreeNode(n) {
   if (n?.category === 'trigger') return true;
@@ -237,12 +283,18 @@ export function scheduleLabel(schedule) {
 const quote = (s) => (/^[\w.@%+=:,/-]+$/.test(s) ? s : `'${String(s).replace(/'/g, `'\\''`)}'`);
 export const DATA_VALUE_LIMIT = 200;
 
-// 从事件入口接着跑的命令（spec §5.3）：--data 取自事件参数，太长的截断并说明
-export function followCommand(emitted, { bot, session }) {
-  const parts = ['md trial --event', quote(emitted.eventName || String(emitted.eventId)), '--bot', quote(bot), '--session', quote(session)];
+// 从事件入口接着跑的命令（spec §5.3）：事件用 id（名字可能重名）；--data 取自事件参数。
+// 给了事件声明的变量表就只带这些（平台会往参数里加字段，带上了 --data 会报「没有这个变量」，审查 M3），缺的列出来；
+// 太长的值截断并说明
+export function followCommand(emitted, { bot, session, variables = null }) {
+  const parts = ['md trial --event', quote(String(emitted.eventId)), '--bot', quote(bot), '--session', quote(session)];
   let clipped = false;
   const params = emitted.params && typeof emitted.params === 'object' && !Array.isArray(emitted.params) ? emitted.params : {};
-  for (const [key, value] of Object.entries(params)) {
+  const has = (k) => params[k] !== undefined && params[k] !== null && params[k] !== '';
+  const keys = variables ? variables.filter(has) : Object.keys(params);
+  const missing = variables ? variables.filter((k) => !has(k)) : [];
+  for (const key of keys) {
+    const value = params[key];
     let text = typeof value === 'string' ? value : JSON.stringify(value);
     if (text.length > DATA_VALUE_LIMIT) {
       text = text.slice(0, DATA_VALUE_LIMIT);
@@ -250,5 +302,5 @@ export function followCommand(emitted, { bot, session }) {
     }
     parts.push('--data', quote(`${key}=${text}`));
   }
-  return { command: parts.join(' '), clipped };
+  return { command: parts.join(' '), clipped, missing };
 }

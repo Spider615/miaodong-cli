@@ -12,7 +12,7 @@ import { DATA_NOTE, formatTime, note, out, shortId, targetLine } from '../output
 import { clip, formatCost } from '../execs.mjs';
 import { locateExec } from '../exec-locate.mjs';
 import { normalizeDetail, promptText } from '../exec-detail.mjs';
-import { UNKNOWN_RUN_COST, buildTrialInputs, classifyTrialNode, costOf, costSummary, draftVsLocal, inputDefs, nextRunCheck, parseInputPairs } from '../trial.mjs';
+import { FREE_TYPES, UNKNOWN_RUN_COST, buildTrialInputs, classifyTrialNode, costOf, costSummary, draftVsLocal, inputDefs, nextRunCheck, parseInputPairs } from '../trial.mjs';
 import { runNodeOnce } from '../trial-run.mjs';
 import { dayKey, loadLimits, readSpends, recordSpend, spendDecision, spentOn, updateSpend, withSpendLock } from '../spend.mjs';
 import { codeFor, givenCode, roundCost, stopForConfirm } from '../confirm.mjs';
@@ -120,10 +120,15 @@ export const trial = {
       else if (typeof executed.cost === 'number') execCost = executed.cost;
       if (located.target.botId !== target.botId) note(`（输入取自另一个智能体「${located.target.botName}」的执行）`);
     }
+    // 代码、规则、计算器这类节点按类型就不花钱：预估 ¥0，不因今天超了每日上限要确认、跑到一半也不停（审查 I1）
+    const free = cls.kind === 'allowed' && FREE_TYPES.has(node.type);
     let perRun = null;
     let basis = '';
     const last = lastPerRun(target.botId, node.id, model);
-    if (last !== null) {
+    if (free) {
+      perRun = 0;
+      basis = '这类节点不花钱';
+    } else if (last !== null) {
       perRun = last;
       basis = `上次试跑这个节点（同一模型）花了 ${formatCost(last)}/次`;
     } else if (execCost !== null) {
@@ -165,7 +170,7 @@ export const trial = {
       const today = spentOn(rows);
       const limits = loadLimits();
       const probeFirst = estimate === null && !external.length && today < limits.perDay;
-      const decision = spendDecision({ estimate, externalCalls: external }, { limits, today });
+      const decision = spendDecision({ estimate, externalCalls: external, free }, { limits, today });
       const confirm = codeFor(operation(times, estimate), rows);
       const confirmed = decision.needApproval && given === confirm.code;
       if (decision.needApproval && !confirmed && (given !== null || !probeFirst)) stopForConfirm({ ...confirm, given, reasons: decision.reasons });
@@ -191,7 +196,7 @@ export const trial = {
           const remaining = times - i + 1;
           const check = nextRunCheck({
             runs, remaining, perRun, confirmed: plan.confirmed, confirmedEstimate: plan.confirmed ? estimate : null,
-            limits: plan.limits, othersToday: spentOn(readSpends().filter((r) => r.id !== plan.id)),
+            limits: plan.limits, othersToday: spentOn(readSpends().filter((r) => r.id !== plan.id)), free,
           });
           if (!check.ok) {
             const sum = costSummary(runs);

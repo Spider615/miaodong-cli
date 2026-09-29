@@ -114,7 +114,9 @@ export function costSummary(runs, assumedPerRun = null) {
 // 每次单价按「预估」和「已跑的实际」取大的；花费不知道的那几次也按这个单价算进已花。
 // 返回的 rest 是其余几次的预估，给确认码用：和重跑时的算法一致（重跑时按这次的实际单价估）；
 // projected 是按实际推算的整条命令，放行时用它更新账本里这一笔的预留
-export function nextRunCheck({ runs, remaining, perRun, confirmed, confirmedEstimate, limits, othersToday }) {
+export function nextRunCheck({ runs, remaining, perRun, confirmed, confirmedEstimate, limits, othersToday, free = false }) {
+  // 按类型证明不花钱的：花费恒为 0，不用重算，也不因今天超了上限停下（审查 I1）
+  if (free) return { ok: true, projected: 0 };
   const sum = costSummary(runs);
   const unit = sum.perRun ?? perRun;
   const rest = unit === null ? null : unit * remaining;

@@ -1,25 +1,25 @@
 // md trial --text / --event：整条试跑（spec 2026-09-29-miaodong-cli-flow-trial-design）。
-// 跑的是草稿；从入口（含事件那头）能走到插件或 md 不认识的节点就不跑；花费门槛、确认码和单节点试跑同一套。
+// 跑的是草稿；从入口（含事件那头）能走到插件或 md 不认识的节点就不跑，每次发请求前按最新草稿再判一次；花费门槛、确认码和单节点试跑同一套。
 
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { intArg, listArg, strArg } from '../args.mjs';
 import { EXIT, MdError, usage } from '../errors.mjs';
-import { getCanvas, listEvents, listSessions } from '../api.mjs';
+import { asArray, getCanvas, listEvents, listSessions } from '../api.mjs';
 import { resolveBot, targetArgs } from '../target.mjs';
 import { latestWorkspaceFor, loadWorkspace, stamp, targetFromMeta } from '../workspace.mjs';
 import { ensureDir, ensureNewDir, mdHome } from '../home.mjs';
 import { formatTime, note, out, shortId, targetLine } from '../output.mjs';
-import { actionSummary, actionTexts, clip, formatCost, getExecDetail } from '../execs.mjs';
+import { actionSummary, clip, formatCost, getExecDetail } from '../execs.mjs';
 import { NODE_LINE_LIMIT, nodeLine, normalizeDetail } from '../exec-detail.mjs';
 import { execDir, saveDetail } from '../exec-store.mjs';
 import { extractEmittedEvents } from '../exec-chain.mjs';
 import { UNKNOWN_RUN_COST, costSummary, draftVsLocal, nextRunCheck } from '../trial.mjs';
 import { runFlowOnce, sessionExecsAfter } from '../trial-run.mjs';
 import {
-  assertRunnable, buildEventData, buildSessionData, describeActions, entryNodes, eventSchedules, flowCostOf, flowPreflight,
-  followCommand, isFreeNode, matchSession, reachableNodes, resolveEvent, scheduleLabel,
+  actionLines, assertRunnable, buildEventData, buildSessionData, describeActions, entryNodes, eventSchedules, flowCostOf, flowPreflight,
+  followCommand, graphFingerprint, isFreeNode, matchSession, paidProfile, reachableNodes, resolveEvent, scheduleLabel,
 } from '../flow-trial.mjs';
 import { nodeType } from '../graph.mjs';
 import { dayKey, loadLimits, readSpends, recordSpend, spendDecision, spentOn, updateSpend, withSpendLock } from '../spend.mjs';
@@ -60,9 +60,11 @@ function recordSession(target, sessionId, entryKey) {
   appendFileSync(sessionsFile(target), `${JSON.stringify({ sessionId, botId: target.botId, entry: entryKey, createdAt: new Date().toISOString() })}\n`);
 }
 
-// 上次同一入口整条试跑的实际单价
-function lastPerRun(botId, entryKey) {
-  const hit = readSpends().filter((r) => r.kind === 'flow' && r.botId === botId && r.entry === entryKey && typeof r.actualPerRun === 'number').at(-1);
+// 上次同一入口、同一个付费指纹（能走到的要花钱的节点的类型和模型）整条试跑的实际单价。只认大于 0 的：
+// 当时链路不花钱、或者恰好走了不花钱的分支记下的 ¥0，不能拿来估现在这条要花钱的链路（审查 C1）
+function lastPerRun(botId, entryKey, paidKey) {
+  const hit = readSpends().filter((r) => r.kind === 'flow' && r.botId === botId && r.entry === entryKey && (r.paidKey ?? '') === paidKey
+    && typeof r.actualPerRun === 'number' && r.actualPerRun > 0).at(-1);
   return hit ? hit.actualPerRun : null;
 }
 
@@ -86,36 +88,60 @@ function checkFlags(args) {
   return { text, eventQuery, times, sessionQuery };
 }
 
-function renderActions(outputActions) {
-  const texts = actionTexts(outputActions);
-  const replies = texts.filter((a) => a.kind === 'reply' || a.kind === 'handover');
-  out(`   回复：${replies.length ? replies.map((a) => clip(a.text, 1500)).join('；') : '没有发消息，也没有转人工'}`);
-  const others = texts.filter((a) => a.kind === 'other');
-  if (others.length) out(`   其它动作：${others.map((a) => a.text).join('、')}`);
+// 闸门（spec §4）：入口 → 可达范围 → 插件、不认识的类型拒跑。开跑前判一次，每次发请求前按最新草稿再判一次（审查 I2）
+function gateFor(rawCanvas, entry, events) {
+  const starts = entryNodes(rawCanvas, entry);
+  if (!starts.length) {
+    throw new MdError('trial_flow_no_entry', `草稿里没有${entry.kind === 'text' ? '「收到文本」触发器' : `${entry.label}的入口节点`}：秒懂不会报错，只会什么都不执行`, { exitCode: EXIT.TARGET });
+  }
+  const cells = reachableNodes(rawCanvas, starts.map((c) => c.id), events ?? []);
+  const pre = flowPreflight(cells);
+  assertRunnable(pre);
+  return {
+    cells,
+    pre,
+    free: cells.every((c) => isFreeNode({ type: nodeType(c), category: c.data?.category })),
+    paid: paidProfile(cells),
+    fingerprint: graphFingerprint(rawCanvas, cells),
+  };
 }
 
-// 事件那头（spec §5.3）：同会话后面有执行就列出来；没有就给从事件入口接着跑的命令
-async function renderDownstream({ target, execId, sessionId, createdAt, outputActions, schedules }) {
+// 事件那头（spec §5.3，审查 I3）：只说查到的。同会话后面有执行就列出来；查失败了就说不知道；
+// 没查到也不下「秒懂不会接着跑」的结论（还没实测过，延时的事件 md 也不等），只给「从事件入口接着跑」的命令并说清代价
+async function renderDownstream({ target, execId, sessionId, createdAt, outputActions, schedules, events }) {
   const emitted = extractEmittedEvents(outputActions);
   if (!emitted.length) return;
   for (const ev of emitted) out(`   发出事件「${ev.eventName || shortId(ev.eventId)}」${scheduleLabel(schedules.get(ev.eventId))}`);
-  let later = [];
+  let later = null;
+  let failure = null;
   try {
     later = await sessionExecsAfter(target.identity, target.orgId, { botId: target.botId, sessionId, execId, sinceMs: Date.parse(createdAt ?? '') || 0 });
   } catch (error) {
     if (error instanceof MdError && error.code === 'auth_expired') throw error;
-    note(`（查同一会话后面的执行失败：${error.message}）`);
+    failure = error;
   }
-  if (later.length) {
+  if (later?.length) {
     out(`   同一会话后面还有 ${later.length} 次执行（事件那头）：`);
     for (const row of later) out(`     ${row.execId} ${row.status} · ${clip(actionSummary(row.outputActions), 200) || '无动作'}`);
     out('   看它们：md exec <执行id>');
     return;
   }
-  out('   这次试跑没有接着跑事件那头。接着跑：');
+  if (failure) out(`   查同一会话后面的执行失败（${clip(failure.message, 200)}）：不知道事件那头有没有跑。`);
+  else {
+    const modes = emitted.map((ev) => schedules.get(ev.eventId)).filter((s) => scheduleLabel(s));
+    const wait = modes.some((s) => s.mode === 'SCHEDULE') ? '延时' : modes.length ? '定时' : '';
+    out(`   跑完时查了同一会话：还没有别的执行。秒懂在试跑里会不会自己接着跑事件那头，还没实测过${wait ? `；这个事件是${wait}的，md 没等` : ''}。`);
+  }
+  out('   要看事件那头，可以从事件入口接着跑（如果秒懂其实会自己跑，这样会多跑一遍）：');
   for (const ev of emitted) {
-    const { command, clipped } = followCommand(ev, { bot: shortId(target.botId), session: shortId(sessionId) });
-    out(`     ${command}${clipped ? '（有的值太长截断了，完整的在 run 文件的事件参数里）' : ''}`);
+    const declared = asArray(events).find((e) => e?.eventId === ev.eventId);
+    const variables = declared ? asArray(declared.variables).map((v) => v?.name).filter(Boolean) : null;
+    const { command, clipped, missing } = followCommand(ev, { bot: shortId(target.botId), session: shortId(sessionId), variables });
+    const notes = [
+      clipped ? '有的值太长截断了，完整的在 run 文件的事件参数里' : '',
+      missing.length ? `事件参数里没有 ${missing.join('、')}，要自己补上 --data ${missing[0]}=…` : '',
+    ].filter(Boolean);
+    out(`     ${command}${notes.length ? `（${notes.join('；')}）` : ''}`);
   }
 }
 
@@ -138,13 +164,7 @@ export async function runFlowTrial(args) {
   }
 
   // 闸门（spec §4）：全部只读，任何 POST 之前
-  const starts = entryNodes(draft.rawCanvas, entry);
-  if (!starts.length) {
-    throw new MdError('trial_flow_no_entry', `草稿里没有${entry.kind === 'text' ? '「收到文本」触发器' : `${entry.label}的入口节点`}：秒懂不会报错，只会什么都不执行`, { exitCode: EXIT.TARGET });
-  }
-  const cells = reachableNodes(draft.rawCanvas, starts.map((c) => c.id), events ?? []);
-  const pre = flowPreflight(cells);
-  assertRunnable(pre);
+  const gate = gateFor(draft.rawCanvas, entry, events);
   const varPairs = listArg(args, 'var');
   let sessionData = null;
   if (varPairs.length) {
@@ -154,37 +174,39 @@ export async function runFlowTrial(args) {
   }
   const fixedSession = sessionQuery ? matchSession(readSessionRecords(target), sessionQuery, target.botId) : null;
 
-  const unpushed = ws ? cells.filter((c) => draftVsLocal(c.id, draft.rawCanvas, ws).status === 'unpushed').length : 0;
-  // 能走到的节点都不花钱（触发器、代码、规则、动作……）就是 ¥0（09-29 实测这种链路 totalCostInCny 是 0）：
-  // 不然每次第一次跑都「估不出」，今天到了上限就要为一笔 ¥0 的试跑去问用户。有一个要花钱的节点就照旧按账本估
-  const allFree = cells.every((c) => isFreeNode({ type: nodeType(c), category: c.data?.category }));
-  const perRun = allFree ? 0 : lastPerRun(target.botId, entry.key);
+  const unpushed = ws ? gate.cells.filter((c) => draftVsLocal(c.id, draft.rawCanvas, ws).status === 'unpushed').length : 0;
+  // 花费（spec §4.3）：能走到的都按类型证明不花钱就是 ¥0（09-29 实测这种链路 totalCostInCny 是 0），不用确认；
+  // 否则只认同一个付费指纹、大于 0 的历史单价，没有就估不出。花费不知道的那几次按「保守价 × 能走到的付费节点数」算
+  // （链路上有好几个大模型时，一次 ¥0.7 不够保守，审查 C1 / M7）
+  const unknownUnit = UNKNOWN_RUN_COST * Math.max(1, gate.paid.count);
+  const perRun = gate.free ? 0 : lastPerRun(target.botId, entry.key, gate.paid.key);
   const estimate = perRun === null ? null : perRun * times;
-  const basis = allFree ? '能走到的节点都不花钱' : `上次整条试跑这个入口 ${formatCost(perRun)}/次`;
+  const basis = gate.free ? '能走到的节点都不花钱' : `上次整条试跑这个入口 ${formatCost(perRun)}/次`;
   const shown = loadLimits();
   out(targetLine({ ...target, versionLabel: '草稿' }));
   out(`整条试跑：${entry.label} × ${times} · 草稿最后保存 ${formatTime(draft.updatedAt)}`);
   if (unpushed) out(`⚠️ 本地改了 ${unpushed} 个能走到的节点还没推：这次跑的是草稿上的旧版本（工作副本 ${ws.dir}）；要试新改的先 md push`);
-  out(`能走到 ${cells.length} 个节点（含事件那头），没有插件；会执行的动作：${describeActions(pre.actions) || '无'}（试跑会话没有联系人和接收人）`);
+  out(`能走到 ${gate.cells.length} 个节点（含事件那头），没有插件；会执行的动作：${describeActions(gate.pre.actions) || '无'}（试跑会话没有联系人和接收人）`);
   if (entry.kind === 'event') out(`事件变量：${Object.keys(trigger.canvasEvent.data).join('、') || '（无）'}`);
   if (sessionData) out(`预置会话变量：${varPairs.map((p) => p.split('=')[0]).join('、')}`);
   out(`花费：预计 ${estimate === null ? '估不出，先跑 1 次看实际' : `${formatCost(estimate)}（${basis}）`} · 今天已花 ${formatCost(spentOn(readSpends()))} / 上限 ${formatCost(shown.perDay)}`);
 
   // 确认 + 记一笔：和单节点试跑同一套（估不出、今天没到上限时先跑 1 次；锁里「查今天已花 → 判断 → 记一笔」）
   const given = givenCode(args);
-  const operation = (n, est) => ({ kind: 'flow', botId: target.botId, entry: entry.key, trigger, sessionData, session: fixedSession, times: n, estimate: roundCost(est), day: dayKey() });
+  // 确认码绑定能走到的那部分画布：拿到码之后草稿改了，码就对不上（审查 I2）
+  const operation = (n, est) => ({ kind: 'flow', botId: target.botId, entry: entry.key, graph: gate.fingerprint, trigger, sessionData, session: fixedSession, times: n, estimate: roundCost(est), day: dayKey() });
   const plan = await withSpendLock(() => {
     const rows = readSpends();
     const today = spentOn(rows);
     const limits = loadLimits();
     const probeFirst = estimate === null && today < limits.perDay;
-    const decision = spendDecision({ estimate }, { limits, today });
+    const decision = spendDecision({ estimate, free: gate.free }, { limits, today });
     const confirm = codeFor(operation(times, estimate), rows);
     const confirmed = decision.needApproval && given === confirm.code;
     if (decision.needApproval && !confirmed && (given !== null || !probeFirst)) stopForConfirm({ ...confirm, given, reasons: decision.reasons });
     const id = recordSpend({
       kind: 'flow', regionLabel: target.regionLabel, botId: target.botId, botName: target.botName, what: `整条试跑 ${entry.label}`, entry: entry.key,
-      count: times, estimate, reserve: estimate ?? UNKNOWN_RUN_COST * (confirmed ? times : 1),
+      paidKey: gate.paid.key, count: times, estimate, reserve: estimate ?? unknownUnit * (confirmed ? times : 1),
       basis: perRun === null ? '估不出' : basis, approved: confirmed ? 'confirm' : 'auto',
       ...(confirmed ? { opKey: confirm.opKey, code: confirm.code } : {}),
     });
@@ -201,18 +223,33 @@ export async function runFlowTrial(args) {
   try {
     for (let i = 1; i <= times; i++) {
       if (i > 1) {
-        // 下一次开跑前按实际花费重算整条命令，超了就停（同单节点试跑，审查 C1）
+        // 下一次开跑前按实际花费重算整条命令，超了就停（同单节点试跑）。其余几次的单价：有历史单价用它；没有就看已跑的——
+        // 都不知道就是估不出；已跑的恰好 ¥0（走了不花钱的分支）不代表下次也是，按保守价推（审查 C1）
         const remaining = times - i + 1;
+        const observed = costSummary(runs).perRun;
+        const unit = gate.free ? 0 : perRun ?? (observed === null ? null : observed > 0 ? observed : unknownUnit);
         const check = nextRunCheck({
-          runs, remaining, perRun, confirmed: plan.confirmed, confirmedEstimate: plan.confirmed ? estimate : null,
-          limits: plan.limits, othersToday: spentOn(readSpends().filter((r) => r.id !== plan.id)),
+          runs, remaining, perRun: unit, confirmed: plan.confirmed, confirmedEstimate: plan.confirmed ? estimate : null,
+          limits: plan.limits, othersToday: spentOn(readSpends().filter((r) => r.id !== plan.id)), free: gate.free,
         });
         if (!check.ok) {
+          // 确认码按「重跑其余几次时 md 会估出的价」算（账本只认大于 0 的单价），不然用户同意了、码也对不上
+          const rerun = observed !== null && observed > 0 ? observed : perRun;
+          const rest = rerun === null ? null : rerun * remaining;
           const sum = costSummary(runs);
-          out(`已跑 ${i - 1} 次，实际 ${formatCost(sum.actual)}${sum.unknownRuns ? `（另有 ${sum.unknownRuns} 次花费不知道）` : ''}；其余 ${remaining} 次${check.rest === null ? '估不出' : `按实际单价推算要 ${formatCost(check.rest)}`}`);
-          stopForConfirm({ ...codeFor(operation(remaining, check.rest), readSpends()), given: null, reasons: check.reasons, remaining });
+          out(`已跑 ${i - 1} 次，实际 ${formatCost(sum.actual)}${sum.unknownRuns ? `（另有 ${sum.unknownRuns} 次花费不知道）` : ''}；其余 ${remaining} 次${rest === null ? '估不出' : `按实际单价推算要 ${formatCost(rest)}`}`);
+          stopForConfirm({ ...codeFor(operation(remaining, rest), readSpends()), given: null, reasons: check.reasons, remaining });
         }
         if (typeof check.projected === 'number') updateSpend(plan.id, { reserve: check.projected });
+      }
+      // 每次发请求前按最新草稿再判一次闸门（审查 I2）：旧标签页自动保存会把插件接回来，拿记账锁也可能等过一阵。
+      // 能走到的那部分变了就停：重新跑这条命令会按新草稿重新检查、重新估价
+      const fresh = await getCanvas(target.identity, target.orgId, target.botId);
+      if (gateFor(fresh.rawCanvas, entry, events).fingerprint !== gate.fingerprint) {
+        throw new MdError('trial_flow_draft_changed', `草稿在检查之后被改过（能走到的节点或连线变了）：剩下的 ${times - i + 1} 次没跑`, {
+          exitCode: EXIT.BLOCKED,
+          hint: '重新跑这条命令：md 会按新的草稿重新检查、重新估价',
+        });
       }
       const sessionId = fixedSession ?? randomUUID();
       if (fixedSession) out(`会话 ${shortId(sessionId)}（接着聊）`);
@@ -220,13 +257,15 @@ export async function runFlowTrial(args) {
         recordSession(target, sessionId, entry.key);
         out(`会话 ${shortId(sessionId)}（新开的；接着这个会话说下一句：加 --session ${shortId(sessionId)}）`);
       }
-      const body = { canvasId: draft.canvasId, sessionId, ...trigger, ...(sessionData ? { sessionMemoryData: sessionData } : {}) };
+      const body = { canvasId: fresh.canvasId, sessionId, ...trigger, ...(sessionData ? { sessionMemoryData: sessionData } : {}) };
       let res;
       try {
         res = await runFlowOnce({ identity: target.identity, orgId: target.orgId, body });
       } catch (error) {
-        // 启动结果不明、查结果连续失败：钱可能已经花了，按「花费不知道」记一次
-        if (error instanceof MdError && (error.code === 'trial_start_unknown' || error.code === 'trial_poll_failed')) runs.push({ cost: null });
+        // 启动结果不明，或者已经启动了、后面出错（查结果失败、身份失效……）：钱可能已经花了，按「花费不知道」记一次（审查 M1）
+        const started = error?.started?.execId;
+        if (started || (error instanceof MdError && error.code === 'trial_start_unknown')) runs.push({ cost: null });
+        if (started) out(`#${i} ⚠️ 执行 ${started} 已经启动，没拿到结果：花费按不知道记；看结果：md exec ${started}`);
         throw error;
       }
       const { execId, result, timedOut } = res;
@@ -241,7 +280,7 @@ export async function runFlowTrial(args) {
         }
       }
       if (detail) saveDetail(execDir(target, execId), target, detail);
-      const norm = normalizeDetail(detail ?? { ...result, canvas: { rawCanvas: draft.rawCanvas } });
+      const norm = normalizeDetail(detail ?? { ...result, canvas: { rawCanvas: fresh.rawCanvas } });
       const cost = flowCostOf(result.canvasExec, norm.nodes, timedOut);
       runs.push({ cost });
       writeFileSync(join(dir, `run-${i}.json`), JSON.stringify({ execId, sessionId, request: body, timedOut, result }, null, 2));
@@ -256,14 +295,21 @@ export async function runFlowTrial(args) {
         if (norm.nodes.length > NODE_LINE_LIMIT) out(`    …另有 ${norm.nodes.length - NODE_LINE_LIMIT} 个节点：md exec ${execId}`);
         lastPath = { path, run: i };
       }
-      renderActions(norm.exec.outputActions);
+      if (timedOut) {
+        // 没跑完：动作和事件都还不全，不下「没有发消息」「事件那头」的结论（审查 M4）
+        out(`   没跑完：上面只是已经跑完的节点，回复和事件那头都还不知道；过一会儿用 md exec ${execId} 看`);
+        continue;
+      }
+      const lines = actionLines(norm.exec.outputActions);
+      out(`   回复：${lines.reply || '没有发消息，也没有转人工'}`);
+      if (lines.others) out(`   其它动作：${lines.others}`);
       if (result.canvasExec?.errorMessage) out(`   报错：${clip(String(result.canvasExec.errorMessage), 300)}`);
-      await renderDownstream({ target, execId, sessionId, createdAt: norm.exec.createdAt ?? result.canvasExec?.createdAt, outputActions: norm.exec.outputActions, schedules });
+      await renderDownstream({ target, execId, sessionId, createdAt: norm.exec.createdAt ?? result.canvasExec?.createdAt, outputActions: norm.exec.outputActions, schedules, events });
     }
   } finally {
-    // 花费不知道的那几次按「预估和实际单价取大的」记，都没有就按保守价
+    // 花费不知道的那几次：按「历史单价和已跑单价取大的」记；都是 0 或没有，就按保守价 × 付费节点数（能走到的都不花钱时是 0）
     const observed = costSummary(runs).perRun;
-    const sum = costSummary(runs, perRun === null && observed === null ? null : Math.max(perRun ?? 0, observed ?? 0));
+    const sum = costSummary(runs, gate.free ? 0 : Math.max(perRun ?? 0, observed ?? 0) || unknownUnit);
     updateSpend(plan.id, { actual: sum.actual, assumed: sum.assumed, actualPerRun: sum.perRun, runs: runs.length, unknownRuns: sum.unknownRuns });
   }
   const sum = costSummary(runs);

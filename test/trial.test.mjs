@@ -110,3 +110,10 @@ test('classifyTrialNode：工具按真实字段 type 认，只放行知识库查
   assert.deepEqual(classifyTrialNode(node(8, { payload: { tools: [{ type: 'mcp' }] } })).plugins, ['mcp']);
   assert.deepEqual(classifyTrialNode(node(8, { payload: { tools: [{ toolType: 'plugin', name: '旧写法' }] } })).plugins, ['旧写法']);
 });
+
+test('nextRunCheck：按类型证明不花钱（free）的直接放行，不因今天超了每日上限停下；没有 free 的照旧停（审查 I1）', () => {
+  const limits = { perCommand: 2, perDay: 100 };
+  const base = { runs: [{ cost: 0 }], remaining: 2, perRun: 0, confirmed: false, confirmedEstimate: null, limits, othersToday: 117.82 };
+  assert.deepEqual(nextRunCheck({ ...base, free: true }), { ok: true, projected: 0 });
+  assert.equal(nextRunCheck(base).ok, false);
+});

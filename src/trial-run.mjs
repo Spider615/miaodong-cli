@@ -101,12 +101,18 @@ export async function runFlowOnce({ identity, orgId, body }, { sleep = sleepMs, 
   } catch (error) {
     throw startFailure(error, sent.value, where);
   }
-  const { run, timedOut } = await pollUntil(
-    async () => (await requester('/api/canvas/exec', { query: { canvasExecId: execId, orgId } }))?.data ?? {},
-    flowDone,
-    { execId, where, sleep, now, pollMs, timeoutMs },
-  );
-  return { execId, result: run, timedOut };
+  try {
+    const { run, timedOut } = await pollUntil(
+      async () => (await requester('/api/canvas/exec', { query: { canvasExecId: execId, orgId } }))?.data ?? {},
+      flowDone,
+      { execId, where, sleep, now, pollMs, timeoutMs },
+    );
+    return { execId, result: run, timedOut };
+  } catch (error) {
+    // 已经启动了：后面不管怎么失败（查不到结果、身份失效……），调用方都要把这一次记进账本、告诉用户执行 id（审查 M1）
+    if (error && typeof error === 'object') error.started = { execId };
+    throw error;
+  }
 }
 
 // 同一个试跑会话里、这次之后的执行（spec §5.3）。history/list 查不到试跑执行，list-by-session 能（09-29 实测：

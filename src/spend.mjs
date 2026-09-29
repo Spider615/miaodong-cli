@@ -70,17 +70,19 @@ export function spentOn(rows, when = Date.now()) {
   return rows.filter((r) => dayKey(r.at) === key).reduce((sum, r) => sum + amountOf(r), 0);
 }
 
-// 要不要用户确认。estimate 为 null = 估不出花费
-export function spendDecision({ estimate, externalCalls = [] }, { limits, today }) {
+// 要不要用户确认。estimate 为 null = 估不出花费。
+// free = 按节点类型证明不花钱（代码、规则、计算器……）：不会让今天多花钱，今天已经超了上限也不为它确认
+// （09-29 真机：一笔只有发文本的整条试跑被拦下）。只看「预估是 0」不够：账本里的 0 可能是陈旧的（审查 C1）
+export function spendDecision({ estimate, externalCalls = [], free = false }, { limits, today }) {
   const reasons = [];
   if (externalCalls.length) reasons.push(`会真的调用外部系统：${externalCalls.join('、')}`);
+  if (free) return { needApproval: reasons.length > 0, reasons };
   if (estimate === null) {
     reasons.push('估不出花费');
     if (today >= limits.perDay) reasons.push(`今天已到每日上限 ¥${limits.perDay}`);
   } else {
     if (estimate > limits.perCommand) reasons.push(`预计 ¥${estimate.toFixed(2)}，超过单次门槛 ¥${limits.perCommand}`);
-    // 预估正好 ¥0 的不会让今天多花钱：今天已经超了上限也不为它确认（09-29 真机：一笔只有发文本的整条试跑被拦下）
-    if (estimate > 0 && today + estimate > limits.perDay) reasons.push(`今天已花 ¥${today.toFixed(2)}，加上这次超过每日上限 ¥${limits.perDay}`);
+    if (today + estimate > limits.perDay) reasons.push(`今天已花 ¥${today.toFixed(2)}，加上这次超过每日上限 ¥${limits.perDay}`);
   }
   return { needApproval: reasons.length > 0, reasons };
 }

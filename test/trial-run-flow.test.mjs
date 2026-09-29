@@ -67,3 +67,10 @@ test('sessionExecsAfter：只要同会话、这次之后的执行（不含这次
   assert.deepEqual([req.query.direction, req.query.pageSize, req.query.sessionId, req.query.botId], ['middle', '20', 'sess-0001-aaaa', 'b']);
   assert.match(req.query.timestamp, /^\d+$/);
 });
+
+test('runFlowOnce：启动之后查结果时身份失效，报错带上 execId（调用方要记账、告诉用户，审查 M1）', async () => {
+  fake.reset({ pollStatus: 401 });
+  await assert.rejects(runFlowOnce(job(), noWait), (e) => e.code === 'auth_expired' && e.started?.execId === FX(1));
+  fake.reset({ startStatus: 502 });
+  await assert.rejects(runFlowOnce(job(), noWait), (e) => e.code === 'trial_start_unknown' && e.started === undefined);
+});

@@ -69,10 +69,10 @@ test('withSpendLock：同时来的两个调用一个一个进（审查 I3）；�
   assert.equal(await withSpendLock(async () => 'ok'), 'ok');
 });
 
-test('spendDecision：预估正好 ¥0 的不会让今天多花钱——今天已经超了每日上限也不用确认；预估一分钱就要', () => {
+test('spendDecision：按类型证明不花钱（free）的，今天已经超了每日上限也不用确认；只是预估 ¥0 的照旧要（可能是陈旧的 0，审查 C1 / I1）', () => {
   const limits = { perCommand: 2, perDay: 100 };
-  assert.deepEqual(spendDecision({ estimate: 0 }, { limits, today: 117.82 }), { needApproval: false, reasons: [] });
+  assert.deepEqual(spendDecision({ estimate: 0, free: true }, { limits, today: 117.82 }), { needApproval: false, reasons: [] });
+  assert.equal(spendDecision({ estimate: 0 }, { limits, today: 117.82 }).needApproval, true);
   assert.equal(spendDecision({ estimate: 0.01 }, { limits, today: 117.82 }).needApproval, true);
-  assert.equal(spendDecision({ estimate: null }, { limits, today: 117.82 }).needApproval, true);
-  assert.equal(spendDecision({ estimate: 0, externalCalls: ['写多维表'] }, { limits, today: 0 }).needApproval, true);
+  assert.equal(spendDecision({ estimate: 0, free: true, externalCalls: ['写多维表'] }, { limits, today: 0 }).needApproval, true);
 });

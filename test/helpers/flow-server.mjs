@@ -1,7 +1,8 @@
 // 带整条试跑接口的假秒懂（spec 2026-09-29）。reset(patch) 改 state：
 //   startStatus（POST 的 HTTP 状态）、runningPolls（先回几次 running）、deliveringPolls（到终态后还有几次「有序发送中」）、
 //   pollStatus（GET 的 HTTP 状态）、cost / tokenCount（花费字段）、detailsStatus（history/details 的 HTTP 状态）、
-//   later（list-by-session 额外返回的同会话后续执行）、canvas / events / sessions。POST 的请求体记在 state.posts。
+//   later（list-by-session 额外返回的同会话后续执行）、laterStatus（list-by-session 的 HTTP 状态）、
+//   onPost(n)（第 n 次 POST 之后调，用来模拟跑的过程中草稿被改）、canvas / events / sessions。POST 的请求体记在 state.posts。
 import { ok, startFakeMiaodong } from './fake-miaodong.mjs';
 import { U, edge, node } from './fixtures.mjs';
 
@@ -86,7 +87,7 @@ export async function startFlowServer() {
     for (const key of Object.keys(state)) delete state[key];
     Object.assign(state, {
       posts: [], polls: new Map(), startStatus: 200, runningPolls: 1, deliveringPolls: 0, pollStatus: 200, detailsStatus: 200,
-      cost: 0.0123, tokenCount: { doubao: { prompt: 100, completion: 10 } }, later: [], createdAt: new Date().toISOString(),
+      cost: 0.0123, tokenCount: { doubao: { prompt: 100, completion: 10 } }, later: [], laterStatus: 200, onPost: null, createdAt: new Date().toISOString(),
       canvas: flowDraft(), events: flowEvents(), sessions: flowSessions(), ...patch,
     });
   };
@@ -104,6 +105,7 @@ export async function startFlowServer() {
     'POST /api/canvas/exec': ({ body }) => {
       state.posts.push(body);
       if (state.startStatus >= 400) return { status: state.startStatus, body: { statusCode: state.startStatus, message: state.startStatus >= 500 ? 'Bad Gateway' : 'Bad Request' } };
+      state.onPost?.(state.posts.length);
       return { status: 201, body: { code: 0, data: { execId: FX(state.posts.length) } } };
     },
     'GET /api/canvas/exec': ({ query }) => {
@@ -124,6 +126,7 @@ export async function startFlowServer() {
       return ok({ ...result, canvasExec: { ...result.canvasExec, botId: FLOW_BOT }, canvas: { canvasId: 'main-1', version: '', rawCanvas: state.canvas } });
     },
     'GET /api/canvas/history/list-by-session': ({ query }) => {
+      if (state.laterStatus >= 400) return { status: state.laterStatus, body: { message: 'Internal Server Error' } };
       const mine = state.posts.map((b, k) => ({ b, id: FX(k + 1) })).filter(({ b }) => b.sessionId === query.sessionId).map(({ id }) => {
         const r = resultOf(id).canvasExec;
         return { execId: id, createdAt: r.createdAt, status: r.status, outputActions: r.outputActions, triggerContent: { triggerType: r.triggerType, content: {} } };
