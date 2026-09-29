@@ -148,14 +148,13 @@ test('--session：接着聊时请求里是同一个 sessionId；真实客户的�
   assert.equal(posts().length, 2);
 });
 
-test('参数：--text 和 --event 只能给一个；不能再给节点；单节点参数、--allow-plugin 报错；--text 0 被吃成开关要说清楚', async () => {
+test('参数：--text 和 --event 只能给一个；不能再给节点；单节点参数、--allow-plugin 报错', async () => {
   fake.reset();
   const cases = [
     [['trial', '--text', 'a', '--event', '延时回复'], /只能给一个/],
     [['trial', '回答生成', '--text', 'a'], /不用给节点/],
     [['trial', '--text', 'a', '--from-exec', FX(9)], /只用于单节点试跑/],
     [['trial', '--text', 'a', '--allow-plugin'], /没法 mock 插件/],
-    [['trial', '--text', '0'], /被当成了开关/],
     [['trial', '--text', 'a', '--data', 'text=1'], /--data 只用于 --event/],
   ];
   for (const [args, re] of cases) {
@@ -164,6 +163,13 @@ test('参数：--text 和 --event 只能给一个；不能再给节点；单节�
     assert.match(r.stderr, re);
   }
   assert.equal(posts().length, 0);
+});
+
+test('用户消息恰好是 0 / no / false：原样当消息发，不当成开关「关」', async () => {
+  fake.reset();
+  const r = await md(['trial', '--text', '0', ...BOT], home());
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(posts()[0].receiveTextMessage, { text: '0', customAttrs: [] });
 });
 
 test('花费：估不出先跑 1 次；按上次同入口的实际单价超单次门槛就给确认码、不跑；带对的码才跑', async () => {

@@ -69,8 +69,6 @@ function lastPerRun(botId, entryKey, paidKey) {
 }
 
 function checkFlags(args) {
-  // 参数解析把单独的 0 / no / n / off / false 当成开关「关」：用户消息恰好是这几个词时说清楚，别报成「缺 --text」
-  if (args.text === false) throw usage('--text 的值被当成了开关「关」：单独的 0 / no / n / off / false 会这样', '在前面加个空格：--text " 0"');
   const text = strArg(args, 'text');
   const eventQuery = strArg(args, 'event');
   if (text && eventQuery) throw usage('--text 和 --event 只能给一个');

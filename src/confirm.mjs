@@ -4,6 +4,7 @@
 // 这是约定不是锁：码只有 AI 看得到，能证明 AI 看过金额，证明不了它真的问过用户。2026-09-25 用户决定不用弹窗。
 
 import { createHash } from 'node:crypto';
+import { boolWord } from './args.mjs';
 import { stableStringify } from './canvas.mjs';
 import { EXIT, MdError, usage } from './errors.mjs';
 import { out } from './output.mjs';
@@ -20,12 +21,15 @@ export function codeFor(operation, rows = []) {
   return { opKey, code: confirmCode({ opKey, n: uses }), previous: uses ? confirmCode({ opKey, n: uses - 1 }) : null };
 }
 
-// 没给 --confirm 是 null；只写了 --confirm 没给值是 ''（一定对不上）
+// 没给 --confirm、或写的是 --confirm false / no / 0 是 null（预演：写 false 的人显然不想确认，码是 8 位十六进制、不会是这几个词）；
+// 只写了 --confirm 没给值是 ''（一定对不上）。读 --confirm 的只有这里
 export function givenCode(args) {
   const v = args.confirm;
   if (Array.isArray(v)) throw usage('--confirm 只能给一次');
   if (v === undefined || v === false) return null;
-  return v === true ? '' : String(v).trim();
+  if (v === true) return '';
+  const code = String(v).trim();
+  return boolWord(code) === false ? null : code;
 }
 
 // 估算金额进确认码前取到 0.0001 元：同一笔操作重算出来的浮点数，不会因为最后几位不同而对不上

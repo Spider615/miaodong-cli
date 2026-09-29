@@ -46,6 +46,18 @@ test('预演不写；错的计划码被拦；对的计划码写入、回读、�
   assert.ok(!bot.server.requests.some((q) => /import|publish|enable|promote/.test(q.path)), '只许调 canvas/save');
 });
 
+test('--confirm false / no / 0 当成没给：照样预演，什么都不写', async () => {
+  bot.reset();
+  const { home } = await bot.pulled();
+  await bot.apply(home, PROMPT_FIX);
+  for (const word of ['false', 'no', '0']) {
+    const r = await runCli(['push', '--confirm', word], { home });
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout, /这是预演，什么都没写/);
+  }
+  assert.equal(bot.state.saves, 0);
+});
+
 test('预演后草稿又变了（编辑页自动保存）→ 计划码不符被拦，什么都不写', async () => {
   bot.reset();
   const { home } = await bot.pulled();

@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import { strArg } from '../args.mjs';
+import { boolArg, strArg } from '../args.mjs';
 import { EXIT, usage } from '../errors.mjs';
 import { readJson } from '../home.mjs';
 import { compareNodes } from '../canvas.mjs';
@@ -16,7 +16,7 @@ export const apply = {
   ].join('\n'),
   async run(args) {
     const ws = loadWorkspace(args);
-    if (args.reset) {
+    if (boolArg(args, 'reset')) {
       clearAfter(ws.dir, ws.base);
       saveMeta(ws.dir, { ...ws.meta, handEdited: false });
       out(wsLine({ ...ws, after: null }));

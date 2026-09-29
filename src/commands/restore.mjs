@@ -2,6 +2,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { strArg } from '../args.mjs';
 import { EXIT } from '../errors.mjs';
+import { givenCode } from '../confirm.mjs';
 import { ensureDir, readJson, writeJson } from '../home.mjs';
 import { getCanvas, saveCanvas } from '../api.mjs';
 import { compareNodes, hashOf } from '../canvas.mjs';
@@ -42,13 +43,14 @@ export const restore = {
     }
     out(`回滚会让草稿：恢复 ${d.onlyB} 个节点、去掉 ${d.onlyA} 个、改回 ${d.changed} 个、连线变化 ${d.edgesDiffer} 条（备份之后别人做的修改也会一起丢掉）`);
     const code = planCode({ botId, canvasId: live.canvasId, live: live.rawCanvas, save: backup.rawCanvas });
-    if (args.confirm === undefined || args.confirm === false) {
+    const given = givenCode(args);
+    if (given === null) {
       out('');
       out(`这是预演，什么都没写。计划码：${code}`);
       out(`用户同意后执行：md restore --ws ${ws.dir} --backup ${backupFile} --confirm ${code}`);
       return EXIT.OK;
     }
-    if (args.confirm !== code) throw blocked(`计划码对不上（当前是 ${code}）：草稿在预演之后又变了`, '重新预演一次');
+    if (given !== code) throw blocked(`计划码对不上（当前是 ${code}）：草稿在预演之后又变了`, '重新预演一次');
 
     const safety = join(ensureDir(join(ws.dir, 'backups')), `${stamp()}-before-restore.json`);
     writeJson(safety, { canvasId: live.canvasId, updatedAt: live.updatedAt, rawCanvas: live.rawCanvas });

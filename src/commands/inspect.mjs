@@ -1,4 +1,4 @@
-import { intArg } from '../args.mjs';
+import { boolArg, intArg } from '../args.mjs';
 import { EXIT } from '../errors.mjs';
 import { describeNode } from '../summarize.mjs';
 import { buildIndex, nodeName, refsTo, resolveNode, traceLines } from '../graph.mjs';
@@ -6,11 +6,11 @@ import { loadWorkspace, wsLine } from '../workspace.mjs';
 import { out, shortId } from '../output.mjs';
 
 function envelopeOf(ws, args) {
-  return args.base ? ws.base : ws.current;
+  return boolArg(args, 'base') ? ws.base : ws.current;
 }
 
 function scopeNote(ws, args) {
-  if (args.base) return '（看的是拉取时的基线）';
+  if (boolArg(args, 'base')) return '（看的是拉取时的基线）';
   return ws.after ? '（看的是改后的状态，加 --base 看基线）' : '';
 }
 
@@ -40,7 +40,7 @@ export const trace = {
     const start = resolveNode(envelope.canvas, args._[0]);
     out(`${wsLine(ws)}${scopeNote(ws, args)}`);
     const lines = traceLines(buildIndex(envelope.canvas, envelope.events), start.id, {
-      direction: args.up ? 'up' : 'down',
+      direction: boolArg(args, 'up') ? 'up' : 'down',
       depth: intArg(args, 'depth', 6),
     });
     for (const line of lines) out(line);

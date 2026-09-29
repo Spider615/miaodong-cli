@@ -40,14 +40,14 @@ async function searchExecs(args) {
   const filters = {
     keyword: strArg(args, 'keyword'),
     session: strArg(args, 'session'),
-    down: args.down === true,
-    up: args.up === true,
+    down: boolArg(args, 'down'),
+    up: boolArg(args, 'up'),
     event: strArg(args, 'event'),
     trigger: resolveAlias(TRIGGER_ALIASES, strArg(args, 'trigger'), 'trigger'),
     action: resolveAlias(ACTION_ALIASES, strArg(args, 'action'), 'action'),
     version,
-    canary: typeof args.canary === 'boolean' ? args.canary : undefined,
-    failed: args.failed === true,
+    canary: args.canary === undefined ? undefined : boolArg(args, 'canary'),
+    failed: boolArg(args, 'failed'),
   };
   const body = buildSearchBody({ botId, start: window.start, end: window.end, versionCanvasId, ...filters });
   const res = await searchExecutions(identity, orgId, body, {

@@ -157,4 +157,8 @@ test('md exec <id> --vs-draft：跑过的节点在草稿里改了哪些、删了
   assert.match(r.stdout, /1 个改过、1 个在草稿里已删除/);
   assert.match(r.stdout, /~ #2 回答生成 \[00000002\]：data\.nodePayload\.systemPrompt/);
   assert.match(r.stdout, /- #3 规则中心 \[00000003\]/);
+  // 开关写在执行 id 前面也一样：以前 id 被当成 --vs-draft 的值吞掉，报「缺 --bot」
+  const before = await md(['exec', '--vs-draft', X(2)]);
+  assert.equal(before.code, 0, before.stderr);
+  assert.equal(before.stdout, r.stdout);
 });

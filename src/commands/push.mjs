@@ -8,6 +8,7 @@ import { existsSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { boolArg, intArg } from '../args.mjs';
 import { EXIT, MdError } from '../errors.mjs';
+import { givenCode } from '../confirm.mjs';
 import { ensureDir, writeJson } from '../home.mjs';
 import { getCanvas, saveCanvas } from '../api.mjs';
 import { compareNodes, contentKey, edgeMap, hashOf, nodeMap, stableStringify } from '../canvas.mjs';
@@ -157,14 +158,15 @@ export const push = {
     for (const error of check.errors) out(`  ❌ ${error}（已用 --allow-check-errors 放行）`);
     for (const warning of check.warnings) out(`  ⚠️ ${warning}`);
 
-    if (args.confirm === undefined || args.confirm === false) {
+    const given = givenCode(args);
+    if (given === null) {
       out('');
       out(`这是预演，什么都没写。计划码：${code}`);
       out(`用户同意后执行：md push --ws ${ws.dir}${flagsOf(opts)} --confirm ${code}`);
       return EXIT.OK;
     }
-    if (args.confirm !== code) {
-      throw blocked(`计划码对不上（给的是 ${args.confirm === true ? '空' : args.confirm}，当前是 ${code}）：草稿在预演之后又变了，或计划码抄错了`, '重新预演一次，把新的改动清单给用户看');
+    if (given !== code) {
+      throw blocked(`计划码对不上（给的是 ${given || '空'}，当前是 ${code}）：草稿在预演之后又变了，或计划码抄错了`, '重新预演一次，把新的改动清单给用户看');
     }
 
     const at = stamp();

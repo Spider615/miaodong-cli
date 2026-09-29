@@ -1,7 +1,7 @@
 // md 的入口：解析参数 → 分发到命令 → 统一处理错误与退出码。
 // 构建时 esbuild 把 __MD_BUILD__ 替换成「提交号@日期」；开发模式下它不存在，显示 dev。
 
-import { parseArgs } from './args.mjs';
+import { boolArg, parseArgs } from './args.mjs';
 import { EXIT, MdError } from './errors.mjs';
 import { finish, note, out } from './output.mjs';
 import { COMMANDS } from './commands/index.mjs';
@@ -22,7 +22,7 @@ export async function main(argv) {
   const args = parseArgs(argv);
   const [name, ...rest] = args._;
   // 只有不带子命令时 --version 才是「看 md 版本」：md pull --version v1.0.400 里它是秒懂版本号
-  if (name === 'version' || (!name && args.version)) {
+  if (name === 'version' || (!name && boolArg(args, 'version'))) {
     out(VERSION ? `md ${VERSION}（${BUILD}）` : `md ${BUILD}`);
     return EXIT.OK;
   }
@@ -36,7 +36,7 @@ export async function main(argv) {
     note('运行 md help 查看全部命令');
     return EXIT.USAGE;
   }
-  if (args.help) {
+  if (boolArg(args, 'help')) {
     out(command.usage);
     return EXIT.OK;
   }

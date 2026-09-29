@@ -40,7 +40,10 @@ await finish(0);`;
   assert.equal(size, 2000 * 100);
 });
 
-test('parseArgs：--confirm false 当布尔 false', async () => {
+test('--confirm false / no / 0 当成没给确认码（预演），不当成码去比', async () => {
   const { parseArgs } = await import('../src/args.mjs');
-  assert.equal(parseArgs(['--confirm', 'false']).confirm, false);
+  const { givenCode } = await import('../src/confirm.mjs');
+  for (const word of ['false', 'no', '0', 'OFF']) assert.equal(givenCode(parseArgs(['--confirm', word])), null);
+  assert.equal(givenCode(parseArgs(['--confirm'])), '');
+  assert.equal(givenCode(parseArgs(['--confirm', 'ab12cd34'])), 'ab12cd34');
 });
