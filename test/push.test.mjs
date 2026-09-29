@@ -4,7 +4,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCli } from './helpers/run-cli.mjs';
 import { PROMPT_FIX, planCodeOf, startBotServer } from './helpers/bot-server.mjs';
-import { U, sampleCanvas } from './helpers/fixtures.mjs';
+import { U, edge, sampleCanvas } from './helpers/fixtures.mjs';
 
 let bot;
 before(async () => { bot = await startBotServer(); });
@@ -225,5 +225,18 @@ test('保存成功、回读失败（网络）：照样记进账本、留下推�
   const again = await runCli(['push'], { home });
   assert.equal(again.code, 5);
   assert.match(again.stderr, /这个工作副本还没有改动/);
+});
+
+test('草稿里有两端一样的重复连线、秒懂存的时候把它们并成一条：只提示，不报回读不一致', async () => {
+  bot.reset();
+  bot.state.draft = [...bot.state.draft, edge(105, 1, 2)];
+  const { home } = await bot.pulled();
+  await bot.apply(home, PROMPT_FIX);
+  const code = planCodeOf((await runCli(['push'], { home })).stdout);
+  bot.state.onSave = (saved) => saved.filter((c) => c.id !== U(105));
+  const r = await runCli(['push', '--confirm', code], { home });
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /✅ 已推送到草稿/);
+  assert.match(r.stdout, /两端一样的重复连线条数变了 1 条/);
 });
 

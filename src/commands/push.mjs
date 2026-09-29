@@ -11,7 +11,7 @@ import { EXIT, MdError } from '../errors.mjs';
 import { givenCode } from '../confirm.mjs';
 import { ensureDir, writeJson } from '../home.mjs';
 import { getCanvas, saveCanvas } from '../api.mjs';
-import { compareNodes, contentKey, edgeMap, hashOf, nodeMap, stableStringify } from '../canvas.mjs';
+import { compareNodes, contentKey, edgeKey, hashOf, keyedEdges, nodeMap, stableStringify } from '../canvas.mjs';
 import { graphProblems, runCheck } from '../check.mjs';
 import { diffEnvelopes, nameMapOf, renderDiff } from '../diff.mjs';
 import { businessNodes } from '../graph.mjs';
@@ -60,10 +60,22 @@ export function verifyReadback(expected, readback, canvasId, ours = null) {
     }
   }
   for (const id of r.keys()) if (!e.has(id)) extra++;
-  const ee = edgeMap(expected);
-  const re = edgeMap(readback.rawCanvas);
+  // 连线按两端（源#端口→目标#端口）比：哪一对两端多了、少了才算不一致。两端一样的重复连线条数变了只提示——
+  // 秒懂存的时候会不会把它们并成一条没实测过，并了也不改变走向
+  const pairs = (canvas) => {
+    const counts = new Map();
+    for (const [, edge] of keyedEdges(canvas)) counts.set(edgeKey(edge), (counts.get(edgeKey(edge)) ?? 0) + 1);
+    return counts;
+  };
+  const ee = pairs(expected);
+  const re = pairs(readback.rawCanvas);
   let edgesDiffer = 0;
-  for (const key of ee.keys()) if (!re.has(key)) edgesDiffer++;
+  let duplicatesDiffer = 0;
+  for (const [key, n] of ee) {
+    const got = re.get(key) ?? 0;
+    if (!got) edgesDiffer++;
+    else duplicatesDiffer += Math.abs(got - n);
+  }
   for (const key of re.keys()) if (!ee.has(key)) edgesDiffer++;
   if (missing) problems.push(`${missing} 个节点没写进去`);
   if (extra) problems.push(`多出 ${extra} 个节点`);
@@ -71,6 +83,7 @@ export function verifyReadback(expected, readback, canvasId, ours = null) {
   if (edgesDiffer) problems.push(`${edgesDiffer} 条连线不一致`);
   // 服务端会归一化个别字段（实测删过 data.modelDeprecated），未改动节点的差异只提示
   if (othersDiffer) notes.push(`${othersDiffer} 个节点里你没改的字段被服务端调整了（正常：服务端会归一化个别字段）`);
+  if (duplicatesDiffer) notes.push(`两端一样的重复连线条数变了 ${duplicatesDiffer} 条（秒懂存的时候可能把它们并成了一条，不改变走向）`);
   return { problems, notes };
 }
 
