@@ -1,6 +1,6 @@
 {
   "name": "miaodong-cli",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "private": true,
   "description": "md：让 Claude Code / Codex 读写秒懂（JZ Insight）智能体的命令行工具",
   "type": "module",

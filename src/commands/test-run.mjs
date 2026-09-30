@@ -71,7 +71,8 @@ async function unitCost(t, set, cases) {
 export async function run(args) {
   const t = await testTarget(args);
   const rounds = intArg(args, 'rounds', 1, 20);
-  const concurrency = intArg(args, 'concurrency', 5, 20);
+  // 默认并发 10（用户 09-30 定，原来是 5）；最多 20
+  const concurrency = intArg(args, 'concurrency', 10, 20);
   const allowErrors = boolArg(args, 'allow-preflight-errors');
   const given = givenCode(args);
   const set = await resolveTestSet(t, args._[0]);

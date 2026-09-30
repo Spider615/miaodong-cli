@@ -12,7 +12,7 @@
 | `md test import <集> --bot <目标> --from-file <cases.jsonl> [--into]` | 导入外部用例（格式见 `test-cases.md`） |
 | `md test audit <集> --from-file <cases.jsonl> --bot <智能体>` | 只读对账：文件里的用例和秒懂存的逐条逐字段比（见下面「对账」） |
 | `md test edit <集> <脚本.mjs> --bot <智能体> [--confirm <计划码>]` | 按脚本批量改用例（见 `test-cases.md`） |
-| `md test run <集> --bot <智能体> [--case <用例名或 id> …] [--version vX] [--rounds 1] [--concurrency 5] [--name <任务名>]` | 跑回归；`--case` 只跑挑出来的几条 |
+| `md test run <集> --bot <智能体> [--case <用例名或 id> …] [--version vX] [--rounds 1] [--concurrency 10] [--name <任务名>]` | 跑回归；`--case` 只跑挑出来的几条；并发默认 10、最多 20 |
 | `md test status [<任务>] --bot <智能体> [--wait] [--timeout 540]` | 进度；不给任务时列最近的任务 |
 | `md test results <任务> [<任务2> …] --bot <智能体> [--out <文件>] [--deep]` | 报告 |
 | `md test stop <任务> --bot <智能体>` | 暂停（秒懂没有取消） |

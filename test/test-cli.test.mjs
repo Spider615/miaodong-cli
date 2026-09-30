@@ -227,7 +227,7 @@ test('run：估不出花费一律要确认；带码才建任务（testRound、�
   const h = home();
   const first = await md(['test', 'run', '集', '--bot', '179cd443', '--rounds', '2'], h);
   assert.equal(first.code, 5);
-  assert.match(first.stdout, /1 条 × 2 轮 = 2 次/);
+  assert.match(first.stdout, /1 条 × 2 轮 = 2 次 · 并发 10/);
   assert.match(first.stdout, /预计 估不出（参考：单条 ¥0–0\.3）/);
   assert.match(first.stderr, /估不出花费/);
   assert.equal(fake.state.posts.taskCreate, undefined);
@@ -235,7 +235,7 @@ test('run：估不出花费一律要确认；带码才建任务（testRound、�
   const r = await md(['test', 'run', '集', '--bot', '179cd443', '--rounds', '2', '--confirm', code], h);
   assert.equal(r.code, 0, r.stderr);
   const body = fake.state.posts.taskCreate[0];
-  assert.deepEqual([body.testRound, body.canvasId, body.concurrency], [2, 'main-179c', 5]);
+  assert.deepEqual([body.testRound, body.canvasId, body.concurrency], [2, 'main-179c', 10]);
   assert.match(body.name, /^集-草稿-\d{4}-\d{4}$/);
   const [row] = spendRows(h);
   assert.deepEqual([row.kind, row.approved, row.code, row.reserve, row.count], ['test', 'confirm', code, 0.6, 2]);

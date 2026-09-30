@@ -21,7 +21,7 @@ const USAGE = [
   'md test import <集> --bot <智能体> --from-file <cases.jsonl> [--into]   外部用例：本地先校验全部，有错一条都不写；先写 1 条读回来核对，再批量写、挂场景、审计',
   'md test audit <集> --from-file <cases.jsonl> --bot <智能体>   只读对账：文件里的用例和秒懂存的逐条逐字段比，缺的、多的、不一样的、没挂对场景的都列出来',
   'md test edit <集> <脚本.mjs> --bot <智能体> [--confirm <计划码>]   按脚本批量改用例：默认预演给计划码；确认后先备份、逐条全量更新、回读核对',
-  'md test run <集> --bot <智能体> [--case <用例名或 id> …] [--version vX] [--rounds 1] [--concurrency 5] [--name <任务名>] [--allow-preflight-errors] [--confirm <码>]   跑回归：先跑前检查和预估，超门槛或估不出要用户确认；--case 只跑挑出来的几条',
+  'md test run <集> --bot <智能体> [--case <用例名或 id> …] [--version vX] [--rounds 1] [--concurrency 10] [--name <任务名>] [--allow-preflight-errors] [--confirm <码>]   跑回归：先跑前检查和预估，超门槛或估不出要用户确认；--case 只跑挑出来的几条',
   'md test status [<任务>] --bot <智能体> [--set <集>] [--wait] [--timeout 540]   进度；--wait 盯着跑，超出额度自动暂停，跑完记账',
   'md test stop <任务> --bot <智能体>                 暂停（秒懂没有取消）',
   'md test resume <任务> --bot <智能体> [--confirm <计划码>]   继续暂停的任务：默认预演剩几条、其余花费，给计划码；用户同意后带码才继续',
