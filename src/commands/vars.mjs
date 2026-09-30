@@ -26,8 +26,8 @@ async function varsOf(identity, orgId, botId, botName) {
   return rows.map(normalizeVar);
 }
 
-// 计划码绑定这次要做的事和预演时的整份列表：预演之后会话属性被人改过，码就对不上
-const planOf = (t, op, items, list) => confirmCode({ kind: `vars-${op}`, botId: t.botId, items, list: hashOf(list) });
+// 计划码绑定这次要做的事和预演时的整份列表：预演之后会话属性被人改过，码就对不上。列表按 id 排好再算：秒懂列的顺序不固定
+const planOf = (t, op, items, list) => confirmCode({ kind: `vars-${op}`, botId: t.botId, items, list: hashOf([...list].sort((a, b) => a.id.localeCompare(b.id))) });
 
 function confirmOrPreview(t, args, op, code, command) {
   const given = givenCode(args);
@@ -45,7 +45,8 @@ async function usageOf(t) {
   const draft = await getCanvas(t.identity, t.orgId, t.botId);
   const places = [{ label: '草稿', canvas: draft.rawCanvas }];
   const info = await basicInfo(t.identity, t.orgId, t.botId);
-  const versions = await listVersions(t.identity, t.orgId, draft.canvasId).catch(() => []);
+  // 版本列表取不到就报错、不往下做：灰度版本查不了，删了可能把灰度版本弄坏
+  const versions = await listVersions(t.identity, t.orgId, draft.canvasId);
   const online = info?.enabledCanvasId ? versions.find((v) => v.canvasId === info.enabledCanvasId) ?? { canvasId: info.enabledCanvasId, version: info.canvasVersion } : null;
   if (online) places.push({ label: `线上版本 ${online.version || shortId(online.canvasId)}`, canvasId: online.canvasId });
   for (const v of versions.filter((x) => x.isCanary && x.canvasId !== online?.canvasId)) places.push({ label: `灰度版本 ${v.version || shortId(v.canvasId)}`, canvasId: v.canvasId });

@@ -152,6 +152,15 @@ test('md vars：预演之后会话属性被别人改了，原来的计划码对�
   assert.deepEqual(fake.state.posts, []);
 });
 
+test('md vars：秒懂列会话属性的顺序变了（内容没变），预演给的计划码照样对得上', async () => {
+  fake.reset();
+  const h = home();
+  const dry = await md(['vars', 'rm', '已报名', ...BOT], h);
+  fake.state.vars[VARS_BOT].reverse();
+  const r = await md(['vars', 'rm', '已报名', ...BOT, '--confirm', codeOf(dry.stdout)], h);
+  assert.equal(r.code, 0, r.stderr);
+});
+
 test('md vars：名字认不出、重名时用 id；id 前缀也认', async () => {
   fake.reset();
   varsOf().push({ id: vid(8), name: '分数', type: { type: 'number' }, description: '重名的', isDefault: false });
