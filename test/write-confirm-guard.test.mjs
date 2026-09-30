@@ -15,7 +15,8 @@ const TRIAL_CORE = 'vendor/laodong/apps/api/lib/miaodong/trial-core.ts';
 
 // 会写秒懂的命令文件必须正好是这些。要用户同意的：照 test drop 加预演和计划码，并补「预演不写」的测试；归到不用确认的，先问用户
 // test-resume.mjs（md test resume，继续被暂停的任务，09-29 加）：继续就是多花钱，每次都先预演、带计划码才继续
-const NEEDS_CONFIRM = ['push.mjs', 'restore.mjs', 'test-edit.mjs', 'test-drop.mjs', 'kb-import.mjs', 'kb-revoke.mjs', 'test-resume.mjs'];
+// vars.mjs（md vars，会话属性定义的增删改，09-30 加）：写进去立刻对整个智能体生效，先预演、带计划码才写
+const NEEDS_CONFIRM = ['push.mjs', 'restore.mjs', 'test-edit.mjs', 'test-drop.mjs', 'kb-import.mjs', 'kb-revoke.mjs', 'test-resume.mjs', 'vars.mjs'];
 // trial-flow.mjs 是 md trial --text / --event（整条试跑）的实现，和 trial.mjs 同属 md trial（试跑），09-29 加
 const NO_CONFIRM = ['test-import.mjs', 'test-import-file.mjs', 'test-run.mjs', 'trial.mjs', 'trial-flow.mjs'];
 // 只分发子命令的路由：不参与分类，但自己不许写
@@ -32,6 +33,7 @@ const READ = [
 // /api/canvas/exec 有两个封装处：vendor 的 startTrialRun 只能发文本；整条试跑要带事件触发和预置会话变量，md 自己在 src/trial-run.mjs 的 runFlowOnce 里封装
 const WRITE = {
   '/api/canvas/save': 'src/api.mjs',
+  ...Object.fromEntries(['/api/session-memory/create', '/api/session-memory/update', '/api/session-memory/delete'].map((p) => [p, 'src/api.mjs'])),
   ...Object.fromEntries(['/test-set/create', '/test-set/delete', '/test-case/import', '/test-case/create', '/test-case/update',
     '/test-case/batch-delete', '/scenario/attach-cases', '/test-task/create', '/test-task/pause', '/test-task/resume'].map((p) => [TC + p, 'src/testcenter.mjs'])),
   ...Object.fromEntries(['/api/qa/batch-create', '/api/qa/batch-review', '/api/qa/batch-delete', '/api/knowledge-base/file/manual-create',
@@ -40,7 +42,7 @@ const WRITE = {
   '/api/canvas/exec': [TRIAL_CORE, 'src/trial-run.mjs'],
 };
 // 封装写接口的函数，按名字认（换个别名 import 也躲不开）；定义它们的文件自己不算。kb-write.mjs 整个是写模块，碰到就算会写
-const WRITE_FNS = ['saveCanvas', 'createTestSet', 'deleteTestSet', 'importExecs', 'updateCase', 'createCases', 'attachCases', 'deleteCases',
+const WRITE_FNS = ['saveCanvas', 'createSessionVar', 'updateSessionVar', 'deleteSessionVar', 'createTestSet', 'deleteTestSet', 'importExecs', 'updateCase', 'createCases', 'attachCases', 'deleteCases',
   'createTask', 'pauseTask', 'resumeTask', 'startNodeTrialRun', 'startTrialRun', 'runFlowOnce'];
 const DEFINERS = ['src/api.mjs', 'src/testcenter.mjs', 'src/kb-write.mjs', TRIAL_CORE].map(at);
 const KB_WRITE = at('src/kb-write.mjs');
@@ -141,7 +143,7 @@ test('封装写接口的函数都在写函数清单里：命令调到它们才�
   }
 });
 
-test('会写秒懂的命令正好是两份清单：要用户同意的 7 个、不用确认的 5 个（用户 09-27 定；09-29 加了 md trial 的整条试跑、md test resume）', () => {
+test('会写秒懂的命令正好是两份清单：要用户同意的 8 个、不用确认的 5 个（用户 09-27 定；09-29 加了 md trial 的整条试跑、md test resume，09-30 加了 md vars）', () => {
   const commands = readdirSync(CMD).filter((f) => f.endsWith('.mjs') && !ROUTERS.includes(f));
   const found = writers(commands);
   const expected = [...NEEDS_CONFIRM, ...NO_CONFIRM];

@@ -109,3 +109,18 @@ export function saveCanvas(identity, orgId, canvasId, rawCanvas) {
     timeoutMs: 120_000,
   });
 }
+
+// 会话属性（智能体的 session memory 定义）的增、改、删。接口文档 13.9.2 只列了路径，请求体照控制台 1.19.11 的写法：
+// 新增 {botId, name, type: {type}, description}；修改多一个 itemId、三样都要带（控制台编辑也是整条提交）；删除 {botId, itemId}。
+// 会话属性没有草稿这一层，写进去立刻对整个智能体生效。当前版本引用着的，秒懂拒绝删除和改类型（业务错误）
+export function createSessionVar(identity, orgId, botId, { name, type, description }) {
+  return request(identity, '/api/session-memory/create', { method: 'POST', query: { orgId }, body: { botId, name, type: { type }, description } });
+}
+
+export function updateSessionVar(identity, orgId, botId, { id, name, type, description }) {
+  return request(identity, '/api/session-memory/update', { method: 'POST', query: { orgId }, body: { botId, itemId: id, name, type: { type }, description } });
+}
+
+export function deleteSessionVar(identity, orgId, botId, id) {
+  return request(identity, '/api/session-memory/delete', { method: 'POST', query: { orgId }, body: { botId, itemId: id } });
+}

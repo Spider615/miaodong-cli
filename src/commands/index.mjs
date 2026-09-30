@@ -16,6 +16,7 @@ import { spend } from './spend.mjs';
 import { test } from './test.mjs';
 import { log, status } from './status.mjs';
 import { trial } from './trial.mjs';
+import { vars } from './vars.mjs';
 import { versions } from './versions.mjs';
 
-export const COMMANDS = { auth, orgs, bots, versions, pull, node, trace, refs, apply, diff, check, push, rebase, restore, status, log, exec, spend, trial, test, kb };
+export const COMMANDS = { auth, orgs, bots, versions, pull, node, trace, refs, apply, diff, check, push, rebase, restore, status, log, exec, spend, trial, test, kb, vars };

@@ -85,7 +85,7 @@ export const status = {
 };
 
 export const log = {
-  summary: '推送 / 回滚记录（改了哪些节点）',
+  summary: '推送 / 回滚记录（改了哪些节点），以及会话属性的增删改',
   usage: 'md log [--bot <名字或 id 前缀>] [--limit 20]',
   async run(args) {
     const query = strArg(args, 'bot');
@@ -95,6 +95,13 @@ export const log = {
       return EXIT.OK;
     }
     for (const e of entries) {
+      // 会话属性的增删改（md vars）：一行说清做了什么、哪几个
+      if (e.kind === 'vars') {
+        const verb = { add: '新增', edit: '修改', rm: '删除' }[e.op] ?? e.op;
+        const names = (e.items ?? []).map((x) => x.name).join('、');
+        out(`${formatTime(e.at)} 会话属性 ${verb} ${e.regionLabel} / ${e.botName} (${shortId(e.botId)})：${e.op === 'edit' && e.before?.name && e.before.name !== names ? `${e.before.name} → ${names}` : names}`);
+        continue;
+      }
       const counts = e.kind === 'push' ? ` · 改 ${e.changed.length} 增 ${e.added.length} 删 ${e.removed.length} · 连线 +${e.edgesAdded} -${e.edgesRemoved}` : '';
       out(`${formatTime(e.at)} ${e.kind === 'restore' ? '回滚' : '推送'} ${e.regionLabel} / ${e.botName} (${shortId(e.botId)})${counts}${e.readbackFailed ? ' · ⚠️ 回读失败' : e.problems?.length ? ' · ⚠️ 回读不一致' : ''}`);
       if (e.kind !== 'push') continue;
