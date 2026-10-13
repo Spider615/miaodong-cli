@@ -1,6 +1,6 @@
 // 单节点试跑的纯逻辑：哪些节点能跑、输入怎么拼、本地改动推没推。
 // 能跑的只有计算类节点，和秒懂页面一致（页面只给计算类节点「测试该节点」按钮）；未知类型一律不跑。
-// 插件计算节点、挂了插件工具的大模型会真的调外部系统：要 --allow-plugin，并且要用户确认（确认码）。
+// 插件计算节点、挂了外部工具的节点会真的调外部系统：不能单节点试跑，必须走测试中心 mock。
 
 import { asArray } from './api.mjs';
 import { contentKey, nodeMap } from './canvas.mjs';
@@ -25,7 +25,7 @@ export function classifyTrialNode(cell) {
   const type = String(data.type ?? cell?.shape ?? '');
   if (type === 'plugin-calculation') return { kind: 'plugin', type, plugins: [String(data.name ?? type)] };
   const external = asArray(data.nodePayload?.tools).filter((t) => !SAFE_TOOL_TYPES.has(toolTypeOf(t)));
-  if (type === 'llm-completion' && external.length) {
+  if (external.length) {
     return { kind: 'plugin', type, plugins: external.map((t) => String(t?.name ?? t?.toolName ?? t?.pluginName ?? t?.configParams?.name ?? (toolTypeOf(t) || '外部工具'))) };
   }
   if (TRIAL_ALLOWED.has(type)) return { kind: 'allowed', type, plugins: [] };

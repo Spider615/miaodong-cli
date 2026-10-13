@@ -34,6 +34,8 @@ md test import <集> --bot <智能体> --from-file cases.jsonl --into   # 导进
 
 别的字段一律报错。比如把 `expect` 拼成 `expected`：不报错的话，就会建出一条没有断言的用例。
 
+插件 mock 的每项是 `{"nodeId":"完整节点 id","pluginId":"画布配置的插件 id","outputs":{"插件输出字段名":"对应值"}}`。`outputs` 保留实际字段及其值（包括 `0`、`false`、空串和 `null`）。调优中心导入的 case 已有数据直接使用；外部用例缺 mock 可用 `md test mocks` 生成编辑脚本。跑前逐条核对整个画布的插件计算节点，缺失或无效时不跑，不退回真实调用。mock 读回丢失属于关键错误。
+
 ### expect 的写法
 
 | 写法 | 意思 |

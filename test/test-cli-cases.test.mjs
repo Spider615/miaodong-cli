@@ -77,6 +77,17 @@ test('import --from-file：先写的 1 条关键字段被丢（会话数据）�
   assert.deepEqual([fake.state.sets, fake.state.cases], [[], []]);
 });
 
+test('import --from-file：插件 mock 被服务端丢掉属于关键错误，撤回试写，不继续批量导入', async () => {
+  reset({ dropFields: ['pluginMockOutputs'] });
+  const h = home();
+  const rows = withoutScenario(THREE).map((c) => ({ ...c, mocks: { plugin: [{ nodeId: 'plugin-node', pluginId: 'plugin-profile', outputs: { output: '原 case 插件数据' } }] } }));
+  const r = await md(['test', 'import', '外部回归', '--bot', '179cd443', '--from-file', jsonl(h, rows)], h);
+  assert.equal(r.code, 1, r.stderr);
+  assert.match(r.stderr, /插件 mock.*已撤回/);
+  assert.equal(fake.state.posts.caseCreate.length, 1);
+  assert.deepEqual([fake.state.sets, fake.state.cases], [[], []]);
+});
+
 test('import --from-file --into：和集里已有的 name 重复就拦下；不重复的追加进去', async () => {
   reset();
   const h = home();

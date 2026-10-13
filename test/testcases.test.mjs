@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CRITICAL_FIELDS, buildIdMap, caseDiffs, caseText, execIdOfCase, fieldLabel, idProblems, leftoverIds, preflight, remapCase, summarizeCases } from '../src/testcases.mjs';
 import { CROSS_EXEC, LOST_EXEC, SAME_EXEC, SOURCE_BOT, TARGET_BOT, botEvents, botVars, importable, pluginCanvas, targetCanvas } from './helpers/testcenter-fixtures.mjs';
+import { U, node } from './helpers/fixtures.mjs';
 
 const maps = () => buildIdMap({ sourceEvents: botEvents[SOURCE_BOT], targetEvents: botEvents[TARGET_BOT], sourceVars: botVars[SOURCE_BOT], targetVars: botVars[TARGET_BOT] });
 
@@ -62,6 +63,43 @@ test('preflight：取不到事件或会话变量列表时算跑前检查不通�
   assert.match(r.errors.map((e) => e.reason).join(), /取不到这个智能体的事件或会话变量列表，没法核对会不会空跑/);
 });
 
+test('插件 mock 按每条用例的完整 nodeId + pluginId 核对，直接复用调优中心导入的数据', () => {
+  const mock = { nodeId: U(23), pluginId: 'plugin-profile', outputs: { zero: 0, no: false, blank: '', absent: null, nested: { rows: [] } } };
+  const covered = { ...importable[SAME_EXEC], name: '有 mock', pluginMockOutputs: [mock] };
+  const uncovered = { ...importable[SAME_EXEC], name: '缺 mock' };
+  const before = structuredClone(covered);
+  const r = preflight([covered, uncovered], { canvas: pluginCanvas(), events: botEvents[TARGET_BOT], vars: botVars[TARGET_BOT] });
+  assert.equal(r.mockErrors.length, 1);
+  assert.equal(r.mockErrors[0].name, '缺 mock');
+  assert.match(r.mockErrors[0].reason, /查用户详情.*mock/);
+  assert.deepEqual(covered, before);
+  assert.deepEqual(preflight([covered], { canvas: pluginCanvas(), events: botEvents[TARGET_BOT], vars: botVars[TARGET_BOT] }).mockErrors, []);
+});
+
+test('无效 mock 不会被当成覆盖：旧插件 id、节点 id 前缀、缺 outputs、null、数组、重复节点', () => {
+  const good = { nodeId: U(23), pluginId: 'plugin-profile', outputs: { output: '已导入的真实输出' } };
+  for (const mocks of [
+    [{ ...good, pluginId: 'old-plugin' }], [{ ...good, nodeId: U(23).slice(0, 8) }],
+    [{ nodeId: good.nodeId, pluginId: good.pluginId }], [{ ...good, outputs: null }], [{ ...good, outputs: [] }],
+    [good, good], [{ ...good, pluginId: 'old-plugin' }, good], { nodeId: good.nodeId }, { list: [good] },
+  ]) {
+    const r = preflight([{ ...importable[SAME_EXEC], pluginMockOutputs: mocks }], { canvas: pluginCanvas(), events: botEvents[TARGET_BOT], vars: botVars[TARGET_BOT] });
+    assert.ok(r.mockErrors.length > 0, JSON.stringify(mocks));
+  }
+});
+
+test('插件动作和外挂工具的 mock 拦截未经核对，不接受一个同名节点 mock 就放行', () => {
+  for (const cell of [
+    node(23, { type: 'plugin-action', payload: { pluginId: 'plugin-profile' } }),
+    node(23, { payload: { tools: [{ type: 'plugin', name: '写客户数据' }] } }),
+    node(23, { type: 'javascript-code', payload: { tools: [{ type: 'http', name: 'HTTP' }] } }),
+  ]) {
+    const r = preflight([{ ...importable[SAME_EXEC], pluginMockOutputs: [{ nodeId: U(23), pluginId: 'plugin-profile', outputs: {} }] }], { canvas: [...targetCanvas(), cell], events: botEvents[TARGET_BOT], vars: botVars[TARGET_BOT] });
+    assert.ok(r.mockErrors.length > 0);
+    assert.match(r.mockErrors[0].reason, /无法确认.*mock/);
+  }
+});
+
 test('caseDiffs：只比 update 会写的字段；关键字段（name、触发、会话数据、断言）和非关键字段（dimension 等）分开', () => {
   const sent = { name: 'a', triggerType: 'receive-text-message', triggerInputs: { text: 'x' }, sessionMemoryCustomData: { v: 1 }, canvasActionOutputAssertions: [], testNodeOutputAssertions: [], dimension: '分类', isStrictVerify: false, testCaseId: 'c1' };
   const got = { ...sent, sessionMemoryCustomData: {}, dimension: '', status: 'ready' };
@@ -70,6 +108,11 @@ test('caseDiffs：只比 update 会写的字段；关键字段（name、触发�
   assert.deepEqual(caseDiffs(sent, undefined).map((d) => d.field).sort(), ['canvasActionOutputAssertions', 'dimension', 'isStrictVerify', 'name', 'sessionMemoryCustomData', 'testNodeOutputAssertions', 'triggerInputs', 'triggerType']);
   assert.ok(CRITICAL_FIELDS.includes('canvasActionOutputAssertions'));
   assert.equal(fieldLabel('sessionMemoryCustomData'), '会话数据');
+});
+
+test('mock 回读：真正的数据被丢算关键错误；没有 mock 的空数组和 null 不误报', () => {
+  assert.deepEqual(caseDiffs({ pluginMockOutputs: [], sqlDbMockOutputs: [] }, { pluginMockOutputs: null, sqlDbMockOutputs: null }), []);
+  assert.deepEqual(caseDiffs({ pluginMockOutputs: [{ nodeId: U(23), pluginId: 'plugin-profile', outputs: { output: 0 } }] }, { pluginMockOutputs: [] }), [{ field: 'pluginMockOutputs', critical: true }]);
 });
 
 test('idProblems 也查断言里的 id：发事件断言的事件、写字段断言的会话变量在这个智能体里没有就记下，标成 assertion', () => {

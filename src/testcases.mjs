@@ -4,6 +4,7 @@ import { asArray } from './api.mjs';
 import { classifyTrialNode } from './trial.mjs';
 import { stableStringify } from './canvas.mjs';
 import { WRITABLE_FIELDS } from './testcenter.mjs';
+import { pluginMockPreflight } from './plugin-mocks.mjs';
 
 // 估不出花费时，每条每轮按这个价预留（spec §7：测试的参考单价 ¥0–0.3），宁可多算
 export const UNKNOWN_CASE_COST = 0.3;
@@ -177,12 +178,13 @@ export function preflight(cases, { canvas, events, vars }) {
     if (cls.kind === 'plugin') plugins.push(...cls.plugins);
     else if (cell.data.type === 'plugin-action') plugins.push(String(cell.data.name ?? cell.data.type));
   }
-  return { errors, plugins: [...new Set(plugins)], unreviewed: cases.filter((c) => c?.isReviewed === false).length };
+  const mocks = pluginMockPreflight(cases, canvas);
+  return { errors, plugins: [...new Set(plugins)], mockErrors: mocks.errors, mockedPlugins: mocks.nodes.length, unreviewed: cases.filter((c) => c?.isReviewed === false).length };
 }
 
 // 回读核对（spec §6.3 第 3、5 步，§6.4）：只比 update 会写的字段。关键字段不对，这条就不是写进去的那条用例；
 // 非关键字段有的区不保存（核对 8：兴趣岛丢 dimension），只提醒
-export const CRITICAL_FIELDS = ['name', 'triggerType', 'triggerInputs', 'sessionMemoryCustomData', 'testNodeOutputAssertions', 'canvasActionOutputAssertions'];
+export const CRITICAL_FIELDS = ['name', 'triggerType', 'triggerInputs', 'sessionMemoryCustomData', 'pluginMockOutputs', 'sqlDbMockOutputs', 'testNodeOutputAssertions', 'canvasActionOutputAssertions'];
 const LABELS = { name: 'name', dimension: 'dimension', triggerType: '触发类型', triggerInputs: '触发输入', sessionMemoryCustomData: '会话数据', pluginMockOutputs: '插件 mock', sqlDbMockOutputs: '数据库 mock', testNodeOutputAssertions: '节点断言', canvasActionOutputAssertions: '断言', isStrictVerify: '严格校验' };
 export const fieldLabel = (field) => LABELS[field] ?? field;
 
@@ -194,7 +196,9 @@ export function caseDiffs(sent, got, fields = Object.keys(sent ?? {})) {
     .filter((field) => WRITABLE_FIELDS.includes(field))
     .filter((field) => {
       const [a, b] = [sent?.[field], got?.[field]];
-      if (!CRITICAL_FIELDS.includes(field) && blank(a) && blank(b)) return false;
+      // 空 mock 数组、null 都表示没有 mock；真正的数据被丢掉才是关键错误。
+      const allowBlank = !CRITICAL_FIELDS.includes(field) || field === 'pluginMockOutputs' || field === 'sqlDbMockOutputs';
+      if (allowBlank && blank(a) && blank(b)) return false;
       return stableStringify(a) !== stableStringify(b);
     })
     .map((field) => ({ field, critical: CRITICAL_FIELDS.includes(field) }));

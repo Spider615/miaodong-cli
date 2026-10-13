@@ -5,7 +5,7 @@ import { UNKNOWN_RUN_COST, buildTrialInputs, classifyTrialNode, costOf, costSumm
 
 const llm = node(2, { name: '回答生成', payload: { inputs: [{ name: 'text', referenceNodeId: 'x' }, { name: '质检规则', operationAttrId: 'op-1' }] } });
 
-test('classifyTrialNode：计算类能跑；插件类要 --allow-plugin；动作、触发、未知一律不跑', () => {
+test('classifyTrialNode：计算类能跑；识别插件供命令拦下；动作、触发、未知一律不跑', () => {
   assert.equal(classifyTrialNode(llm).kind, 'allowed');
   assert.equal(classifyTrialNode(node(3, { type: 'rule-center' })).kind, 'allowed');
   assert.deepEqual(classifyTrialNode(node(7, { name: '兴趣岛用户详情', type: 'plugin-calculation' })), { kind: 'plugin', type: 'plugin-calculation', plugins: ['兴趣岛用户详情'] });

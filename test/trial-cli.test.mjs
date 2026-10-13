@@ -61,32 +61,47 @@ test('--keep-platform-params 保留；--input 覆盖；--times 2 跑两次并汇
   assert.match(r.stdout, /2 次里 1 种不同输出/);
 });
 
-test('动作类节点不跑；插件节点没有 --allow-plugin 不跑；有了也要先给确认码、不跑', async () => {
+test('动作类节点不跑；插件节点只能走测试中心 mock，不能通过 allow-plugin 放行', async () => {
   reset();
   const action = await md(['trial', '触发发送', '--bot', '147bd600']);
   assert.equal(action.code, 5);
   assert.match(action.stderr, /不做单节点试跑/);
   const plugin = await md(['trial', '兴趣岛用户详情', '--bot', '147bd600', '--input', 'x=1']);
   assert.equal(plugin.code, 5);
-  assert.match(plugin.stderr, /--allow-plugin/);
+  assert.match(plugin.stderr, /mock/);
   const tool = await md(['trial', '带插件的大模型', '--bot', '147bd600', '--input', 'text=1', '--allow-plugin']);
   assert.equal(tool.code, 5);
-  assert.match(tool.stderr, /需要用户确认.*会真的调用外部系统：写多维表/);
-  assert.ok(codeIn(tool.stdout), tool.stdout);
+  assert.match(tool.stderr, /mock/);
+  assert.equal(codeIn(tool.stdout), undefined);
   assert.equal(fake.state.posts.length, 0);
 });
 
-test('插件节点：用户同意后带确认码才跑；账本记「用户确认」和那个码', async () => {
+test('单节点试跑的真实插件调用入口关闭：allow-plugin 加 confirm 也不发请求、不记账', async () => {
   reset();
   const h = home();
   const args = ['trial', '带插件的大模型', '--bot', '147bd600', '--input', 'text=1', '--allow-plugin'];
-  const code = codeIn((await md(args, h)).stdout);
-  assert.ok(code);
-  const r = await md([...args, '--confirm', code], h);
-  assert.equal(r.code, 0, r.stderr);
-  assert.equal(fake.state.posts.length, 1);
-  const [row] = spends(h);
-  assert.deepEqual([row.approved, row.code], ['confirm', code]);
+  const r = await md([...args, '--confirm', '00000000'], h);
+  assert.equal(r.code, 5, r.stderr);
+  assert.equal(fake.state.posts.length, 0);
+  assert.deepEqual(spends(h), []);
+});
+
+test('单节点试跑：读取输入后草稿挂上了外部工具，在发执行请求前拦下', async () => {
+  reset();
+  const route = fake.server.routes['GET /api/canvas/get'];
+  let gets = 0;
+  fake.server.routes['GET /api/canvas/get'] = (req) => {
+    const result = route(req);
+    if (++gets > 1) result.body.data.rawCanvas.find((c) => c.id === U(2)).data.nodePayload.tools = [{ type: 'plugin', name: '写客户数据' }];
+    return result;
+  };
+  try {
+    const r = await md(['trial', '回答生成', '--bot', '147bd600', '--from-exec', X(2)]);
+    assert.equal(r.code, 5, r.stderr);
+    assert.equal(fake.state.posts.length, 0);
+  } finally {
+    fake.server.routes['GET /api/canvas/get'] = route;
+  }
 });
 
 test('预估超单次门槛：不跑、不记账，给确认码；码不对不跑；带对的码才跑；同一个码不能再用', async () => {

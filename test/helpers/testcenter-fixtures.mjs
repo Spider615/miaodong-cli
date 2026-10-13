@@ -51,7 +51,7 @@ export function targetCanvas() {
 
 // 同上，再挂一个会真调外部系统的插件计算节点
 export function pluginCanvas() {
-  return [...targetCanvas(), node(23, { name: '查用户详情', type: 'plugin-calculation' }), edge(123, 22, 23)];
+  return [...targetCanvas(), node(23, { name: '查用户详情', type: 'plugin-calculation', payload: { pluginId: 'plugin-profile' } }), edge(123, 22, 23)];
 }
 
 function importedCase(execId, { eventId, sendEventId, hist, flag, text }) {

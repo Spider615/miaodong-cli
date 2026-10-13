@@ -8,14 +8,17 @@
 // 本机任务记录改成「用户确认过、额度 = 已花 + 这次确认的 + 一个单次门槛」：md test status --wait 的止损按新额度算，不会一看进度就又暂停。
 
 import { EXIT, MdError } from '../errors.mjs';
+import { getCanvas } from '../api.mjs';
+import { stableStringify } from '../canvas.mjs';
 import { out, shortId, targetLine } from '../output.mjs';
 import { formatCost } from '../execs.mjs';
 import { dayKey, loadLimits, readSpends, recordSpend, spentOn, updateSpend, withSpendLock } from '../spend.mjs';
 import { codeFor, givenCode, roundCost } from '../confirm.mjs';
-import { resumeTask, taskDetail, taskItems } from '../testcenter.mjs';
+import { listCases, resumeTask, taskDetail, taskItems } from '../testcenter.mjs';
 import { UNKNOWN_CASE_COST } from '../testcases.mjs';
 import { readTaskRecord, taskCaseCount, testTarget, writeTaskRecord } from '../test-common.mjs';
 import { judgeFee, progressOf, resolveTask } from './test-run.mjs';
+import { assertPluginMocks, mockSafetyOf, pluginMockPreflight } from '../plugin-mocks.mjs';
 
 // 这些错误是明确没继续（被拒、身份失效、企业到期、积分不足）：继续那一笔记 0，原样报错（身份类的提示要留着）
 const refused = (error) => error instanceof MdError
@@ -34,7 +37,21 @@ export async function resume(args) {
     return EXIT.OK;
   }
   const rec = readTaskRecord(t, task.testTaskId);
-  const p = progressOf(detail, await taskItems(t, task.testTaskId), judgeFee(t, detail?.testSetId), rec?.cases ?? null);
+  // 不能按当前用例补 mock 后继续旧任务：服务端可能已把原来的用例 / 画布存成任务快照。
+  if (!rec?.mockSafety || !detail?.canvasId || detail.canvasId !== rec.canvasId || detail.testSetId !== rec.testSetId) {
+    throw new MdError('resume_mock_unknown', '没有这个任务创建时的插件 mock 核对记录，无法确认旧快照会不会真实调用插件，没有继续', {
+      exitCode: EXIT.BLOCKED, hint: '旧版 md / 页面创建的任务不能直接继续。先核对 case 的插件数据，再 md test run --case <尚未执行的用例> 新建安全的任务（已执行条目重跑会重复花费）',
+    });
+  }
+  const [canvas, all, items] = await Promise.all([getCanvas(t.identity, t.orgId, t.botId, detail.canvasId), listCases(t, detail.testSetId), taskItems(t, task.testTaskId)]);
+  const ids = new Set(Object.keys(rec.mockSafety.cases));
+  const cases = all.filter((c) => ids.has(c.testCaseId));
+  assertPluginMocks(pluginMockPreflight(cases, canvas.rawCanvas));
+  const safety = mockSafetyOf(cases, canvas.rawCanvas);
+  if (stableStringify(safety) !== stableStringify(rec.mockSafety) || items.some((i) => !ids.has(i.testCaseId))) {
+    throw new MdError('resume_mock_changed', '任务的画布、用例范围或插件 mock 数据在暂停前后变了，无法确认旧快照安全，没有继续', { exitCode: EXIT.BLOCKED, hint: '核对当前 mock 后，只选尚未执行的用例 md test run 新建任务' });
+  }
+  const p = progressOf(detail, items, judgeFee(t, detail?.testSetId), rec?.cases ?? null);
   const remaining = Math.max(0, p.total - p.done);
   const unit = p.unit ?? rec?.unit ?? null;
   const estimate = unit === null ? null : unit * remaining;
@@ -44,7 +61,7 @@ export async function resume(args) {
   out(`今天已花 ${formatCost(spentOn(readSpends()))} / 上限 ${formatCost(limits.perDay)}`);
 
   // 计划码绑定任务、进度和预估：预演之后任务又跑了几条、单价变了，码就对不上；用过一次也作废（记在账本里）
-  const operation = { kind: 'test-resume', botId: t.botId, testTaskId: task.testTaskId, done: p.done, total: p.total, estimate: roundCost(estimate), day: dayKey() };
+  const operation = { kind: 'test-resume', botId: t.botId, testTaskId: task.testTaskId, mockSafety: safety, done: p.done, total: p.total, estimate: roundCost(estimate), day: dayKey() };
   const { opKey, code } = codeFor(operation, readSpends());
   if (given === null) {
     out(`这是预演，什么都没写。计划码：${code}`);

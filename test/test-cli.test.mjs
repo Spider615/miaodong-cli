@@ -6,6 +6,7 @@ import { runCli, tempHome } from './helpers/run-cli.mjs';
 import { seedIdentity } from './helpers/seed.mjs';
 import { startTestCenterServer } from './helpers/testcenter-server.mjs';
 import { CROSS_EXEC, LOST_EXEC, SAME_EXEC, SOURCE_BOT, STALE_EXEC, TARGET_BOT, execSearchLines, importable, pluginCanvas } from './helpers/testcenter-fixtures.mjs';
+import { U } from './helpers/fixtures.mjs';
 
 let fake;
 before(async () => { fake = await startTestCenterServer(); });
@@ -282,18 +283,122 @@ test('run --case：只跑挑出来的几条（名字、用例 id 或 id 前缀�
   assert.match(dup.stderr, /有 2 条同名/);
 });
 
-test('run：画布上有插件就要确认，哪怕很便宜；--version 跑那个版本的 canvasId', async () => {
+test('run：没有插件 mock 就阻止启动，confirm 和 allow-preflight-errors 都不能放行', async () => {
   reset({ canvas: pluginCanvas() });
   seedFinished(seedSet('集', [SAME_EXEC]), 0.02);
   const h = home();
   const first = await md(['test', 'run', '集', '--bot', '179cd443', '--version', 'v1.0.215'], h);
   assert.equal(first.code, 5);
   assert.match(first.stdout, /v1\.0\.215/);
-  assert.match(first.stdout, /会真实调用的外部系统：查用户详情/);
-  assert.match(first.stderr, /会真的调用外部系统：查用户详情/);
-  const r = await md(['test', 'run', '集', '--bot', '179cd443', '--version', 'v1.0.215', '--confirm', codeIn(first.stdout)], h);
+  assert.match(first.stderr, /插件 mock/);
+  const r = await md(['test', 'run', '集', '--bot', '179cd443', '--version', 'v1.0.215', '--allow-preflight-errors', '--confirm', '00000000'], h);
+  assert.equal(r.code, 5, r.stderr);
+  assert.equal(fake.state.posts.taskCreate, undefined);
+  assert.deepEqual(spendRows(h), []);
+});
+
+test('run：用例里已有的插件数据直接使用，齐全时不再要求真实插件调用确认；version 仍选指定画布', async () => {
+  reset({ canvas: pluginCanvas() });
+  seedFinished(seedSet('集', [SAME_EXEC]), 0.02);
+  const mock = { nodeId: U(23), pluginId: 'plugin-profile', outputs: { output: { state: 0, data: '' } } };
+  fake.state.cases[0].pluginMockOutputs = [mock];
+  const r = await md(['test', 'run', '集', '--bot', '179cd443', '--version', 'v1.0.215']);
   assert.equal(r.code, 0, r.stderr);
   assert.equal(fake.state.posts.taskCreate[0].canvasId, 'ver-215');
+  assert.match(r.stdout, /插件.*mock/);
+  assert.doesNotMatch(r.stdout + r.stderr, /会真实调用|会真的调用|确认码/);
+  assert.equal(fake.state.posts.update, undefined);
+  assert.deepEqual(fake.state.cases[0].pluginMockOutputs, [mock]);
+});
+
+test('run --case：只核对选中的用例，任务固定这些 id，集里其他用例缺 mock 不会混进任务', async () => {
+  reset({ canvas: pluginCanvas() });
+  seedFinished(seedSet('集', [SAME_EXEC, SAME_EXEC]), 0.02);
+  fake.state.cases[0].pluginMockOutputs = [{ nodeId: U(23), pluginId: 'plugin-profile', outputs: { output: 'case 已有数据' } }];
+  const r = await md(['test', 'run', '集', '--bot', '179cd443', '--case', fake.state.cases[0].testCaseId]);
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(fake.state.posts.taskCreate[0].selectedTestCaseIds, [fake.state.cases[0].testCaseId]);
+});
+
+test('run：花费确认码绑定 case 插件数据，预演后 mock 被改过必须重新确认', async () => {
+  reset({ canvas: pluginCanvas() });
+  seedFinished(seedSet('集', [SAME_EXEC]), 3);
+  const h = home();
+  fake.state.cases[0].pluginMockOutputs = [{ nodeId: U(23), pluginId: 'plugin-profile', outputs: { output: '第一次数据' } }];
+  const args = ['test', 'run', '集', '--bot', '179cd443'];
+  const first = await md(args, h);
+  const code = codeIn(first.stdout);
+  assert.ok(code, first.stdout);
+  fake.state.cases[0].pluginMockOutputs[0].outputs.output = '另一份数据';
+  const r = await md([...args, '--confirm', code], h);
+  assert.equal(r.code, 5, r.stderr);
+  assert.equal(fake.state.posts.taskCreate, undefined);
+  assert.deepEqual(spendRows(h), []);
+});
+
+test('run：最后发请求前再核对 mock，检查过程中画布或用例变了都不能启动', async () => {
+  for (const changed of ['case', 'canvas']) {
+    reset({ canvas: pluginCanvas() });
+    seedFinished(seedSet('集', [SAME_EXEC]), 0.02);
+    fake.state.cases[0].pluginMockOutputs = [{ nodeId: U(23), pluginId: 'plugin-profile', outputs: { output: '已有数据' } }];
+    const route = fake.server.routes['GET /api/test-center/test-task/list'];
+    fake.server.routes['GET /api/test-center/test-task/list'] = (req) => {
+      if (changed === 'case') fake.state.cases[0].pluginMockOutputs = [];
+      else fake.state.canvas.find((c) => c.id === U(23)).data.nodePayload.pluginId = 'changed-plugin';
+      return route(req);
+    };
+    try {
+      const r = await md(['test', 'run', '集', '--bot', '179cd443']);
+      assert.equal(r.code, 5, r.stderr);
+      assert.match(r.stderr, /变了|变化|mock/);
+      assert.equal(fake.state.posts.taskCreate, undefined);
+    } finally {
+      fake.server.routes['GET /api/test-center/test-task/list'] = route;
+    }
+  }
+});
+
+test('mocks：只读生成批量编辑脚本，保留已有 mock；缺失值不伪造，未填完不允许写', async () => {
+  reset({ canvas: pluginCanvas() });
+  seedSet('集', [SAME_EXEC, SAME_EXEC]);
+  const h = home();
+  const file = join(h, 'mocks.mjs');
+  fake.state.cases[0].pluginMockOutputs = [{ nodeId: U(23), pluginId: 'plugin-profile', outputs: { output: { n: 0, flag: false, text: '' } } }];
+  const r = await md(['test', 'mocks', '集', '--bot', '179cd443', '--out', file], h);
+  assert.equal(r.code, 0, r.stderr);
+  assert.ok(existsSync(file));
+  assert.deepEqual(fake.state.posts, {});
+  assert.match(readFileSync(file, 'utf8'), /"outputs": null/);
+  const edit = await md(['test', 'edit', '集', file, '--bot', '179cd443'], h);
+  assert.notEqual(edit.code, 0);
+  assert.match(edit.stderr, /mock.*未填|未填.*mock/);
+  assert.equal(fake.state.posts.update, undefined);
+  writeFileSync(file, readFileSync(file, 'utf8').replace('"outputs": null', '"outputs": {"output": "指定的 mock 数据"}'));
+  const plan = await md(['test', 'edit', '集', file, '--bot', '179cd443'], h);
+  const code = plan.stdout.match(/计划码：([0-9a-f]{8})/)?.[1];
+  assert.ok(code, plan.stdout + plan.stderr);
+  const saved = await md(['test', 'edit', '集', file, '--bot', '179cd443', '--confirm', code], h);
+  assert.equal(saved.code, 0, saved.stderr);
+  assert.equal(fake.state.posts.update.length, 1);
+  assert.deepEqual(fake.state.cases[0].pluginMockOutputs[0].outputs, { output: { n: 0, flag: false, text: '' } });
+  assert.deepEqual(fake.state.cases[1].pluginMockOutputs[0].outputs, { output: '指定的 mock 数据' });
+  const again = await md(['test', 'mocks', '集', '--bot', '179cd443', '--out', file], h);
+  assert.notEqual(again.code, 0);
+  assert.match(again.stderr, /已存在/);
+});
+
+test('mocks --case：已有调优中心数据完整时，生成的脚本不产生任何改动', async () => {
+  reset({ canvas: pluginCanvas() });
+  seedSet('集', [SAME_EXEC, SAME_EXEC]);
+  const h = home();
+  const file = join(h, 'mocks.mjs');
+  fake.state.cases[0].pluginMockOutputs = [{ nodeId: U(23), pluginId: 'plugin-profile', outputs: { output: '直接使用 case 数据' } }];
+  const r = await md(['test', 'mocks', '集', '--bot', '179cd443', '--case', fake.state.cases[0].testCaseId, '--out', file], h);
+  assert.equal(r.code, 0, r.stderr);
+  const edit = await md(['test', 'edit', '集', file, '--bot', '179cd443'], h);
+  assert.equal(edit.code, 0, edit.stderr);
+  assert.match(edit.stdout, /没改.*任何用例/);
+  assert.deepEqual(fake.state.posts, {});
 });
 
 test('run：建任务明确被拒（4xx）→ 这一笔记 0；结果不明（5xx）→ 保留预留，提示别重跑（审查重点 3）', async () => {
@@ -630,7 +735,7 @@ test('resume 被拒（4xx）：继续那一笔记 0、今天已花不变，本�
   assert.equal(await todaySpent(h), before);
 });
 
-test('resume 不是 md 建的任务：今天只记剩下的预留，继续之前在页面上花的不算进 md 的账；被拒时什么都不留（整支审查 2）', async () => {
+test('resume：没有创建时的 mock 核对记录，不能靠当前 case 的数据证明旧快照安全', async () => {
   reset({ perPoll: 1, itemCost: 1 });
   const h = home();
   const set = seedSet('集', [SAME_EXEC]);
@@ -640,12 +745,35 @@ test('resume 不是 md 建的任务：今天只记剩下的预留，继续之前
   fake.state.items.set(testTaskId, [item(1, true), item(2, false), item(3, false)]);
   fake.state.resumeStatus = 400;
   const refused = await md(['test', 'resume', testTaskId, '--bot', '179cd443', '--confirm', await resumeCode(h, testTaskId)], h);
-  assert.equal(refused.code, 1);
+  assert.equal(refused.code, 5);
+  assert.match(refused.stderr, /mock.*记录|记录.*mock/);
   assert.equal(await todaySpent(h), '¥0');
+  assert.equal(fake.state.posts.resume, undefined);
   fake.state.resumeStatus = 0;
   const done = await md(['test', 'resume', testTaskId, '--bot', '179cd443', '--confirm', await resumeCode(h, testTaskId)], h);
-  assert.equal(done.code, 0, done.stderr);
-  assert.equal(await todaySpent(h), '¥2.02');
+  assert.equal(done.code, 5, done.stderr);
+  assert.equal(await todaySpent(h), '¥0');
+  assert.equal(fake.state.posts.resume, undefined);
+});
+
+test('resume：完整 mock 的任务可以继续，暂停后 mock 或画布改变则阻止，原确认码不能放行', async () => {
+  for (const changed of ['none', 'case', 'canvas']) {
+    reset({ canvas: pluginCanvas(), perPoll: 1, itemCost: 1 });
+    seedFinished(seedSet('插件集', [SAME_EXEC]), 0.001);
+    fake.state.cases[0].pluginMockOutputs = [{ nodeId: U(23), pluginId: 'plugin-profile', outputs: { output: 'case 数据' } }];
+    const h = home();
+    assert.equal((await md(['test', 'run', '插件集', '--bot', '179cd443', '--rounds', '3'], h)).code, 0);
+    const task = taskOf('插件集-草稿');
+    await md(['test', 'status', task, '--bot', '179cd443', '--wait'], h, { MD_TEST_POLL_MS: '5' });
+    const args = ['test', 'resume', task, '--bot', '179cd443'];
+    const code = (await md(args, h)).stdout.match(/计划码：([0-9a-f]{8})/)?.[1];
+    assert.ok(code);
+    if (changed === 'case') fake.state.cases[0].pluginMockOutputs[0].outputs.output = '暂停后换了数据';
+    if (changed === 'canvas') fake.state.canvas.find((c) => c.id === U(23)).data.nodePayload.pluginId = 'new-plugin';
+    const r = await md([...args, '--confirm', code], h);
+    assert.equal(r.code, changed === 'none' ? 0 : 5, r.stderr);
+    assert.equal(fake.state.posts.resume?.length ?? 0, changed === 'none' ? 1 : 0);
+  }
 });
 
 test('resume 后秒懂的状态晚一拍还是 paused：--wait 接着等，不当成已经停下、不把继续那一笔结算成 0（整支审查 3）', async () => {

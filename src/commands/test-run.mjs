@@ -14,6 +14,7 @@ import { UNKNOWN_CASE_COST, preflight } from '../testcases.mjs';
 import { isNoop } from '../testresults.mjs';
 import { pickCases, readSources, readTaskRecord, resolveTestSet, taskCaseCount, testTarget, writeTaskRecord } from '../test-common.mjs';
 import { envPollMs } from '../poll.mjs';
+import { assertPluginMocks, mockSafetyOf } from '../plugin-mocks.mjs';
 
 const QUEUED = new Set(['pending', 'processing', 'running']);
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -113,7 +114,8 @@ export async function run(args) {
     for (const e of pre.errors.slice(0, 20)) out(`  - ${e.name}：${e.reason}`);
     if (pre.errors.length > 20) out(`  …另有 ${pre.errors.length - 20} 处`);
   }
-  if (pre.plugins.length) out(`⚠️ 画布上会真实调用的外部系统：${pre.plugins.join('、')}（测试中心里也会真的调）`);
+  assertPluginMocks({ errors: pre.mockErrors });
+  if (pre.mockedPlugins) out(`插件全部使用用例里的 mock：${cases.length} 条 × ${pre.mockedPlugins} 个插件（不调用真实插件）`);
   if (busy.length) out(`排队：这个智能体上还有 ${busy.length} 个任务没跑完（${busy.slice(0, 3).map((x) => `${x.name} ${x.status}`).join('、')}），新任务排在后面`);
   out(`花费：预计 ${estimate === null ? '估不出（参考：单条 ¥0–0.3）' : `${formatCost(estimate)}（${basis}）`} · 今天已花 ${formatCost(spentOn(readSpends()))} / 上限 ${formatCost(loadLimits().perDay)}`);
   if (pre.errors.length && !allowErrors) {
@@ -125,11 +127,11 @@ export async function run(args) {
 
   // 确认 + 记一笔（同 md trial：锁里做，先记预留）。测试估不出花费时一律要确认（spec §7）
   const name = strArg(args, 'name') ?? `${set.name}-${label}-${nowLabel()}`;
-  const operation = { kind: 'test-run', botId: t.botId, testSetId: set.testSetId, canvasId, cases: hashOf(cases.map((c) => c.testCaseId).sort()), rounds, estimate: roundCost(estimate), external: pre.plugins, day: dayKey() };
+  const operation = { kind: 'test-run', botId: t.botId, testSetId: set.testSetId, canvasId, canvas: hashOf(canvas), cases: hashOf([...cases].sort((a, b) => a.testCaseId.localeCompare(b.testCaseId))), rounds, estimate: roundCost(estimate), external: [], day: dayKey() };
   const plan = await withSpendLock(() => {
     const rows = readSpends();
     const limits = loadLimits();
-    const decision = spendDecision({ estimate, externalCalls: pre.plugins }, { limits, today: spentOn(rows) });
+    const decision = spendDecision({ estimate, externalCalls: [] }, { limits, today: spentOn(rows) });
     const confirm = codeFor(operation, rows);
     const confirmed = decision.needApproval && given === confirm.code;
     if (decision.needApproval && !confirmed) stopForConfirm({ ...confirm, given, reasons: decision.reasons });
@@ -142,9 +144,22 @@ export async function run(args) {
   });
   if (plan.confirmed) out('（用户已确认这一笔）');
 
+  // 预估 / 确认期间旧编辑页可能自动保存；真正建任务前再读一次。任务始终固定检查过的用例 id。
+  try {
+    const [latest, rows] = await Promise.all([getCanvas(t.identity, t.orgId, t.botId, canvasId), listCases(t, set.testSetId)]);
+    const ids = new Set(cases.map((c) => c.testCaseId));
+    const selected = rows.filter((c) => ids.has(c.testCaseId)).sort((a, b) => a.testCaseId.localeCompare(b.testCaseId));
+    if (hashOf(latest.rawCanvas) !== operation.canvas || hashOf(selected) !== operation.cases) {
+      throw new MdError('test_inputs_changed', '跑前检查之后画布或用例（含插件 mock）变了，没有建任务', { exitCode: EXIT.BLOCKED, hint: '重新 md test run；新画布和 case 数据要重新检查' });
+    }
+  } catch (error) {
+    updateSpend(plan.id, { actual: 0, runs: 0 });
+    throw error;
+  }
+
   let testTaskId;
   try {
-    testTaskId = await createTask(t, { testSetId: set.testSetId, canvasId, name, rounds, concurrency, ...(picks.length ? { selectedTestCaseIds: cases.map((c) => c.testCaseId) } : {}) });
+    testTaskId = await createTask(t, { testSetId: set.testSetId, canvasId, name, rounds, concurrency, selectedTestCaseIds: cases.map((c) => c.testCaseId) });
   } catch (error) {
     // 身份失效、企业到期、积分不足、明确被拒（业务错误、4xx）都是没建成：这一笔记 0，身份类原样报（退出码 3 让用户重新取身份，审查 M3）。
     // 结果不明（5xx、超时）的保留预留，让用户先看任务列表
@@ -165,6 +180,7 @@ export async function run(args) {
   writeTaskRecord(t, {
     testTaskId, testSetId: set.testSetId, testSetName: set.name, name, canvasId, label, rounds, cases: cases.length,
     estimate, unit, reserve: estimate ?? UNKNOWN_CASE_COST * runsCount, confirmed: plan.confirmed, spendId: plan.id, allowance, createdAt: new Date().toISOString(),
+    mockSafety: mockSafetyOf(cases, canvas),
   });
   updateSpend(plan.id, { taskId: testTaskId });
   out(`已建任务 ${name}（${testTaskId}）：跑的是${label}，${cases.length} 条 × ${rounds} 轮`);

@@ -1,10 +1,11 @@
-// md trial：单节点试跑。跑的是秒懂上的草稿（推送后立即生效）；超门槛、估不出花费、调插件时要用户确认（确认码，spec §7）。
+// md trial：单节点试跑。跑的是秒懂上的草稿；超门槛、估不出花费时要用户确认，插件必须走测试中心 mock。
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { boolArg, intArg, listArg, strArg } from '../args.mjs';
 import { EXIT, MdError, usage } from '../errors.mjs';
 import { asArray, getCanvas } from '../api.mjs';
+import { contentKey } from '../canvas.mjs';
 import { stamp } from '../workspace.mjs';
 import { resolveNode } from '../graph.mjs';
 import { ensureNewDir, mdHome } from '../home.mjs';
@@ -73,7 +74,7 @@ export const trial = {
   summary: '试跑：单节点（用执行记录的原始输入复现、推草稿后复验）或整条链路（--text / --event，链路上有插件不跑）；跑的是草稿，超门槛要用户确认',
   usage: [
     'md trial <节点> (--bot <智能体> | --ws <工作副本>) [--from-exec <执行id>] [--input 键=值 …] [--inputs <文件.json>]',
-    '        [--times 1] [--keep-platform-params] [--allow-plugin] [--plan | --confirm <确认码>]',
+    '        [--times 1] [--keep-platform-params] [--plan | --confirm <确认码>]',
     'md trial --text "<用户消息>" (--bot … | --ws …) [--session <会话>] [--var 会话变量=值 …] [--times 1] [--plan | --confirm <确认码>]',
     'md trial --event <事件名或id> [--data 事件变量=值 …] (--bot … | --ws …) [--session <会话>] [--var …] [--times 1] [--plan | --confirm <确认码>]',
     '--plan：只预演（目标、输入或能走到的节点、预估、真跑时要不要确认和确认码），不发请求、不记账。',
@@ -90,7 +91,7 @@ export const trial = {
     const times = intArg(args, 'times', 1, 10);
     if (strArg(args, 'ws') && strArg(args, 'bot')) throw usage('--ws 和 --bot 只能给一个', '--ws 指定工作副本（智能体取它记的那个），--bot 指定智能体');
     const planOnly = checkPlanFlag(args);
-    const allowPlugin = boolArg(args, 'allow-plugin');
+    if (boolArg(args, 'allow-plugin')) throw new MdError('trial_plugin_disabled', '--allow-plugin 已关闭：试跑不能真实调用插件，请走测试中心使用 case 的插件 mock', { exitCode: EXIT.BLOCKED });
     const keepPlatform = boolArg(args, 'keep-platform-params');
     const { target, ws } = await trialTarget(args);
     const draft = await getCanvas(target.identity, target.orgId, target.botId);
@@ -102,8 +103,8 @@ export const trial = {
     if (cls.kind === 'denied') {
       throw new MdError('trial_denied', `「${node.name}」是 ${cls.type || '未知类型'}，这类节点不做单节点试跑（只跑大模型、代码、规则、知识库查询这类计算节点；秒懂页面也不给别的节点试跑按钮）`, { exitCode: EXIT.BLOCKED });
     }
-    if (cls.kind === 'plugin' && !allowPlugin) {
-      throw new MdError('trial_plugin', `「${node.name}」会真的调用外部系统（${cls.plugins.join('、')}）`, { exitCode: EXIT.BLOCKED, hint: '确认要跑：加 --allow-plugin；md 会先给出预估和确认码，要用户确认' });
+    if (cls.kind === 'plugin') {
+      throw new MdError('trial_plugin', `「${node.name}」会真的调用外部系统（${cls.plugins.join('、')}），单节点试跑不能 mock，不跑`, { exitCode: EXIT.BLOCKED, hint: '走测试中心：md test import → 直接使用 case 里的插件数据（缺失时 md test mocks → md test edit）→ md test run' });
     }
 
     // 输入与单价。预估只认同一个模型跑出来的花费（审查 C1 / R2）：执行之后换了模型，那次的花费就不能当预估。
@@ -212,6 +213,11 @@ export const trial = {
         }
         let result;
         try {
+          const latest = await getCanvas(target.identity, target.orgId, target.botId, draft.canvasId);
+          const current = asArray(latest.rawCanvas).find((c) => c?.id === node.id);
+          if (!current || contentKey(current) !== contentKey(cell) || classifyTrialNode(current).kind !== 'allowed') {
+            throw new MdError('trial_node_changed', '试跑前草稿节点变了，无法确认是否新增了插件 / 外部工具，没有发执行请求', { exitCode: EXIT.BLOCKED, hint: '重新读取草稿后再决定；插件必须走测试中心 mock' });
+          }
           result = await runNodeOnce({ identity: target.identity, orgId: target.orgId, canvasId: draft.canvasId, node, inputs: built.inputs });
         } catch (error) {
           // 启动结果不明、查结果连续失败：钱可能已经花了，按「花费不知道」记一次（审查 I2）
