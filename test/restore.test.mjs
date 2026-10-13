@@ -1,10 +1,10 @@
 import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCli } from './helpers/run-cli.mjs';
 import { PROMPT_FIX, planCodeOf, startBotServer } from './helpers/bot-server.mjs';
-import { U } from './helpers/fixtures.mjs';
+import { U, sampleCanvas } from './helpers/fixtures.mjs';
 
 let bot;
 before(async () => { bot = await startBotServer(); });
@@ -38,6 +38,20 @@ test('没推送过就没有备份：退出码 5', async () => {
   const r = await runCli(['restore'], { home });
   assert.equal(r.code, 5);
   assert.match(r.stderr, /还没有推送过/);
+});
+
+test('回滚不能重新写入超长的节点名称，预演就拦下，不给可执行计划码', async () => {
+  bot.reset();
+  const { home } = await bot.pulled();
+  const file = join(home, 'long-name-backup.json');
+  const rawCanvas = sampleCanvas();
+  rawCanvas.find((c) => c.id === U(2)).data.name = '名'.repeat(21);
+  writeFileSync(file, JSON.stringify({ canvasId: 'main-1', rawCanvas }));
+  const r = await runCli(['restore', '--backup', file], { home });
+  assert.equal(r.code, 5, r.stderr);
+  assert.match(r.stderr, /00000002.*21.*20/);
+  assert.doesNotMatch(r.stdout, /计划码/);
+  assert.equal(bot.state.saves, 0);
 });
 
 test('回滚之后 md status --remote 核对的是回滚：改回去的节点还在就是正常，不当成「推送被覆盖」', async () => {

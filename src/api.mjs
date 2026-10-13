@@ -1,8 +1,9 @@
-// 秒懂接口封装：只做「请求 + 把外壳拆成 md 用的形状」，不含业务判断。
+// 秒懂接口封装：请求 + 把外壳拆成 md 用的形状；画布保存前必须核对节点名称长度。
 // 路径与参数位置都来自仓库已接入的代码或会话实测（见 spec §11），orgId 一律放 query。
 
 import { request } from './http.mjs';
 import { MdError } from './errors.mjs';
+import { assertNodeNames } from './canvas.mjs';
 import { deriveDomainEdges, deriveDomainNodes } from '../vendor/laodong/apps/api/lib/miaodong/canvas-derive.ts';
 
 const str = (value) => (typeof value === 'string' ? value : '');
@@ -102,6 +103,7 @@ export function listEvents(identity, orgId, botId) {
 
 // canvas/save 是全量覆盖、写编辑器草稿；nodes / edges 由 rawCanvas 推出（与老懂、kit 同一套契约）
 export function saveCanvas(identity, orgId, canvasId, rawCanvas) {
+  assertNodeNames(rawCanvas);
   return request(identity, '/api/canvas/save', {
     method: 'POST',
     query: { orgId },

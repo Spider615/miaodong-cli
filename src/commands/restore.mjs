@@ -5,7 +5,7 @@ import { EXIT } from '../errors.mjs';
 import { givenCode } from '../confirm.mjs';
 import { ensureDir, readJson, writeJson } from '../home.mjs';
 import { getCanvas, saveCanvas } from '../api.mjs';
-import { compareNodes, hashOf } from '../canvas.mjs';
+import { assertNodeNames, compareNodes, hashOf } from '../canvas.mjs';
 import { businessNodes } from '../graph.mjs';
 import { appendLedger } from '../ledger.mjs';
 import { loadWorkspace, saveMeta, stamp, targetFromMeta, writeIndex } from '../workspace.mjs';
@@ -30,6 +30,7 @@ export const restore = {
     const backupFile = backupArg ? resolve(backupArg) : latestBackup(ws.dir);
     const backup = readJson(backupFile, null);
     if (!backup || !Array.isArray(backup.rawCanvas) || businessNodes(backup.rawCanvas).length === 0) throw blocked(`备份不可用：${backupFile}`);
+    assertNodeNames(backup.rawCanvas);
     const live = await getCanvas(identity, orgId, botId);
     if (backup.canvasId && backup.canvasId !== live.canvasId) {
       throw blocked(`备份属于另一张画布（${shortId(backup.canvasId)}），当前草稿是 ${shortId(live.canvasId)}`);

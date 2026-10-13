@@ -1,7 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ok, startFakeMiaodong } from './helpers/fake-miaodong.mjs';
-import { listEvents, listSessions } from '../src/api.mjs';
+import { listEvents, listSessions, saveCanvas } from '../src/api.mjs';
+import { U, sampleCanvas } from './helpers/fixtures.mjs';
+
+test('canvas/save 封装也拒绝超长名称，任何调用方都不能发出这样的写请求', async () => {
+  const fake = await startFakeMiaodong({ 'POST /api/canvas/save': () => ok(null) });
+  try {
+    const canvas = sampleCanvas();
+    canvas.find((c) => c.id === U(2)).data.name = '名'.repeat(21);
+    const identity = { key: 'k', label: '测试区', origin: fake.origin, token: 't' };
+    await assert.rejects(async () => saveCanvas(identity, 'org-1', 'main-1', canvas), (e) => e.exitCode === 5 && /21.*20/.test(e.message));
+    assert.equal(fake.requests.length, 0);
+  } finally {
+    await fake.close();
+  }
+});
 
 test('事件 / 会话变量列表偶发失败（超时、5xx）先重试，重试还不行才当取不到；4xx 不重试（跑前检查偶发「取不到」就是取列表超时）', async () => {
   let calls = 0;

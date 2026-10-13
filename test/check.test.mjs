@@ -17,6 +17,40 @@ test('只改 prompt 文本：没有新问题', () => {
   assert.deepEqual(r.warnings, []);
 });
 
+test('节点名称最多 20 个字：中文、英文、数字、符号和 Unicode 字符都按字符计数', () => {
+  for (const name of ['名'.repeat(20), 'a'.repeat(20), '名Ab1!'.repeat(4), '𠮷'.repeat(20)]) {
+    const after = patchNode(sampleCanvas(), U(2), (c) => { c.data.name = name; return c; });
+    assert.deepEqual(runCheck(env(sampleCanvas()), env(after)).errors, [], name);
+  }
+  for (const name of ['名'.repeat(21), 'a'.repeat(21), '𠮷'.repeat(21)]) {
+    const after = patchNode(sampleCanvas(), U(2), (c) => { c.data.name = name; return c; });
+    assert.ok(runCheck(env(sampleCanvas()), env(after)).errors.some((e) => /00000002.*21.*20/.test(e)), name);
+  }
+});
+
+test('20 字是最终画布的硬限制，原本就超长的节点也要报出来', () => {
+  const base = patchNode(sampleCanvas(), U(2), (c) => { c.data.name = '名'.repeat(21); return c; });
+  assert.ok(runCheck(env(base), env(base)).errors.some((e) => /21.*20/.test(e)));
+  const after = patchNode(base, U(2), (c) => { c.data.name = '名'.repeat(20); return c; });
+  assert.deepEqual(runCheck(env(base), env(after)).errors, []);
+});
+
+test('名称限制只检查业务节点，连线和便签上的文字不受 20 字限制', () => {
+  const after = sampleCanvas();
+  after.find((c) => c.id === U(900)).data.name = '便签'.repeat(30);
+  after.find((c) => c.id === U(101)).data = { name: '连线'.repeat(30) };
+  assert.deepEqual(runCheck(env(sampleCanvas()), env(after)).errors, []);
+});
+
+test('md check：还没 apply 时也能指出原画布的超长节点，不能因为无改动就漏报', async () => {
+  const home = tempHome();
+  const canvas = patchNode(sampleCanvas(), U(2), (c) => { c.data.name = '名'.repeat(21); return c; });
+  await seedWorkspace(home, { canvas, sessions: sampleSessions, events: sampleEvents });
+  const r = await runCli(['check'], { home });
+  assert.equal(r.code, 1);
+  assert.match(r.stdout, /00000002.*21.*20/);
+});
+
 test('数组被改成对象：报错', () => {
   const after = patchNode(sampleCanvas(), U(2), (c) => { c.data.nodePayload.inputs = { 0: c.data.nodePayload.inputs[0] }; return c; });
   const r = runCheck(env(sampleCanvas()), env(after));

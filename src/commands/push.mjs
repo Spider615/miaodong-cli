@@ -11,7 +11,7 @@ import { EXIT, MdError } from '../errors.mjs';
 import { givenCode } from '../confirm.mjs';
 import { ensureDir, writeJson } from '../home.mjs';
 import { getCanvas, saveCanvas } from '../api.mjs';
-import { compareNodes, contentKey, edgeKey, hashOf, keyedEdges, nodeMap, stableStringify } from '../canvas.mjs';
+import { assertNodeNames, compareNodes, contentKey, edgeKey, hashOf, keyedEdges, nodeMap, stableStringify } from '../canvas.mjs';
 import { graphProblems, runCheck } from '../check.mjs';
 import { diffEnvelopes, nameMapOf, renderDiff } from '../diff.mjs';
 import { businessNodes } from '../graph.mjs';
@@ -102,7 +102,7 @@ export const push = {
     'md push [--ws <工作副本>]                预演：合并方式、改动清单、计划码',
     'md push [--ws …] --confirm <计划码>      用户同意后真正写入草稿',
     '以版本为底且草稿与该版不同时，需加 --onto-draft（合进当前草稿）或 --replace-draft（草稿 = 该版 + 改动）',
-    '自检有新增问题会被拦；确认可以忽略时加 --allow-check-errors',
+    '节点名称最多 20 个字，不能跳过；其他新增自检问题确认可以忽略时加 --allow-check-errors',
   ].join('\n'),
   async run(args) {
     // 开关一开头就读：给错（比如给了两次）要在联网之前报出来
@@ -116,6 +116,7 @@ export const push = {
       throw blocked(`草稿画布换了（拉取时 ${shortId(ws.meta.mainCanvasId)}，现在 ${shortId(live.canvasId)}）`, '重新 md pull，再把改动做一遍');
     }
 
+    assertNodeNames(ws.after.canvas);
     const check = runCheck(ws.base, ws.after);
     if (check.errors.length && !opts.allowCheckErrors) {
       throw blocked(`自检有 ${check.errors.length} 个问题，先修：\n${check.errors.map((e) => `  ❌ ${e}`).join('\n')}`, 'md check 看详情；确认可以忽略时加 --allow-check-errors');
@@ -152,6 +153,7 @@ export const push = {
       theirs = merged.theirs;
     }
     if (businessNodes(toSave).length === 0) throw blocked('要推送的画布里没有任何节点，已阻止');
+    assertNodeNames(toSave);
     // 自检比的是「基线 → 改后」；合并结果还可能因别人的并发修改出现新的断头（我引用的节点被别人删了等）
     const liveProblems = new Set(graphProblems({ canvas: live.rawCanvas, events: ws.base.events }));
     const introduced = graphProblems({ canvas: toSave, events: ws.base.events }).filter((p) => !liveProblems.has(p));

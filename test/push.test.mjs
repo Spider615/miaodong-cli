@@ -131,6 +131,44 @@ test('自检有新问题时拦住推送', async () => {
   assert.equal(bot.state.saves, 0);
 });
 
+test('节点名称 21 字不能推送：allow-check-errors 和确认码都不能跳过，名称不会被自动截断', async () => {
+  bot.reset();
+  const { home, dir } = await bot.pulled();
+  const name = '名'.repeat(21);
+  await bot.apply(home, `export default ({ h }) => { h.set(h.node('00000002'), 'data.name', ${JSON.stringify(name)}); };\n`);
+  for (const flags of [[], ['--allow-check-errors'], ['--allow-check-errors', '--confirm', '00000000']]) {
+    const r = await runCli(['push', ...flags], { home });
+    assert.equal(r.code, 5, r.stderr);
+    assert.match(r.stderr, /00000002.*21.*20/);
+    assert.doesNotMatch(r.stdout, /计划码/);
+  }
+  assert.equal(bot.state.saves, 0);
+  assert.equal(JSON.parse(readFileSync(join(dir, 'after.json'), 'utf8')).canvas.find((c) => c.id === U(2)).data.name, name);
+});
+
+test('最终合并结果也检查名称长度：别人新增的超长名称不能随合并一起写入', async () => {
+  bot.reset();
+  const { home } = await bot.pulled();
+  await bot.apply(home, PROMPT_FIX);
+  setDraftNode(U(6), (c) => { c.data.name = '名'.repeat(21); return c; });
+  const r = await runCli(['push', '--allow-check-errors'], { home });
+  assert.equal(r.code, 5, r.stderr);
+  assert.match(r.stderr, /00000006.*21.*20/);
+  assert.equal(bot.state.saves, 0);
+});
+
+test('恰好 20 字可以正常预演和推送，完整名称保持不变', async () => {
+  bot.reset();
+  const { home } = await bot.pulled();
+  const name = '名'.repeat(20);
+  await bot.apply(home, `export default ({ h }) => { h.set(h.node('00000002'), 'data.name', ${JSON.stringify(name)}); };\n`);
+  const dry = await runCli(['push'], { home });
+  assert.equal(dry.code, 0, dry.stderr);
+  const r = await runCli(['push', '--confirm', planCodeOf(dry.stdout)], { home });
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(draftNode(U(2)).data.name, name);
+});
+
 test('回读不一致时报警（退出码 5）', async () => {
   bot.reset();
   const { home } = await bot.pulled();

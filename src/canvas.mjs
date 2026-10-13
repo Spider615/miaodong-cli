@@ -4,6 +4,7 @@
 // 连线按「源节点#端口→目标节点#端口」识别，不看 edge.id。
 
 import { createHash } from 'node:crypto';
+import { EXIT, MdError } from './errors.mjs';
 import { isEdgeCell, isVisualOnlyCell } from '../vendor/laodong/apps/api/lib/miaodong/canvas-derive.ts';
 import { stableStringify } from '../vendor/laodong/apps/api/lib/miaodong/canvas-content-patch.ts';
 
@@ -30,6 +31,25 @@ export function edgeKey(edge) {
 }
 
 const isElement = (cell) => Boolean(cell) && typeof cell === 'object';
+
+// 节点名称最多 20 个 Unicode 字符（中文、英文、数字、符号都计数），不按 UTF-16 码元计数。
+// 连线、便签等视觉装饰不属于业务节点；不自动截断名称，以免改成重名。
+export function nodeNameProblems(canvas) {
+  const problems = [];
+  for (const cell of canvas) {
+    if (!isElement(cell) || isEdgeCell(cell) || isVisualOnlyCell(cell) || typeof cell.data?.name !== 'string') continue;
+    const length = [...cell.data.name].length;
+    if (length > 20) problems.push(`节点「${cell.data.name}」[${String(cell.id ?? '?').slice(0, 8)}] 的名称有 ${length} 个字，超过 20 个字上限`);
+  }
+  return problems;
+}
+
+export function assertNodeNames(canvas) {
+  const problems = nodeNameProblems(canvas);
+  if (problems.length) throw new MdError('node_name_too_long', `节点名称长度检查不通过：\n${problems.map((p) => `  - ${p}`).join('\n')}`, {
+    exitCode: EXIT.BLOCKED, hint: '先将节点名称缩短到 20 个字以内，再 md check；--allow-check-errors 和确认码不能跳过名称限制',
+  });
+}
 
 export function nodeMap(canvas) {
   return new Map(canvas.filter((c) => isElement(c) && !isEdgeCell(c) && typeof c.id === 'string').map((c) => [c.id, c]));
