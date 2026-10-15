@@ -1,5 +1,5 @@
 // 自检只报「这次新引入的」问题：真实画布上原本就有几百条风险（实测 779 条），全报等于没报。
-// 例外：节点名称最多 20 个字是写入硬限制，最终画布上的超长名称全部报出。
+// 例外：节点名称最多 20 个字、事件节点渲染格式是写入硬限制，最终画布上的问题全部报出。
 // - 类型突变：数组被改成对象这类改坏，老懂的校验器和风险分析都查不出来（实测），这里单独查；
 // - 悬空：连线端点、端口不存在，节点引用指向不存在的节点，逐条查，只报 after 有而 base 没有的。连线只在这里查：
 //   老懂的校验器也查连线，但按每次校验的范围汇总成一句，和这里的逐条报重复（逐节点校验时同一条还会按节点各报一遍）；
@@ -11,7 +11,7 @@
 
 import { collectChangedScopeNodeIds, validateWorkflowJsonCandidateWithWarnings } from '../vendor/laodong/apps/api/lib/chat-agent/validate-workflow.ts';
 import { analyzeWorkflowRisks } from '../vendor/laodong/packages/shared/src/workflow-risk/index.ts';
-import { edgeKey, isEdgeCell, nodeNameProblems } from './canvas.mjs';
+import { edgeKey, eventNodeProblems, isEdgeCell, nodeNameProblems } from './canvas.mjs';
 import { diffEnvelopes, kindOf } from './diff.mjs';
 import { buildIndex, edgesOf } from './graph.mjs';
 import { shortId } from './output.mjs';
@@ -70,7 +70,7 @@ export function graphProblems(env) {
 }
 
 export function runCheck(baseEnv, afterEnv) {
-  const errors = nodeNameProblems(afterEnv.canvas);
+  const errors = [...nodeNameProblems(afterEnv.canvas), ...eventNodeProblems(afterEnv.canvas)];
   const warnings = [];
   const notes = [];
 

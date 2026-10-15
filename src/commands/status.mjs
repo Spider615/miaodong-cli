@@ -85,7 +85,7 @@ export const status = {
 };
 
 export const log = {
-  summary: '推送 / 回滚记录（改了哪些节点），以及会话属性的增删改',
+  summary: '推送 / 回滚记录（改了哪些节点），以及会话属性和事件的操作',
   usage: 'md log [--bot <名字或 id 前缀>] [--limit 20]',
   async run(args) {
     const query = strArg(args, 'bot');
@@ -95,6 +95,12 @@ export const log = {
       return EXIT.OK;
     }
     for (const e of entries) {
+      if (e.kind === 'events') {
+        const verb = { add: '新增', edit: '修改', hide: '隐藏', show: '显示', import: '导入' }[e.op] ?? e.op;
+        const result = e.resultFile ? readJson(e.resultFile, null) : null;
+        out(`${formatTime(e.at)} 事件 ${verb} ${e.regionLabel} / ${e.botName} (${shortId(e.botId)})：${(e.items ?? []).map((x) => x.name).join('、')} · ${result?.status === 'verified' ? '读回核对过' : '⚠️ 结果未确认，先检查操作记录'}${e.resultFile ? ` · ${e.resultFile}` : ''}`);
+        continue;
+      }
       // 会话属性的增删改（md vars）：一行说清做了什么、哪几个
       if (e.kind === 'vars') {
         const verb = { add: '新增', edit: '修改', rm: '删除' }[e.op] ?? e.op;

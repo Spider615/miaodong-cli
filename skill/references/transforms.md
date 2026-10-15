@@ -12,6 +12,34 @@ export default ({ canvas, h }) => {
 
 **节点名称最多 20 个字**：新增节点、`h.cloneNode(..., {name})`、`h.set(node, 'data.name', ...)` 改名时，提前取 20 个 Unicode 字符以内的短名称；中文、英文、数字、空格、符号都计数，恰好 20 个允许。不能自动截断，以免重名或丢掉用途；写完用 `md check` 核对。推送会检查最终合并的画布，回滚也检查备份，超长名称不能用 `--allow-check-errors` 或确认码放行。
 
+## 默认局部修改
+
+先复用原节点、条件和业务连线，只修改需求涉及的字段与必要连线。用户要求在原 else 后加判断时，就在该处完成；通用化、未来扩展不是主动拆事件、加续接节点或复制业务脚本的理由。新增结构须说明原结构无法满足需求的具体原因和最少新增范围。
+
+## 事件节点的画布格式
+
+事件资源定义和画布节点是两回事。先用 `md events` 查询或新增资源，再 `md pull` 获取当前定义；仅在需求确实需要新节点时添加。修改已存在节点时优先保留原布局、端口和连线。
+
+| 节点 | shape | data.type | 必需的事件信息 |
+|---|---|---|---|
+| 事件动作／调度 | `action-event` | `canvas-event-action` | `data.nodePayload.eventId` 指向目标事件 |
+| 事件入口 | 具体事件的 `eventId` | `canvas-event-trigger` | `data.eventItem` 为该事件的定义副本，至少含一致 ID、名称、变量列表；`nodePayload.eventId` 如有也要一致 |
+
+**不能把业务类型直接当成 shape。** `shape='canvas-event-action'` 和事件入口缺 `data.eventItem` 都可能中断编辑器初始化。md 对本地目标、最终合并结果、回滚备份及保存入口检查这些格式；即使是原有错误、带了确认码或 `--allow-check-errors` 也不能写入。CLI 只报错，不静默改用户画布。
+
+入口副本按当前资源生成，例如改动脚本中拿到现有入口后：
+
+```js
+export default ({ events, h }) => {
+  const entry = h.node('事件入口的精确id');
+  const event = events.find((e) => e.eventId === entry.shape);
+  if (!event) throw new Error('找不到入口对应的当前事件定义');
+  h.set(entry, 'data.eventItem', structuredClone(event));
+};
+```
+
+格式检查只证明已覆盖的结构约束，不证明浏览器整图可以加载或业务正确。变更涉及新节点或特殊 shape 时，回执分别说明结构检查、浏览器加载和业务回归的实际结果，未做的不能写成通过。
+
 ## helper
 
 | 写法 | 作用 |

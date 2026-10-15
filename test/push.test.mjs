@@ -146,6 +146,31 @@ test('节点名称 21 字不能推送：allow-check-errors 和确认码都不能
   assert.equal(JSON.parse(readFileSync(join(dir, 'after.json'), 'utf8')).canvas.find((c) => c.id === U(2)).data.name, name);
 });
 
+test('事件节点渲染格式错误不能被 allow-check-errors 或确认码跳过，也不自动改写', async () => {
+  bot.reset();
+  const { home, dir } = await bot.pulled();
+  await bot.apply(home, "export default ({ h }) => { h.set(h.node('00000004'), 'shape', 'canvas-event-action'); };\n");
+  for (const flags of [[], ['--allow-check-errors'], ['--allow-check-errors', '--confirm', '00000000']]) {
+    const result = await runCli(['push', ...flags], { home });
+    assert.equal(result.code, 5, result.stderr);
+    assert.match(result.stderr, /00000004.*action-event/);
+    assert.doesNotMatch(result.stdout, /计划码/);
+  }
+  assert.equal(bot.state.saves, 0);
+  assert.equal(JSON.parse(readFileSync(join(dir, 'after.json'), 'utf8')).canvas.find((c) => c.id === U(4)).shape, 'canvas-event-action');
+});
+
+test('合并进来的事件入口也要通过渲染格式检查', async () => {
+  bot.reset();
+  const { home } = await bot.pulled();
+  await bot.apply(home, PROMPT_FIX);
+  setDraftNode(U(5), (c) => { delete c.data.eventItem; return c; });
+  const result = await runCli(['push', '--allow-check-errors'], { home });
+  assert.equal(result.code, 5, result.stderr);
+  assert.match(result.stderr, /00000005.*eventItem/);
+  assert.equal(bot.state.saves, 0);
+});
+
 test('最终合并结果也检查名称长度：别人新增的超长名称不能随合并一起写入', async () => {
   bot.reset();
   const { home } = await bot.pulled();

@@ -141,3 +141,32 @@ test('连线端口查得和结构校验一样严：端口没写、节点没有�
   assert.ok(runCheck(env(sampleCanvas()), env(bare)).errors.some((e) => /的端口不存在/.test(e)));
 });
 
+test('事件节点渲染格式是全画布硬限制：71 个错 shape 的动作和 1 个缺 eventItem 的入口全部报出', () => {
+  const source = sampleCanvas();
+  const action = source.find((c) => c.id === U(4));
+  const entry = structuredClone(source.find((c) => c.id === U(5)));
+  delete entry.data.eventItem;
+  const broken = [...Array.from({ length: 71 }, (_, i) => ({ ...structuredClone(action), id: U(1000 + i), shape: 'canvas-event-action' })), entry];
+  const report = runCheck(env(broken), env(broken));
+  assert.equal(report.errors.filter((e) => /action-event.*canvas-event-action|eventItem/.test(e)).length, 72, report.errors.join('\n'));
+});
+
+test('md check 未 apply 也核对事件节点渲染格式', async () => {
+  const home = tempHome();
+  const canvas = sampleCanvas();
+  canvas.find((c) => c.id === U(4)).shape = 'canvas-event-action';
+  delete canvas.find((c) => c.id === U(5)).data.eventItem;
+  await seedWorkspace(home, { canvas, sessions: sampleSessions, events: sampleEvents });
+  const report = await runCli(['check'], { home });
+  assert.equal(report.code, 1, report.stderr);
+  assert.match(report.stdout, /00000004.*action-event/);
+  assert.match(report.stdout, /00000005.*eventItem/);
+});
+
+test('事件入口内嵌定义缺 name、variables 或 eventId 不一致都会报错', () => {
+  for (const item of [null, { eventId: 'ev-1', variables: [] }, { eventId: 'ev-1', name: '入口' }, { eventId: 'another', name: '入口', variables: [] }]) {
+    const canvas = patchNode(sampleCanvas(), U(5), (c) => { c.data.eventItem = item; return c; });
+    assert.ok(runCheck(env(canvas), env(canvas)).errors.some((e) => /00000005.*eventItem/.test(e)), JSON.stringify(item));
+  }
+});
+

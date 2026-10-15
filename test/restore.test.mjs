@@ -54,6 +54,19 @@ test('回滚不能重新写入超长的节点名称，预演就拦下，不给�
   assert.equal(bot.state.saves, 0);
 });
 
+test('回滚不能重新写入会破坏编辑器的事件节点格式', async () => {
+  bot.reset();
+  const { home } = await bot.pulled();
+  const file = join(home, 'broken-event-backup.json');
+  const rawCanvas = sampleCanvas();
+  rawCanvas.find((c) => c.id === U(4)).shape = 'canvas-event-action';
+  writeFileSync(file, JSON.stringify({ canvasId: 'main-1', rawCanvas }));
+  const result = await runCli(['restore', '--backup', file, '--confirm', '00000000'], { home });
+  assert.equal(result.code, 5, result.stderr);
+  assert.match(result.stderr, /00000004.*action-event/);
+  assert.equal(bot.state.saves, 0);
+});
+
 test('回滚之后 md status --remote 核对的是回滚：改回去的节点还在就是正常，不当成「推送被覆盖」', async () => {
   bot.reset();
   const { home } = await bot.pulled();

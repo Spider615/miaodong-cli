@@ -18,6 +18,7 @@ import { startKbServer } from './helpers/kb-server.mjs';
 import { KB_FAQ, kbExec, toolCall } from './helpers/kb-fixtures.mjs';
 import { writePackage } from './helpers/kb-import-fixtures.mjs';
 import { goodPackage, importServerOptions } from './helpers/kb-import-data.mjs';
+import { event, eid, startEventsServer } from './helpers/events-server.mjs';
 
 let bundle;
 before(async () => {
@@ -37,6 +38,41 @@ test('产物里没有老懂数据库依赖', () => {
   const text = readFileSync(bundle, 'utf-8');
   assert.doesNotMatch(text, /better-sqlite3|drizzle-orm/);
   assert.ok(text.startsWith('#!/usr/bin/env -S node --no-warnings'));
+});
+
+test('产物能管理事件：预演、新增、修改、隐藏显示、引用检查、导入映射，禁止删除（兼容 Node 18）', async () => {
+  const fake = await startEventsServer();
+  try {
+    const home = tempHome();
+    seedIdentity(home, { key: 'k1', label: '测试区', origin: fake.server.origin, token: 't', orgs: [{ id: 'org-1', name: '测试企业' }], currentOrgId: 'org-1' });
+    const run = (args) => runCli(['events', ...args, '--bot', '测试智能体'], { home, bundle });
+    const write = async (args) => {
+      const count = fake.state.posts.length;
+      const dry = await run(args);
+      assert.equal(dry.code, 0, dry.stderr);
+      assert.equal(fake.state.posts.length, count);
+      const done = await run([...args, '--confirm', dry.stdout.match(/计划码：([0-9a-f]{8})/)[1]]);
+      assert.equal(done.code, 0, done.stderr);
+      assert.match(done.stdout, /读回核对过/);
+      assert.doesNotMatch(done.stderr, /ExperimentalWarning/);
+      return done;
+    };
+    assert.equal((await run([])).code, 0);
+    await write(['add', '产物创建', '--input', 'text=string']);
+    await write(['edit', '产物创建', '--name', '产物修改']);
+    await write(['hide', '产物修改']);
+    await write(['show', '产物修改']);
+    assert.equal((await run(['used', '产物修改'])).code, 0);
+    const input = join(home, 'events.json');
+    const output = join(home, 'map.json');
+    writeFile(input, JSON.stringify([event(40, '产物导入')]));
+    await write(['import', input, '--out', output]);
+    assert.ok(JSON.parse(readFileSync(output, 'utf8')).eventIdMap[eid(40)]);
+    assert.equal((await run(['delete', '产物修改'])).code, 5);
+    assert.deepEqual(fake.state.posts.map((q) => q.path), [
+      '/api/canvas/event/create', '/api/canvas/event/update', '/api/canvas/event/toggle-visibility', '/api/canvas/event/toggle-visibility', '/api/canvas/event/import',
+    ]);
+  } finally { await fake.server.close(); }
 });
 
 test('产物全流程：取身份 → 找智能体 → 拉 → 改 → diff → check → 推 → log', async () => {

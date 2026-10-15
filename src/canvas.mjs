@@ -51,6 +51,40 @@ export function assertNodeNames(canvas) {
   });
 }
 
+// 事件的业务类型和 X6 画布形状不同。格式错误会让编辑器在初始化时中断，不能当成可忽略的逻辑风险。
+// 这里检查保存内容本身，不依赖 events 列表是否取到，也不只比较「新增」问题。
+export function eventNodeProblems(canvas) {
+  const problems = [];
+  const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+  for (const cell of canvas) {
+    if (!isElement(cell) || isEdgeCell(cell) || isVisualOnlyCell(cell)) continue;
+    const data = cell.data ?? {};
+    const label = `节点「${data.name ?? cell.id}」[${String(cell.id ?? '?').slice(0, 8)}]`;
+    if (data.type === 'canvas-event-action' || cell.shape === 'action-event' || cell.shape === 'canvas-event-action') {
+      if (cell.shape !== 'action-event' || data.type !== 'canvas-event-action') problems.push(`${label} 的事件动作格式错误：shape 必须为 action-event，data.type 必须为 canvas-event-action（当前 ${cell.shape} / ${data.type}）`);
+    }
+    if (data.type !== 'canvas-event-trigger') continue;
+    const item = data.eventItem;
+    const missing = [];
+    if (!object(item)) missing.push('缺少事件定义对象');
+    else {
+      if (typeof item.eventId !== 'string' || !item.eventId || item.eventId !== cell.shape || cell.shape === 'canvas-event-trigger') missing.push('eventId 必须与 shape 相同，shape 必须是具体事件 ID');
+      if (typeof item.name !== 'string' || !item.name.trim()) missing.push('缺少 name');
+      if (!Array.isArray(item.variables) || item.variables.some((v) => !object(v) || typeof v.name !== 'string' || !v.name.trim() || !object(v.type) || typeof v.type.type !== 'string')) missing.push('variables 必须是包含 name 和类型对象的数组');
+      if (data.nodePayload?.eventId !== undefined && data.nodePayload.eventId !== item.eventId) missing.push('nodePayload.eventId 与事件 ID 不一致');
+    }
+    if (missing.length) problems.push(`${label} 的事件入口格式错误：data.eventItem ${missing.join('；')}`);
+  }
+  return problems;
+}
+
+export function assertEventNodes(canvas) {
+  const problems = eventNodeProblems(canvas);
+  if (problems.length) throw new MdError('event_node_invalid', `事件节点格式检查不通过：\n${problems.map((p) => `  - ${p}`).join('\n')}`, {
+    exitCode: EXIT.BLOCKED, hint: '事件动作使用 shape=action-event、data.type=canvas-event-action；事件入口补齐 data.eventItem。修正后重新 md check；确认码和 --allow-check-errors 不能跳过',
+  });
+}
+
 export function nodeMap(canvas) {
   return new Map(canvas.filter((c) => isElement(c) && !isEdgeCell(c) && typeof c.id === 'string').map((c) => [c.id, c]));
 }

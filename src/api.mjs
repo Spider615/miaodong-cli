@@ -3,7 +3,7 @@
 
 import { request } from './http.mjs';
 import { MdError } from './errors.mjs';
-import { assertNodeNames } from './canvas.mjs';
+import { assertEventNodes, assertNodeNames } from './canvas.mjs';
 import { deriveDomainEdges, deriveDomainNodes } from '../vendor/laodong/apps/api/lib/miaodong/canvas-derive.ts';
 
 const str = (value) => (typeof value === 'string' ? value : '');
@@ -20,9 +20,13 @@ export async function listBots(identity, orgId) {
     .filter((bot) => bot.id);
 }
 
-export async function getCanvas(identity, orgId, botId, canvasId) {
+export async function getCanvas(identity, orgId, botId, canvasId, { strictRawCanvas = false } = {}) {
   const payload = await request(identity, '/api/canvas/get', { query: { botId, orgId, canvasId } });
   const data = payload?.data ?? {};
+  // 资源写前做引用检查时不能把异常画布当成空画布；旧的只读展示保持原来的归一化行为。
+  if (strictRawCanvas && (typeof data.canvasId !== 'string' || !data.canvasId || !Array.isArray(data.rawCanvas) || data.rawCanvas.some((cell) => !cell || typeof cell !== 'object' || Array.isArray(cell) || typeof cell.id !== 'string' || !cell.id))) {
+    throw new MdError('canvas_unavailable', '草稿画布响应不完整，无法确认事件引用，已停止操作');
+  }
   const canvas = {
     canvasId: str(data.canvasId),
     rawCanvas: Array.isArray(data.rawCanvas) ? data.rawCanvas : [],
@@ -104,6 +108,7 @@ export function listEvents(identity, orgId, botId) {
 // canvas/save 是全量覆盖、写编辑器草稿；nodes / edges 由 rawCanvas 推出（与老懂、kit 同一套契约）
 export function saveCanvas(identity, orgId, canvasId, rawCanvas) {
   assertNodeNames(rawCanvas);
+  assertEventNodes(rawCanvas);
   return request(identity, '/api/canvas/save', {
     method: 'POST',
     query: { orgId },
