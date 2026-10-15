@@ -32,11 +32,11 @@ Files: `src/layout-graph.mjs`, `src/layout-dot.mjs`, `src/layout-geometry.mjs`, 
 
 Interfaces: `optimizeLayout(envelope) -> Promise<{envelope, report}>`; graph units keep member offsets, real ports and event links. Geometry shares one port/curve model between collision checks and preview.
 
-- [ ] Write tests asserting no overlap, unchanged non-geometry fields, ordered branches and short event handoffs; run and observe missing feature failure.
-- [ ] Normalize IDs, dimensions, hierarchy, edges, event IDs. Fail invalid graphs before mutation.
-- [ ] Add dot structural grouping and deterministic ranks with original port order.
-- [ ] Add event placement using all incident links, rigid component translation and geometric collision checks.
-- [ ] Run engine tests; use a cloned real canvas for offline geometry checks.
+- [x] Write tests asserting no overlap, unchanged non-geometry fields, ordered branches and short event handoffs; run and observe missing feature failure.
+- [x] Normalize IDs, dimensions, hierarchy, edges, event IDs. Fail invalid graphs before mutation.
+- [x] Add dot structural grouping and deterministic ranks with original port order.
+- [x] Add event placement using all incident links, rigid component translation and geometric collision checks.
+- [x] Run engine tests; use a cloned real canvas for offline geometry checks.
 
 ```js
 const result = await optimizeLayout(input);
@@ -51,11 +51,11 @@ Files: `src/commands/layout.mjs`, `src/layout-preview.mjs`, command index, layou
 
 Interfaces: CLI loads current workspace, verifies layout-only input, computes and writes a new artifact directory, then stages after.json and marks non-replayable geometry. Push and restore remain the only remote write consumers.
 
-- [ ] Write fake-server tests proving layout does not save, creates inspectable images, and confirmed layout push saves exact coordinates.
-- [ ] Write event-ID drift test and preview injection test; observe failures.
-- [ ] Implement local command and sanitized, self-contained SVG/HTML including preview-only virtual event arrows.
-- [ ] Include event identity/type in remote layout dependency checks.
-- [ ] Exercise Node 18 bundle from a temporary directory without adjacent node_modules.
+- [x] Write fake-server tests proving layout does not save, creates inspectable images, and confirmed layout push saves exact coordinates.
+- [x] Write event-ID drift test and preview injection test; observe failures.
+- [x] Implement local command and sanitized, self-contained SVG/HTML including preview-only virtual event arrows.
+- [x] Include event identity/type in remote layout dependency checks.
+- [x] Exercise Node 18 bundle from a temporary directory without adjacent node_modules.
 
 ```js
 const preview = await runCli(['layout'], {home});
@@ -67,7 +67,7 @@ assert.equal(bot.state.saves, 0);
 
 Files: README, skill/SKILL.md and layout reference, AGENTS.md/CLAUDE.md if rules need documenting, package and third party notices.
 
-- [ ] Document pull → layout → preview → check → push --layout-only → confirmed write → remote status/restore.
-- [ ] Run focused tests, then full `MD_E2E_NODE=<Node18> npm test`; fix failures before continuing.
-- [ ] Build development bundle and run generic CLI offline on the current Taiji snapshot. Review preview and exact coordinate-only diff.
-- [ ] Record commands, test counts and actual release/install state. Keep real remote canvas untouched.
+- [x] Document pull → layout → preview → check → push --layout-only → confirmed write → remote status/restore.
+- [x] Run focused tests, then full `MD_E2E_NODE=<Node18> npm test`; fix failures before continuing.
+- [x] Build development bundle and run generic CLI offline on the current Taiji snapshot. Review preview and exact coordinate-only diff.
+- [x] Record commands, test counts and actual release/install state. Keep real remote canvas untouched.
