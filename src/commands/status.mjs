@@ -5,6 +5,7 @@ import { readJson } from '../home.mjs';
 import { getCanvas } from '../api.mjs';
 import { compareNodes, contentKey, nodeMap } from '../canvas.mjs';
 import { readLedger } from '../ledger.mjs';
+import { verifyLayoutReadback } from '../layout-only.mjs';
 import { listWorkspaces, targetFromMeta, wsLine } from '../workspace.mjs';
 import { formatTime, out, shortId } from '../output.mjs';
 
@@ -15,6 +16,10 @@ function restoreCheck(entry, live) {
   const restored = readJson(entry.backup, null)?.rawCanvas;
   const before = readJson(entry.safety, null)?.rawCanvas;
   if (!restored || !before) return `  ${entry.regionLabel} / ${entry.botName}：回滚的快照不见了（${!restored ? entry.backup : entry.safety}）`;
+  if (entry.layout) {
+    const problems = verifyLayoutReadback(restored, live.rawCanvas, entry.layout);
+    return `  ${problems.length ? '⚠️' : '✅'} ${entry.regionLabel} / ${entry.botName}：布局撤回${problems.length ? `有 ${problems.length} 处被覆盖` : '仍在草稿里'}`;
+  }
   const expected = nodeMap(restored);
   const prev = nodeMap(before);
   const current = nodeMap(live.rawCanvas);
@@ -51,6 +56,11 @@ async function remoteCheck(query) {
     }
     const expected = nodeMap(pushed.canvas);
     const current = nodeMap(live.rawCanvas);
+    if (entry.layout) {
+      const problems = verifyLayoutReadback(pushed.canvas, live.rawCanvas, entry.layout);
+      out(`  ${problems.length ? '⚠️' : '✅'} ${entry.regionLabel} / ${entry.botName}：布局${problems.length ? `有 ${problems.length} 处被覆盖` : `的 ${entry.layout.nodes.length} 个节点坐标、${entry.layout.edges.length} 条连线拐点都还在`}`);
+      continue;
+    }
     const ids = [...entry.changed, ...entry.added].map((c) => c.id);
     const lost = ids.filter((id) => !current.has(id) || contentKey(current.get(id)) !== contentKey(expected.get(id)));
     const revived = entry.removed.map((c) => c.id).filter((id) => current.has(id));
@@ -108,7 +118,7 @@ export const log = {
         out(`${formatTime(e.at)} 会话属性 ${verb} ${e.regionLabel} / ${e.botName} (${shortId(e.botId)})：${e.op === 'edit' && e.before?.name && e.before.name !== names ? `${e.before.name} → ${names}` : names}`);
         continue;
       }
-      const counts = e.kind === 'push' ? ` · 改 ${e.changed.length} 增 ${e.added.length} 删 ${e.removed.length} · 连线 +${e.edgesAdded} -${e.edgesRemoved}` : '';
+      const counts = e.layout ? ` · 布局 ${e.layout.nodes.length} 节点 / ${e.layout.edges.length} 连线拐点` : e.kind === 'push' ? ` · 改 ${e.changed.length} 增 ${e.added.length} 删 ${e.removed.length} · 连线 +${e.edgesAdded} -${e.edgesRemoved}` : '';
       out(`${formatTime(e.at)} ${e.kind === 'restore' ? '回滚' : '推送'} ${e.regionLabel} / ${e.botName} (${shortId(e.botId)})${counts}${e.readbackFailed ? ' · ⚠️ 回读失败' : e.problems?.length ? ' · ⚠️ 回读不一致' : ''}`);
       if (e.kind !== 'push') continue;
       const rows = [...e.changed.map((c) => ['~', c]), ...e.added.map((c) => ['+', c]), ...e.removed.map((c) => ['-', c])];

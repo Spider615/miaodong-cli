@@ -40,6 +40,24 @@ test('产物里没有老懂数据库依赖', () => {
   assert.ok(text.startsWith('#!/usr/bin/env -S node --no-warnings'));
 });
 
+test('单文件产物在 Node 18 上离线排布并输出 SVG/HTML，不依赖原生 dot 或相邻 node_modules', async () => {
+  const bot = await startBotServer();
+  try {
+    const home = tempHome();
+    seedIdentity(home, { key: 'k1', label: '测试区', origin: bot.server.origin, token: 't', orgs: [{ id: 'org-1', name: '兴趣岛平台' }], currentOrgId: 'org-1' });
+    const pull = await runCli(['pull', '--bot', '太极2.0重构'], { home, bundle });
+    assert.equal(pull.code, 0, pull.stderr);
+    const output = join(home, 'layout');
+    const result = await runCli(['layout', '--out', output], { home, bundle });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(readFileSync(join(output, 'optimized.svg'), 'utf8'), /^<svg/);
+    assert.match(readFileSync(join(output, 'preview.html'), 'utf8'), /application\/json/);
+    assert.equal(JSON.parse(readFileSync(join(output, 'report.json'), 'utf8')).after.overlapPairs, 0);
+    assert.equal(bot.state.saves, 0);
+    assert.doesNotMatch(result.stderr, /ExperimentalWarning/);
+  } finally { await bot.server.close(); }
+});
+
 test('产物能管理事件：预演、新增、修改、隐藏显示、引用检查、导入映射，禁止删除（兼容 Node 18）', async () => {
   const fake = await startEventsServer();
   try {

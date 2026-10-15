@@ -16,6 +16,7 @@ import { graphProblems, runCheck } from '../check.mjs';
 import { diffEnvelopes, nameMapOf, renderDiff } from '../diff.mjs';
 import { businessNodes } from '../graph.mjs';
 import { appendLedger } from '../ledger.mjs';
+import { layoutChanges, mergeLayoutOnly, verifyLayoutReadback } from '../layout-only.mjs';
 import { mergeCanvas } from '../merge.mjs';
 import { loadWorkspace, saveMeta, stamp, targetFromMeta, writeIndex } from '../workspace.mjs';
 import { out, shortId, targetLine } from '../output.mjs';
@@ -88,11 +89,12 @@ export function verifyReadback(expected, readback, canvasId, ours = null) {
 }
 
 // 预演打印的确认命令要带上预演时用的开关，否则照抄去确认会走另一条路径
-function flagsOf({ replaceDraft, ontoDraft, allowCheckErrors }) {
+function flagsOf({ replaceDraft, ontoDraft, allowCheckErrors, layoutOnly }) {
   const flags = [];
   if (replaceDraft) flags.push('--replace-draft');
   else if (ontoDraft) flags.push('--onto-draft');
   if (allowCheckErrors) flags.push('--allow-check-errors');
+  if (layoutOnly) flags.push('--layout-only');
   return flags.map((flag) => ` ${flag}`).join('');
 }
 
@@ -101,16 +103,21 @@ export const push = {
   usage: [
     'md push [--ws <工作副本>]                预演：合并方式、改动清单、计划码',
     'md push [--ws …] --confirm <计划码>      用户同意后真正写入草稿',
+    'md push --layout-only                   仅推送位置和连线 vertices，保留最新草稿业务配置',
     '以版本为底且草稿与该版不同时，需加 --onto-draft（合进当前草稿）或 --replace-draft（草稿 = 该版 + 改动）',
     '节点名称最多 20 个字、事件节点渲染格式不能跳过；其他新增自检问题确认可以忽略时加 --allow-check-errors',
   ].join('\n'),
   async run(args) {
     // 开关一开头就读：给错（比如给了两次）要在联网之前报出来
-    const opts = { replaceDraft: boolArg(args, 'replace-draft'), ontoDraft: boolArg(args, 'onto-draft'), allowCheckErrors: boolArg(args, 'allow-check-errors') };
+    const opts = { replaceDraft: boolArg(args, 'replace-draft'), ontoDraft: boolArg(args, 'onto-draft'), allowCheckErrors: boolArg(args, 'allow-check-errors'), layoutOnly: boolArg(args, 'layout-only') };
     const ws = loadWorkspace(args);
     const target = targetFromMeta(ws.meta);
     const { identity, orgId, botId } = target;
     if (!ws.after) throw blocked('这个工作副本还没有改动', '先 md apply <改动脚本>');
+    if (opts.layoutOnly) {
+      if (opts.replaceDraft || opts.ontoDraft || ws.meta.source.kind !== 'draft') throw blocked('仅布局模式必须基于当前草稿，不能与版本合并或整份替换混用');
+      layoutChanges(ws.base.canvas, ws.after.canvas);
+    }
     const live = await getCanvas(identity, orgId, botId);
     if (live.canvasId !== ws.meta.mainCanvasId) {
       throw blocked(`草稿画布换了（拉取时 ${shortId(ws.meta.mainCanvasId)}，现在 ${shortId(live.canvasId)}）`, '重新 md pull，再把改动做一遍');
@@ -137,7 +144,14 @@ export const push = {
 
     let toSave;
     let theirs = null;
-    if (mode === 'replace') {
+    let layout = null;
+    if (opts.layoutOnly) {
+      const merged = mergeLayoutOnly(ws.base.canvas, ws.after.canvas, live.rawCanvas);
+      if (merged.noop) { out('草稿里已经是这次布局，没有需要推送的。'); return EXIT.OK; }
+      toSave = merged.canvas;
+      layout = merged.changes;
+      mode = 'layout-only';
+    } else if (mode === 'replace') {
       toSave = ws.after.canvas;
     } else {
       const merged = mergeCanvas(ws.base.canvas, ws.after.canvas, live.rawCanvas);
@@ -166,7 +180,8 @@ export const push = {
     const ours = diffEnvelopes(ws.base, ws.after);
     const code = planCode({ botId, canvasId: live.canvasId, live: live.rawCanvas, save: toSave });
     out(targetLine({ ...target, versionLabel: '草稿' }));
-    out(`推送方式：${mode === 'replace' ? `用「${ws.meta.source.version} + 你的改动」整体替换草稿` : '把你的改动合进当前草稿（保留别人对其他节点的修改）'}`);
+    out(`推送方式：${layout ? '仅保存布局，业务配置沿用最新草稿' : mode === 'replace' ? `用「${ws.meta.source.version} + 你的改动」整体替换草稿` : '把你的改动合进当前草稿（保留别人对其他节点的修改）'}`);
+    if (layout) out(`布局：移动 ${layout.nodes.length} 个节点，调整 ${layout.edges.length} 条连线拐点；业务配置变化 0`);
     if (theirs && theirs.changed + theirs.added + theirs.removed > 0) {
       out(`草稿在你拉取后被改过：改 ${theirs.changed} / 增 ${theirs.added} / 删 ${theirs.removed} 个节点，这些都会保留`);
     }
@@ -205,6 +220,7 @@ export const push = {
       ws: ws.dir, mode, source: ws.meta.source,
       changed: ours.changed.map(pick), added: ours.added.map(pick), removed: ours.removed.map(pick),
       edgesAdded: ours.edgesAdded.length, edgesRemoved: ours.edgesRemoved.length,
+      ...(layout ? { layout } : {}),
       backup, pushed,
     };
     let readback;
@@ -218,10 +234,11 @@ export const push = {
       writeJson(join(ws.dir, 'base.json'), savedBase);
       rmSync(join(ws.dir, 'after.json'), { force: true });
       writeIndex(ws.dir, savedBase);
-      saveMeta(ws.dir, { ...ws.meta, source: { kind: 'draft' }, handEdited: false, draft: { updatedAt: null, version: null, hash: hashOf(toSave) }, lastPush: { at: pushedAt, backup, pushed } });
+      saveMeta(ws.dir, { ...ws.meta, source: { kind: 'draft' }, handEdited: false, draft: { updatedAt: null, version: null, hash: hashOf(toSave) }, lastPush: { at: pushedAt, backup, pushed, ...(layout ? { layoutOnly: true } : {}) } });
       throw blocked(`已经保存到草稿，但回读失败：${error?.message ?? error}`, `这次推送已记进 md log，工作副本按推送的内容更新了。先 md status --remote 复查草稿是不是这次推的，不要重推；要撤回：md restore --ws ${ws.dir}；要和草稿对齐：md pull`);
     }
     const { problems, notes } = verifyReadback(toSave, readback, live.canvasId, ours);
+    if (layout) problems.push(...verifyLayoutReadback(toSave, readback.rawCanvas, layout));
     appendLedger({ ...entry, readbackUpdatedAt: readback.updatedAt, problems });
     // 推送后工作副本跟着草稿走：以回读结果为新基线，已推的改动脚本移进 history
     const newBase = { canvas: readback.rawCanvas, sessions: ws.base.sessions, events: ws.base.events };
@@ -233,7 +250,7 @@ export const push = {
       source: { kind: 'draft' },
       handEdited: false,
       draft: { updatedAt: readback.updatedAt, version: readback.version, hash: hashOf(readback.rawCanvas) },
-      lastPush: { at: pushedAt, backup, pushed },
+      lastPush: { at: pushedAt, backup, pushed, ...(layout ? { layoutOnly: true } : {}) },
     });
 
     if (problems.length) {
@@ -243,13 +260,14 @@ export const push = {
       return EXIT.BLOCKED;
     }
     out('✅ 已推送到草稿（未发布）');
+    if (layout) out(`布局已回读核对：${layout.nodes.length} 个节点坐标、${layout.edges.length} 条连线拐点`);
     for (const n of notes) out(`  · ${n}`);
     const touched = [...ours.changed.map(pick), ...ours.added.map(pick)];
     out(`改了 ${ours.changed.length} 个节点、新增 ${ours.added.length} 个、删除 ${ours.removed.length} 个${touched.length ? '：' : ''}`);
     for (const t of touched.slice(0, 30)) out(`  - ${t.name} [${shortId(t.id)}]`);
     if (touched.length > 30) out(`  …另有 ${touched.length - 30} 个（md log 看全部）`);
     out('在秒懂里看：刷新画布编辑页。没刷新的旧标签页会自动保存，可能把这次推送覆盖掉。');
-    out(`回滚：md restore --ws ${ws.dir}`);
+    out(`回滚：md restore --ws ${ws.dir}${layout ? ' --layout-only' : ''}`);
     out('上线需要你在秒懂里点「发布」。');
     return EXIT.OK;
   },

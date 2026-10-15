@@ -1,6 +1,6 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { strArg } from '../args.mjs';
+import { boolArg, strArg } from '../args.mjs';
 import { EXIT } from '../errors.mjs';
 import { givenCode } from '../confirm.mjs';
 import { ensureDir, readJson, writeJson } from '../home.mjs';
@@ -8,6 +8,7 @@ import { getCanvas, saveCanvas } from '../api.mjs';
 import { assertEventNodes, assertNodeNames, compareNodes, hashOf } from '../canvas.mjs';
 import { businessNodes } from '../graph.mjs';
 import { appendLedger } from '../ledger.mjs';
+import { mergeLayoutOnly, verifyLayoutReadback } from '../layout-only.mjs';
 import { loadWorkspace, saveMeta, stamp, targetFromMeta, writeIndex } from '../workspace.mjs';
 import { out, shortId, targetLine } from '../output.mjs';
 import { blocked, planCode, verifyReadback } from './push.mjs';
@@ -21,9 +22,10 @@ function latestBackup(dir) {
 
 export const restore = {
   summary: '用推送前的备份回滚草稿（默认预演，--confirm <计划码> 才写）',
-  usage: 'md restore [--ws <工作副本>] [--backup <备份文件>] [--confirm <计划码>]',
+  usage: 'md restore [--ws <工作副本>] [--backup <备份文件>] [--layout-only] [--confirm <计划码>]',
   async run(args) {
     const ws = loadWorkspace(args);
+    const layoutOnly = boolArg(args, 'layout-only');
     const target = targetFromMeta(ws.meta);
     const { identity, orgId, botId } = target;
     const backupArg = strArg(args, 'backup');
@@ -38,31 +40,47 @@ export const restore = {
     }
     out(targetLine({ ...target, versionLabel: '草稿' }));
     out(`回滚到：${backupFile}`);
-    const d = compareNodes(live.rawCanvas, backup.rawCanvas);
-    if (d.same) {
+    let toSave = backup.rawCanvas;
+    let layout = null;
+    let noop;
+    if (layoutOnly) {
+      const last = ws.meta.lastPush;
+      if (!last?.layoutOnly || last.backup !== backupFile) throw blocked('仅布局撤回需要本工作副本最近一次布局推送的备份');
+      const pushed = readJson(last.pushed, null)?.canvas;
+      if (!Array.isArray(pushed)) throw blocked('布局推送快照不存在，无法安全撤回');
+      const merged = mergeLayoutOnly(pushed, backup.rawCanvas, live.rawCanvas);
+      toSave = merged.canvas;
+      layout = merged.changes;
+      noop = merged.noop;
+      assertNodeNames(toSave);
+      assertEventNodes(toSave);
+    }
+    const d = compareNodes(live.rawCanvas, toSave);
+    if (layoutOnly ? noop : d.same) {
       out('当前草稿和备份一样，不需要回滚。');
       return EXIT.OK;
     }
-    out(`回滚会让草稿：恢复 ${d.onlyB} 个节点、去掉 ${d.onlyA} 个、改回 ${d.changed} 个、连线变化 ${d.edgesDiffer} 条（备份之后别人做的修改也会一起丢掉）`);
-    const code = planCode({ botId, canvasId: live.canvasId, live: live.rawCanvas, save: backup.rawCanvas });
+    out(layout ? `仅恢复布局：${layout.nodes.length} 个节点、${layout.edges.length} 条连线拐点；保留最新业务配置` : `回滚会让草稿：恢复 ${d.onlyB} 个节点、去掉 ${d.onlyA} 个、改回 ${d.changed} 个、连线变化 ${d.edgesDiffer} 条（备份之后别人做的修改也会一起丢掉）`);
+    const code = planCode({ botId, canvasId: live.canvasId, live: live.rawCanvas, save: toSave });
     const given = givenCode(args);
     if (given === null) {
       out('');
       out(`这是预演，什么都没写。计划码：${code}`);
-      out(`用户同意后执行：md restore --ws ${ws.dir} --backup ${backupFile} --confirm ${code}`);
+      out(`用户同意后执行：md restore --ws ${ws.dir} --backup ${backupFile}${layoutOnly ? ' --layout-only' : ''} --confirm ${code}`);
       return EXIT.OK;
     }
     if (given !== code) throw blocked(`计划码对不上（当前是 ${code}）：草稿在预演之后又变了`, '重新预演一次');
 
     const safety = join(ensureDir(join(ws.dir, 'backups')), `${stamp()}-before-restore.json`);
     writeJson(safety, { canvasId: live.canvasId, updatedAt: live.updatedAt, rawCanvas: live.rawCanvas });
-    await saveCanvas(identity, orgId, live.canvasId, backup.rawCanvas);
+    await saveCanvas(identity, orgId, live.canvasId, toSave);
     // 保存成功后回读失败（网络）也要记进账本：md log、md status --remote 才知道回滚过
     const entry = {
       at: new Date().toISOString(), kind: 'restore',
       identityKey: target.identityKey, regionLabel: target.regionLabel, origin: identity.origin,
       orgId, orgName: target.orgName, botId, botName: target.botName,
       ws: ws.dir, backup: backupFile, safety,
+      ...(layout ? { layout } : {}),
     };
     let readback;
     try {
@@ -71,7 +89,8 @@ export const restore = {
       appendLedger({ ...entry, readbackFailed: true, problems: [`保存成功，回读失败：${error?.message ?? error}`] });
       throw blocked(`已经保存到草稿，但回读失败：${error?.message ?? error}`, `这次回滚已记进 md log。先 md status --remote 复查；回滚前的草稿另存在 ${safety}`);
     }
-    const { problems } = verifyReadback(backup.rawCanvas, readback, live.canvasId);
+    const { problems } = verifyReadback(toSave, readback, live.canvasId);
+    if (layout) problems.push(...verifyLayoutReadback(toSave, readback.rawCanvas, layout));
     appendLedger({ ...entry, problems });
     const newBase = { canvas: readback.rawCanvas, sessions: ws.base.sessions, events: ws.base.events };
     writeJson(join(ws.dir, 'base.json'), newBase);

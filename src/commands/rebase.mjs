@@ -14,7 +14,7 @@ export const rebase = {
     const ws = loadWorkspace(args);
     const target = targetFromMeta(ws.meta);
     if (ws.meta.handEdited) {
-      throw new MdError('cannot_rebase', '这个工作副本有整份手改（md apply --json），没法自动重放', { exitCode: EXIT.BLOCKED, hint: '重新 md pull，再把改动做一遍' });
+      throw new MdError('cannot_rebase', '这个工作副本有整份手改或布局坐标（md apply --json / md layout），没法自动重放', { exitCode: EXIT.BLOCKED, hint: '重新 md pull，再把改动做一遍；布局请重新 md layout' });
     }
     const transforms = listTransforms(ws.dir);
     if (transforms.length === 0) {
