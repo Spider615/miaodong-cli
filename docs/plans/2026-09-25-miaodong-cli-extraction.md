@@ -1,5 +1,7 @@
 # miaodong-cli：把 md 拆成独立仓库 Implementation Plan
 
+> 2026-10-16 更新：用户已取消私有仓库要求，当前仓库保持公开。下文的私有仓库创建步骤仅保留为历史记录，不再执行；推送、发版和打 tag 不得据此修改仓库可见性，以当前 `AGENTS.md` / `CLAUDE.md` 为准。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 把 md 带着历史搬进新的私有仓库 `Spider615/miaodong-cli`。换一台没有 Agentflow 的机器，clone 下来就能测试、构建、安装、使用。
@@ -1199,7 +1201,7 @@ npm run sync:laodong -- <老懂仓库路径>       # 同步 vendor/laodong
 6. **外部用例与批量改**（`src/casefile.mjs` 解析与校验，`src/caseedit.mjs` 改动脚本）：写秒懂之前先在本地校验全部，外部用例先写 1 条读回来核对。断言只生成实测过的形状（发文本、发事件、转人工），别的用 raw。批量改走计划码，先备份再写。
 7. **`dist/md.mjs` 只在发版时更新**：`npm run release` 构建、扫过之后再提交；平时开发别把 dist 的改动混进别的提交。
 8. **`skill/` 改了就对所有人生效**：它是软链装的，同事 `git pull` 之后马上用上新说明。
-9. **本仓库必须保持私有**：`vendor/laodong/packages/shared/src/miaodong-regions.ts` 里有独立部署客户的名单。
+9. **不要自动修改仓库可见性**（2026-10-16 更新）：本仓库保持公开。推送、发版和打 tag 都不得更改 GitHub 仓库可见性，只有用户明确要求修改可见性时才执行。
 ```
 
 - [ ] **Step 2: 改 `skill/SKILL.md`**
